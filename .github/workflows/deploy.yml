@@ -33,6 +33,16 @@ jobs:
             git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
             cd server
             docker compose pull redis caddy postgres 2>/dev/null || true
-            docker compose up --build -d
-            sleep 12
-            docker compose exec -T app python -c "import json,sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8765/api/health',timeout=15); d=json.loads(r.read()); print(json.dumps(d,ensure_ascii=False)); sys.exit(0 if d.get('db_ok') else 1)"
+            docker compose build --no-cache app
+            docker compose up -d
+            for i in $(seq 1 30); do
+              if docker compose ps app --status running -q | grep -q .; then
+                if docker compose exec -T app python -c "import json,sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8765/api/health',timeout=10); d=json.loads(r.read()); print(json.dumps(d,ensure_ascii=False)); sys.exit(0 if d.get('db_ok') else 1)"; then
+                  exit 0
+                fi
+              fi
+              sleep 3
+            done
+            echo "=== app logs ==="
+            docker compose logs --tail=100 app
+            exit 1
