@@ -32,6 +32,16 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         "/api/settings",
         "/api/messages",
     )
+    # Админ без tenant_id: глобальные и auth/admin API (не tenant-scoped)
+    ADMIN_GLOBAL_PREFIXES = (
+        "/api/admin",
+        "/api/auth/",
+        "/api/settings",
+        "/api/messages",
+    )
+
+    def _admin_global_path(self, path: str) -> bool:
+        return any(path.startswith(p) for p in self.ADMIN_GLOBAL_PREFIXES)
 
     async def dispatch(self, request: Request, call_next):
         if not is_server_mode():
@@ -86,11 +96,21 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
                         use_global_data=True,
                     )
                 elif tenant_id is None:
-                    return JSONResponse(
-                        status_code=403,
-                        content={
-                            "detail": "Админ: используйте /admin.html или войдите в кабинет пользователя"
-                        },
+                    if not self._admin_global_path(path):
+                        return JSONResponse(
+                            status_code=403,
+                            content={
+                                "detail": "Админ: используйте /admin.html или войдите в кабинет пользователя"
+                            },
+                        )
+                    set_context(
+                        user_id=user_id,
+                        tenant_id=None,
+                        role=role,
+                        impersonating=impersonating,
+                        use_global_data=path.startswith(
+                            ("/api/settings", "/api/messages")
+                        ),
                     )
                 else:
                     set_context(
