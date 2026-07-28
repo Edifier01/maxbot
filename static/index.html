@@ -300,6 +300,22 @@
       background: linear-gradient(90deg, #2563eb, #60a5fa);
       border-radius: 999px; transition: width .5s ease;
     }
+    #dashProgressPanel .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+    #dashProgressPanel h3 { margin: 0; font-size: .95rem; }
+    #btnStart.campaign-btn-active {
+      box-shadow: 0 0 0 2px rgba(62, 207, 142, .85), 0 0 14px rgba(62, 207, 142, .35);
+      filter: brightness(1.1);
+    }
+    #btnStop.campaign-btn-active {
+      box-shadow: 0 0 0 2px rgba(239, 95, 95, .85), 0 0 14px rgba(239, 95, 95, .35);
+      filter: brightness(1.1);
+    }
+    #btnStart.campaign-btn-idle,
+    #btnStop.campaign-btn-idle {
+      opacity: .5;
+      filter: none;
+      box-shadow: none;
+    }
     .log-line.ok { color: var(--ok); }
     .log-line.fail { color: var(--danger); }
     button:disabled { opacity: .55; cursor: not-allowed; filter: none !important; }
@@ -396,10 +412,10 @@
       <h1>MAX Sender</h1>
     </div>
     <div class="header-meta">
-      <span id="runBadge" class="badge stop">остановлено</span>
-      <span id="vaultBadge" class="badge warn">хранилище…</span>
-      <span id="liveBadge" class="badge poll" title="Канал статуса">опрос</span>
-      <span id="msgCount" class="hint" style="margin:0"></span>
+      <span id="runBadge" class="badge stop header-user-hide">остановлено</span>
+      <span id="vaultBadge" class="badge warn header-user-hide">хранилище…</span>
+      <span id="liveBadge" class="badge poll header-user-hide" title="Канал статуса">опрос</span>
+      <span id="msgCount" class="hint header-user-hide" style="margin:0"></span>
       <div id="progressWrap">
         <div id="progressTrack"><div id="progressBar"></div></div>
         <span id="campaignProgress" class="hint" style="white-space:nowrap;margin:0"></span>
@@ -420,41 +436,42 @@
       <div class="panel">
       <div class="section-head">
         <h2>Кампания</h2>
-        <span class="hint" style="margin:0">Старт / пауза / стоп без потери прогресса</span>
+        <span id="campaignAdminHint" class="hint" style="margin:0">Старт / пауза / стоп без потери прогресса</span>
+        <span id="campaignUserHint" class="hint" style="margin:0;display:none">Запустите один раз — рассылка продолжится автоматически</span>
       </div>
       <div class="toolbar row" style="margin-bottom:.85rem">
         <button class="primary btn-ico" id="btnStart" onclick="withLoading(this, startCampaign)">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Старт
         </button>
-        <button class="small btn-ico" id="btnPause" onclick="withLoading(this, pauseCampaign)">
+        <button class="small btn-ico campaign-admin-only" id="btnPause" onclick="withLoading(this, pauseCampaign)">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>Пауза
         </button>
         <button class="danger btn-ico" id="btnStop" onclick="withLoading(this, stopCampaign)">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>Стоп
         </button>
-        <button class="small btn-ico" id="btnReset" onclick="withLoading(this, resetCampaign)">
+        <button class="small btn-ico campaign-admin-only" id="btnReset" onclick="withLoading(this, resetCampaign)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
           Начать заново
         </button>
-        <button class="small" onclick="withLoading(this, testSend)">Тест</button>
-        <button class="small" onclick="withLoading(this, retryFailed)">Повторить ошибки</button>
+        <button class="small campaign-admin-only" onclick="withLoading(this, testSend)">Тест</button>
+        <button class="small campaign-admin-only" onclick="withLoading(this, retryFailed)">Повторить ошибки</button>
       </div>
-      <div class="row" style="margin-bottom:0">
+      <div class="row campaign-admin-only" style="margin-bottom:0">
         <input id="scheduleAt" type="datetime-local" style="max-width:220px">
         <button class="small" onclick="withLoading(this, scheduleCampaign)">Запланировать</button>
         <button class="small" onclick="withLoading(this, cancelSchedule)">Отменить план</button>
         <span id="scheduleHint" class="hint" style="margin:0"></span>
       </div>
       </div>
-      <div class="panel">
+      <div class="panel campaign-admin-only">
         <div class="panel-title">Живой лог</div>
         <div id="campaignLog" class="log" style="margin-top:0"></div>
       </div>
-      <div class="panel">
+      <div class="panel campaign-admin-only">
       <h3 class="panel-title">История кампаний</h3>
       <div id="campaignsHistory" class="table-wrap" style="margin-top:0"></div>
       </div>
-      <div class="panel">
+      <div class="panel campaign-admin-only">
       <h3 class="panel-title">История отправок</h3>
       <div class="row">
         <input id="sendLogQ" placeholder="Поиск: телефон, группа, ошибка" style="max-width:240px" onkeydown="if(event.key==='Enter')loadSendLog(0)">
@@ -474,6 +491,18 @@
       <div class="section-head">
         <h2>Сводка</h2>
         <span class="hint" style="margin:0">Сводка по аккаунтам</span>
+      </div>
+      <div id="dashProgressPanel" class="panel" style="display:none;margin-bottom:1rem">
+        <div class="section-head" style="margin-bottom:.65rem">
+          <h3>Прогресс рассылки</h3>
+          <span id="dashProgressStatus" class="hint" style="margin:0"></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:.75rem">
+          <div id="dashProgressTrack" style="flex:1;height:10px;background:var(--bg-soft);border-radius:999px;overflow:hidden">
+            <div id="dashProgressBar" style="height:100%;width:0;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:999px;transition:width .5s ease"></div>
+          </div>
+          <span id="dashProgressLabel" class="hint" style="margin:0;white-space:nowrap;min-width:160px;text-align:right"></span>
+        </div>
       </div>
       <div id="dashStats" class="dash-stats"></div>
       <div class="row">
@@ -823,6 +852,25 @@
     let _userRole = 'local';
     let _subscriptionActive = true;
     let _adminGlobalMode = false;
+    let _lastStatus = null;
+
+    function applyCampaignButtonState(s) {
+      const isUser = _serverMode && _userRole === 'user';
+      const start = document.getElementById('btnStart');
+      const stop = document.getElementById('btnStop');
+      if (!start || !stop) return;
+      start.classList.remove('campaign-btn-active', 'campaign-btn-idle');
+      stop.classList.remove('campaign-btn-active', 'campaign-btn-idle');
+      if (!isUser) return;
+      const on = !!(s && (s.running || s.auto_run));
+      if (on) {
+        start.classList.add('campaign-btn-active');
+        stop.classList.add('campaign-btn-idle');
+      } else {
+        stop.classList.add('campaign-btn-active');
+        start.classList.add('campaign-btn-idle');
+      }
+    }
 
     function switchTab(tabId) {
       const btn = document.querySelector(`nav button[data-tab="${tabId}"]`);
@@ -897,24 +945,39 @@
       document.querySelectorAll('nav button[data-tab="messages"], nav button[data-tab="settings"]').forEach(el => {
         el.style.display = isUser ? 'none' : '';
       });
+      document.querySelectorAll('.campaign-admin-only').forEach(el => {
+        el.style.display = isUser ? 'none' : '';
+      });
+      document.querySelectorAll('.header-user-hide').forEach(el => {
+        el.style.display = isUser ? 'none' : '';
+      });
+      const userHint = document.getElementById('campaignUserHint');
+      const adminHint = document.getElementById('campaignAdminHint');
+      if (userHint) userHint.style.display = isUser ? '' : 'none';
+      if (adminHint) adminHint.style.display = isUser ? 'none' : '';
       const banner = document.getElementById('serverBanner');
-      if (!banner) return;
-      if (!_serverMode) { banner.style.display = 'none'; return; }
-      banner.style.display = 'block';
-      const imp = sessionStorage.getItem('maxImpersonating');
-      if (imp && _userRole === 'admin') {
-        banner.className = 'hint';
-        banner.textContent = 'Режим админа: кабинет «' + imp + '» · ';
-        banner.innerHTML += '<a href="/admin.html" style="color:var(--accent)">← админ-панель</a>';
-      } else if (isUser && !_subscriptionActive) {
-        banner.className = 'hint';
-        banner.style.color = 'var(--danger)';
-        banner.textContent = 'Подписка не активна. Обратитесь к администратору для доступа к рассылке.';
-      } else if (isUser) {
-        banner.textContent = 'Личный кабинет — группы, аккаунты, рассылка, сводка';
-      } else {
-        banner.style.display = 'none';
+      if (banner) {
+        if (!_serverMode) {
+          banner.style.display = 'none';
+        } else {
+          banner.style.display = 'block';
+          const imp = sessionStorage.getItem('maxImpersonating');
+          if (imp && _userRole === 'admin') {
+            banner.className = 'hint';
+            banner.textContent = 'Режим админа: кабинет «' + imp + '» · ';
+            banner.innerHTML += '<a href="/admin.html" style="color:var(--accent)">← админ-панель</a>';
+          } else if (isUser && !_subscriptionActive) {
+            banner.className = 'hint';
+            banner.style.color = 'var(--danger)';
+            banner.textContent = 'Подписка не активна. Обратитесь к администратору для доступа к рассылке.';
+          } else if (isUser) {
+            banner.textContent = 'Личный кабинет — группы, аккаунты, рассылка, сводка';
+          } else {
+            banner.style.display = 'none';
+          }
+        }
       }
+      applyCampaignButtonState(_lastStatus);
     }
 
     async function initServerMode() {
@@ -1236,6 +1299,7 @@
     }
 
     function applyStatus(s) {
+      _lastStatus = s;
       const running = !!s.running;
       if (_wasRunning && !running) {
         maybeNotifyDone(s);
@@ -1266,6 +1330,37 @@
       const el = document.getElementById('campaignLog');
       el.innerHTML = renderLogLines(s.log || []);
       el.scrollTop = el.scrollHeight;
+      if (document.getElementById('dashboard').classList.contains('active')) {
+        renderDashProgress(s);
+      }
+      applyCampaignButtonState(s);
+    }
+
+    function renderDashProgress(data) {
+      const panel = document.getElementById('dashProgressPanel');
+      if (!panel) return;
+      const prog = (data && data.campaign_progress) || {};
+      const running = !!(data && data.running);
+      const autoRun = !!(data && data.auto_run);
+      const statusEl = document.getElementById('dashProgressStatus');
+      const bar = document.getElementById('dashProgressBar');
+      const label = document.getElementById('dashProgressLabel');
+      if (!prog.total || prog.total <= 0) {
+        panel.style.display = 'none';
+        return;
+      }
+      panel.style.display = '';
+      const sent = prog.sent || 0;
+      const total = prog.total || 0;
+      const remaining = prog.remaining != null ? prog.remaining : Math.max(0, total - sent);
+      const pct = Math.min(100, sent / total * 100);
+      bar.style.width = pct.toFixed(1) + '%';
+      label.textContent = `${sent}/${total} · ${remaining} ост. · ${pct.toFixed(0)}%`;
+      if (statusEl) {
+        if (running) statusEl.textContent = 'идёт рассылка';
+        else if (autoRun) statusEl.textContent = 'активна · ждёт продолжения';
+        else statusEl.textContent = 'остановлена';
+      }
     }
 
     let _statusWs = null;
@@ -1385,6 +1480,7 @@
 
     async function loadDashboard() {
       const d = await api('/dashboard');
+      renderDashProgress(d);
       const filter = (document.getElementById('dashFilter') || {}).value || '';
       const counts = d.counts || {};
       document.getElementById('dashStats').innerHTML = `
@@ -1423,22 +1519,27 @@
 
     async function startCampaign() {
       try {
-        const s = await api('/status');
-        const prog = s.campaign_progress || {};
-        const activeCount = (s.profiles && s.profiles.active) || 0;
-        const msg = prog.goal === 'daily_limits'
-          ? [
-              `Цель: исчерпать дневные лимиты`,
-              `Ёмкость сегодня: ${prog.total || 0} (уже ${prog.sent || 0})`,
-              `Пул TXT: ${s.messages_count}`,
-              `Активных профилей: ${activeCount}`,
-            ].join('\n')
-          : [
-              `Сообщений в пуле: ${prog.total || s.messages_count}`,
-              `Активных профилей: ${activeCount}`,
-              prog.sent > 0 ? `Продолжить с позиции ${prog.sent}` : 'Старт с начала',
-            ].join('\n');
-        if (!confirm(`Запустить рассылку?\n\n${msg}`)) return;
+        const isUser = _serverMode && _userRole === 'user';
+        if (!isUser) {
+          const s = await api('/status');
+          const prog = s.campaign_progress || {};
+          const activeCount = (s.profiles && s.profiles.active) || 0;
+          const msg = prog.goal === 'daily_limits'
+            ? [
+                `Цель: исчерпать дневные лимиты`,
+                `Ёмкость сегодня: ${prog.total || 0} (уже ${prog.sent || 0})`,
+                `Пул TXT: ${s.messages_count}`,
+                `Активных профилей: ${activeCount}`,
+              ].join('\n')
+            : [
+                `Сообщений в пуле: ${prog.total || s.messages_count}`,
+                `Активных профилей: ${activeCount}`,
+                prog.sent > 0 ? `Продолжить с позиции ${prog.sent}` : 'Старт с начала',
+              ].join('\n');
+          if (!confirm(`Запустить рассылку?\n\n${msg}`)) return;
+        } else if (!confirm('Запустить рассылку?\n\nСистема будет работать автоматически каждый день, пока вы не нажмёте «Стоп».')) {
+          return;
+        }
         await api('/campaign/start', { method: 'POST' });
         refreshStatus();
         toast('Рассылка запущена', 'success');

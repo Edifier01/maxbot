@@ -222,6 +222,9 @@ DEFAULTS = {
     "circuit_break_minutes": "30",
     "cooldown_fail_max_hours": "48",
     "cooldown_disable_after_fails": "8",
+    # После Старта — автовозобновление на следующий день без ручного запуска
+    "auto_run": "0",
+    "auto_run_pool_reset_day": "",
 }
 
 _APP_KEY_PATH = DATA / ".app_key"
@@ -1185,6 +1188,60 @@ def _require_vault_unlocked() -> None:
         )
     if not st["unlocked"]:
         raise HTTPException(423, "Разблокируйте хранилище сессий")
+
+
+def _vault_ready_for_send() -> bool:
+    st = vault_status()
+    return not st["needs_setup"] and bool(st["unlocked"])
+
+
+def _auto_run_enabled() -> bool:
+    return get_setting("auto_run") == "1"
+
+
+def _reset_message_pool_progress() -> None:
+    n = len(load_message_pool())
+    with _conn() as c:
+        c.execute("UPDATE queue_state SET message_idx=0 WHERE id=1")
+    _rebuild_message_bag(n)
+
+
+def _prepare_auto_resume_pool() -> bool:
+    """message_pool: на новый день сбросить пул; в тот же день после исчерпания — ждать."""
+    if _campaign_goal() != "message_pool":
+        return True
+    msgs = load_message_pool()
+    if not msgs:
+        return False
+    with _conn() as c:
+        qs = c.execute("SELECT message_idx FROM queue_state WHERE id=1").fetchone()
+    mi = int(qs["message_idx"] if qs else 0)
+    if mi < len(msgs):
+        return True
+    today = _local_today().isoformat()
+    if get_setting("auto_run_pool_reset_day") == today:
+        return False
+    set_setting("auto_run_pool_reset_day", today)
+    _reset_message_pool_progress()
+    return True
+
+
+async def _try_auto_resume(*, log_prefix: str = "Автовозобновление") -> bool:
+    if not _auto_run_enabled():
+        return False
+    if _worker_task and not _worker_task.done():
+        return False
+    if not _vault_ready_for_send():
+        return False
+    if not load_message_pool():
+        return False
+    if not _prepare_auto_resume_pool():
+        return False
+    if not _has_sendable_profile():
+        return False
+    append_log(f"{log_prefix}: старт рассылки")
+    await _start_worker(record_campaign=True)
+    return True
 
 
 def _decrypt_session(profile_id: int) -> None:
@@ -3297,29 +3354,28 @@ async def _scheduler_loop() -> None:
                 row = c.execute(
                     "SELECT * FROM campaign_schedule WHERE id=1"
                 ).fetchone()
-            if not row or not row["enabled"] or not row["start_at"]:
-                continue
-            start_at = _parse_iso_datetime(row["start_at"])
-            now = datetime.now(timezone.utc)
-            if now < start_at:
-                continue
-            if _worker_task and not _worker_task.done():
-                continue
-            # срабатывание
-            with _conn() as c:
-                c.execute(
-                    "UPDATE campaign_schedule SET enabled=0 WHERE id=1"
-                )
-            append_log(f"Расписание: старт кампании (запланировано на {row['start_at']})")
-            try:
-                _require_vault_unlocked()
-            except HTTPException as e:
-                append_log(f"Расписание: пропуск — {e.detail}")
-                continue
-            if not load_message_pool() or not _has_sendable_profile():
-                append_log("Расписание: нет сообщений или профилей — пропуск")
-                continue
-            await _start_worker(scheduled_for=row["start_at"])
+            if row and row["enabled"] and row["start_at"]:
+                start_at = _parse_iso_datetime(row["start_at"])
+                now = datetime.now(timezone.utc)
+                worker_busy = _worker_task and not _worker_task.done()
+                if now >= start_at and not worker_busy:
+                    with _conn() as c:
+                        c.execute(
+                            "UPDATE campaign_schedule SET enabled=0 WHERE id=1"
+                        )
+                    append_log(
+                        f"Расписание: старт кампании (запланировано на {row['start_at']})"
+                    )
+                    try:
+                        _require_vault_unlocked()
+                    except HTTPException as e:
+                        append_log(f"Расписание: пропуск — {e.detail}")
+                    else:
+                        if load_message_pool() and _has_sendable_profile():
+                            await _start_worker(scheduled_for=row["start_at"])
+                        else:
+                            append_log("Расписание: нет сообщений или профилей — пропуск")
+            await _try_auto_resume(log_prefix="Автовозобновление")
         except Exception as e:
             append_log(f"Ошибка планировщика: {e}")
 
@@ -3711,6 +3767,12 @@ async def lifespan(_app: FastAPI):
         _watchdog_task = asyncio.create_task(_watchdog_loop())
         _scheduler_task = asyncio.create_task(_scheduler_loop())
         _backup_task = asyncio.create_task(_backup_loop())
+
+        async def _startup_auto_resume() -> None:
+            await asyncio.sleep(2)
+            await _try_auto_resume(log_prefix="Автозапуск")
+
+        asyncio.create_task(_startup_auto_resume())
     try:
         yield
     finally:
@@ -3896,6 +3958,7 @@ def _build_status_payload() -> dict[str, Any]:
         "messages_count": messages_total,
         "campaign_progress": progress,
         "campaign_goal": _campaign_goal(),
+        "auto_run": _auto_run_enabled(),
         "message_pick_mode": _message_pick_mode(),
         "vault": vault_status(),
         "circuit_open": _circuit_open_count(),
@@ -4564,12 +4627,14 @@ async def campaign_start():
             400,
             "Некому отправлять: все профили исчерпали дневной лимит или не авторизованы",
         )
+    set_setting("auto_run", "1")
     await _start_worker()
     return {"ok": True, "campaign_id": _current_campaign_id}
 
 
 @app.post("/api/campaign/stop")
 async def campaign_stop():
+    set_setting("auto_run", "0")
     await _stop_worker(finish_status="stopped", reason="Остановлено пользователем")
     return {"ok": True}
 
@@ -4779,17 +4844,32 @@ async def dashboard():
         failed_today = c.execute(
             "SELECT COUNT(*) n FROM send_log WHERE date(sent_at)=date('now') AND status='failed'"
         ).fetchone()["n"]
+        qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
     items = []
     for p in profiles:
         d = _profile_auth_view(p)
         d["circuit_open"] = _is_circuit_open(p["id"])
         items.append(d)
+    if _campaign_goal() == "daily_limits":
+        prog = _daily_capacity_progress()
+    else:
+        msgs = len(load_message_pool())
+        mi = int(qs["message_idx"] if qs else 0)
+        prog = {
+            "goal": "message_pool",
+            "sent": min(mi, msgs),
+            "total": msgs,
+            "remaining": max(0, msgs - mi),
+        }
     return {
         "counts": {r["status"]: r["n"] for r in counts},
         "groups_count": groups_n,
         "sent_today": sent_today,
         "failed_today": failed_today,
         "circuit_open": _circuit_open_count(),
+        "running": bool(qs and qs["running"]),
+        "auto_run": _auto_run_enabled(),
+        "campaign_progress": prog,
         "items": items,
     }
 
