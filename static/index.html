@@ -870,8 +870,8 @@
       if (!lines || !lines.length) return '—';
       return lines.map(line => {
         let cls = '';
-        if (line.includes('FAIL') || line.includes('Ошибка')) cls = 'fail';
-        else if (line.includes('OK #') || line.includes('Успех #') || line.includes('Готово')) cls = 'ok';
+        if (line.includes('Ошибка')) cls = 'fail';
+        else if (line.includes('Успех #') || line.includes('Готово')) cls = 'ok';
         return `<div class="log-line ${cls}">${esc(line)}</div>`;
       }).join('');
     }
@@ -888,6 +888,30 @@
     let _serverMode = false;
     let _userRole = 'local';
     let _subscriptionActive = true;
+    let _adminGlobalMode = false;
+
+    function switchTab(tabId) {
+      const btn = document.querySelector(`nav button[data-tab="${tabId}"]`);
+      if (!btn) return;
+      document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('section').forEach(x => x.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+      if (tabId === 'dashboard') loadDashboard();
+    }
+
+    function applyAdminGlobalUI() {
+      ['campaign', 'dashboard', 'groups'].forEach(tab => {
+        const btn = document.querySelector(`nav button[data-tab="${tab}"]`);
+        if (btn) btn.style.display = 'none';
+      });
+      const banner = document.getElementById('serverBanner');
+      banner.style.display = 'block';
+      banner.className = 'hint';
+      banner.innerHTML = 'Глобальные настройки админа (шаблон для всех учреждений) · <a href="/admin.html" style="color:var(--accent)">← админ-панель</a>';
+      const tab = location.hash === '#messages' ? 'messages' : 'settings';
+      switchTab(tab);
+    }
 
     function getApiPin() {
       const s = sessionStorage.getItem('maxApiPin');
@@ -969,11 +993,14 @@
         const me = await api('/auth/me');
         _userRole = me.role;
         _subscriptionActive = !!(me.subscription && me.subscription.active);
-        if (me.role === 'admin' && !me.impersonating && !/^#(settings|messages)/.test(location.hash)) {
+        _adminGlobalMode = me.role === 'admin' && !me.impersonating
+          && /^#(settings|messages)/.test(location.hash);
+        if (me.role === 'admin' && !me.impersonating && !_adminGlobalMode) {
           location.href = '/admin.html';
           return;
         }
         applyServerRoleUI();
+        if (_adminGlobalMode) applyAdminGlobalUI();
       } catch (e) {
         setAuthToken('');
         location.href = '/auth.html';
@@ -1163,7 +1190,7 @@
         back.style.display = this.step > 1 ? 'inline-block' : 'none';
 
         if (this.step === 1) {
-          lead.textContent = 'Шаг 1 из 4 — пароль шифрует сессии MAX на этом компьютере.';
+          lead.textContent = 'Шаг 1 из 4 — пароль шифрует сессии MAX на сервере.';
           if (this.vaultMode === 'unlock') {
             body.innerHTML = `
               <label for="obVaultPass">Пароль хранилища</label>
@@ -1357,11 +1384,10 @@
 
     document.querySelectorAll('nav button').forEach(b => {
       b.onclick = () => {
-        document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
-        document.querySelectorAll('section').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
-        document.getElementById(b.dataset.tab).classList.add('active');
-        if (b.dataset.tab === 'dashboard') loadDashboard();
+        if (_adminGlobalMode && (b.dataset.tab === 'settings' || b.dataset.tab === 'messages')) {
+          location.hash = b.dataset.tab;
+        }
+        switchTab(b.dataset.tab);
       };
     });
 
@@ -1935,7 +1961,7 @@
         error: 'Ошибка входа',
         idle: '',
       };
-      let t = map[p.auth_step] || p.auth_step || '';
+      let t = map[p.auth_step] || '';
       if (p.auth_step === 'waiting_cloud_password' && p.auth_hint) {
         t += ` (${p.auth_hint})`;
       }
@@ -2419,6 +2445,11 @@
 
     (async () => {
       try { await initServerMode(); } catch (_) {}
+      if (_adminGlobalMode) {
+        loadMessages().catch(e => toast(e.message, 'error'));
+        loadSettings().catch(e => toast(e.message, 'error'));
+        return;
+      }
       try { await maybeStartOnboarding(); } catch (e) { toast(e.message, 'error'); }
       loadMessages();
       loadGroups();
@@ -2430,6 +2461,7 @@
       connectStatusWs();
     })();
     setInterval(() => {
+      if (_adminGlobalMode) return;
       if (document.getElementById('groups').classList.contains('active')) loadGroups();
       if (document.getElementById('campaign').classList.contains('active')) {
         loadSendLog(sendLogOffset);

@@ -38,6 +38,7 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         "/api/auth/",
         "/api/settings",
         "/api/messages",
+        "/api/vault/",
     )
 
     def _admin_global_path(self, path: str) -> bool:
@@ -109,7 +110,7 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
                         role=role,
                         impersonating=impersonating,
                         use_global_data=path.startswith(
-                            ("/api/settings", "/api/messages")
+                            ("/api/settings", "/api/messages", "/api/vault/")
                         ),
                     )
                 else:
