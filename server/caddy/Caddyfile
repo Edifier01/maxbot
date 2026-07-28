@@ -1,8 +1,11 @@
-# Переменные DOMAIN и LETSENCRYPT_EMAIL — из server/.env (env в контейнере caddy)
+# DOMAIN и LETSENCRYPT_EMAIL — из server/.env (environment в контейнере caddy)
+# email только в global block (Caddy 2)
+
+{
+	email {env.LETSENCRYPT_EMAIL}
+}
 
 {env.DOMAIN} {
-	email {env.LETSENCRYPT_EMAIL}
-
 	reverse_proxy app:8765 {
 		# WebSocket (статус кампании)
 		transport http {
