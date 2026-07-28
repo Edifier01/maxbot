@@ -1,13 +1,12 @@
-# DOMAIN и LETSENCRYPT_EMAIL — из server/.env (environment в контейнере caddy)
-# email только в global block (Caddy 2)
+# DOMAIN и LETSENCRYPT_EMAIL — environment контейнера caddy (из server/.env)
+# В Caddyfile переменные окружения: {$VAR}, не {env.VAR}
 
 {
-	email {env.LETSENCRYPT_EMAIL}
+	email {$LETSENCRYPT_EMAIL}
 }
 
-{env.DOMAIN} {
+{$DOMAIN} {
 	reverse_proxy app:8765 {
-		# WebSocket (статус кампании)
 		transport http {
 			versions 1.1
 		}
