@@ -1,0 +1,19 @@
+---
+description: MAX Sender local development — run.bat, exe, main.py, SQLite, localhost
+globs: main.py,antiban_core.py,celery_worker.py,run.bat,build.bat,*.spec,.env.example,static/index.html
+alwaysApply: false
+---
+
+# Local workspace (MAX Sender)
+
+When working on **local** deployment (not `server/`):
+
+1. Read `.cursor/project-management/CURRENT_CONTEXT.md` and load skill `.cursor/skills/context-loading/SKILL.md`.
+2. Core logic lives in `main.py` — avoid unrelated refactors; match existing monolith patterns.
+3. Local bind: `127.0.0.1:8765` (default). Do not change to `0.0.0.0` without server Feature Plan.
+4. Data dir: `data/` — never commit `.app_key`, sessions, or `app.db` with real credentials.
+5. UI: `static/index.html` — single file, no build step; must work in exe and Docker.
+6. Keep PyInstaller flow working: `build.bat`, `max-sender.spec`.
+7. For new features use `/start-feature` workflow — see `docs/MASTER-AI-WORKFLOW.md`.
+
+Dual deployment rule: local changes must not break `server/` path; server-specific code belongs in `server/app/`.

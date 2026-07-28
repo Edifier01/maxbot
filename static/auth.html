@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MAX Sender — Вход</title>
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <style>
+    :root {
+      --bg: #0f1117; --bg-soft: #1a1d27; --text: #e8eaef; --muted: #8b92a5;
+      --accent: #5b8def; --danger: #ef5b5b; --ok: #3dd68c; --line: #2a2f3d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg); color: var(--text); margin: 0; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .card {
+      width: 100%; max-width: 420px; background: var(--bg-soft);
+      border: 1px solid var(--line); border-radius: 12px; padding: 1.5rem;
+    }
+    h1 { margin: 0 0 .25rem; font-size: 1.35rem; }
+    .hint { color: var(--muted); font-size: .85rem; margin-bottom: 1rem; }
+    label { display: block; font-size: .85rem; margin: .75rem 0 .25rem; color: var(--muted); }
+    input {
+      width: 100%; padding: .6rem .75rem; border-radius: 8px;
+      border: 1px solid var(--line); background: var(--bg); color: var(--text);
+    }
+    button {
+      margin-top: 1rem; width: 100%; padding: .65rem; border: none; border-radius: 8px;
+      background: var(--accent); color: #fff; font-weight: 600; cursor: pointer;
+    }
+    button.secondary { background: transparent; border: 1px solid var(--line); color: var(--text); margin-top: .5rem; }
+    .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; }
+    .tabs button { margin: 0; flex: 1; }
+    .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .err { color: var(--danger); font-size: .85rem; min-height: 1.2rem; margin-top: .5rem; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>MAX Sender</h1>
+    <p class="hint">Серверная версия — личный кабинет учреждения</p>
+    <div class="tabs">
+      <button type="button" id="tabLogin" class="active" onclick="showTab('login')">Вход</button>
+      <button type="button" id="tabRegister" class="secondary" onclick="showTab('register')">Регистрация</button>
+    </div>
+
+    <div id="panelLogin" class="panel active">
+      <label>Email</label>
+      <input id="loginEmail" type="email" autocomplete="username">
+      <label>Пароль</label>
+      <input id="loginPass" type="password" autocomplete="current-password">
+      <button type="button" onclick="doLogin()">Войти</button>
+      <p class="err" id="loginErr"></p>
+    </div>
+
+    <div id="panelRegister" class="panel">
+      <label>Название учреждения</label>
+      <input id="regInstitution" type="text" placeholder="Школа №1">
+      <label>Email</label>
+      <input id="regEmail" type="email" autocomplete="username">
+      <label>Пароль</label>
+      <input id="regPass" type="password" autocomplete="new-password">
+      <label>Повтор пароля</label>
+      <input id="regPass2" type="password" autocomplete="new-password">
+      <button type="button" onclick="doRegister()">Зарегистрироваться</button>
+      <p class="err" id="regErr"></p>
+    </div>
+  </div>
+  <script>
+    function showTab(name) {
+      document.getElementById('panelLogin').classList.toggle('active', name === 'login');
+      document.getElementById('panelRegister').classList.toggle('active', name === 'register');
+      document.getElementById('tabLogin').classList.toggle('active', name === 'login');
+      document.getElementById('tabRegister').classList.toggle('active', name === 'register');
+    }
+    function saveToken(token) {
+      sessionStorage.setItem('maxAuthToken', token);
+    }
+    async function doLogin() {
+      const err = document.getElementById('loginErr');
+      err.textContent = '';
+      try {
+        const r = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: document.getElementById('loginEmail').value.trim(),
+            password: document.getElementById('loginPass').value,
+          }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.detail || 'Ошибка входа');
+        saveToken(j.token);
+        if (j.role === 'admin') location.href = '/admin.html';
+        else location.href = '/';
+      } catch (e) { err.textContent = e.message; }
+    }
+    async function doRegister() {
+      const err = document.getElementById('regErr');
+      err.textContent = '';
+      try {
+        const r = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            institution_name: document.getElementById('regInstitution').value.trim(),
+            email: document.getElementById('regEmail').value.trim(),
+            password: document.getElementById('regPass').value,
+            password_confirm: document.getElementById('regPass2').value,
+          }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : 'Ошибка регистрации');
+        saveToken(j.token);
+        location.href = '/';
+      } catch (e) { err.textContent = e.message; }
+    }
+    (async () => {
+      const h = await fetch('/api/health').then(r => r.json()).catch(() => ({}));
+      if (!h.server_mode) location.href = '/';
+    })();
+  </script>
+</body>
+</html>

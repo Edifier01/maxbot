@@ -1,0 +1,9 @@
+venv/
+data/
+__pycache__/
+*.pyc
+data/.app_key
+build/
+dist/
+server/.env
+server/.env

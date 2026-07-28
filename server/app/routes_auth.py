@@ -1,0 +1,131 @@
+"""Auth API: регистрация, вход, профиль."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, EmailStr, Field
+
+from server.app import auth, db_pg
+from server.app.config import is_server_mode
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+class RegisterIn(BaseModel):
+    institution_name: str = Field(min_length=2, max_length=200)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    password_confirm: str = Field(min_length=8, max_length=128)
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+
+
+def _token_response(user: dict) -> dict:
+    token = auth.create_token(
+        user["id"],
+        tenant_id=user.get("tenant_id"),
+        role=user["role"],
+    )
+    sub = db_pg.subscription_info(user.get("tenant_id"))
+    tenant = None
+    if user.get("tenant_id"):
+        tenant = db_pg.get_tenant(user["tenant_id"])
+    return {
+        "token": token,
+        "role": user["role"],
+        "email": user["email"],
+        "tenant_id": user.get("tenant_id"),
+        "institution_name": tenant["institution_name"] if tenant else None,
+        "subscription": sub,
+    }
+
+
+@router.post("/register")
+async def register(body: RegisterIn):
+    if not is_server_mode():
+        raise HTTPException(400, "Регистрация доступна только на сервере")
+    if body.password != body.password_confirm:
+        raise HTTPException(400, "Пароли не совпадают")
+    try:
+        info = auth.register_user(body.institution_name, body.email, body.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    import main as app_main
+
+    from server.app.tenant_init import init_tenant_db
+
+    init_tenant_db(app_main, info["tenant_id"])
+
+    user = db_pg.get_user_by_id(info["user_id"])
+    assert user
+    return _token_response(user)
+
+
+@router.post("/login")
+async def login(body: LoginIn):
+    if not is_server_mode():
+        raise HTTPException(400, "Вход доступен только на сервере")
+    user = auth.authenticate(body.email, body.password)
+    if not user:
+        raise HTTPException(401, "Неверный email или пароль")
+
+    if user.get("tenant_id"):
+        import main as app_main
+
+        from server.app.tenant_init import init_tenant_db
+
+        init_tenant_db(app_main, user["tenant_id"])
+
+    return _token_response(user)
+
+
+@router.get("/me")
+async def me(request: Request):
+    if not is_server_mode():
+        return {"server_mode": False, "role": "local"}
+    from server.app.tenant import (
+        get_tenant_id,
+        get_user_id,
+        get_user_role,
+        is_impersonating,
+        set_context,
+    )
+
+    user_id = get_user_id()
+    if user_id is None:
+        token = ""
+        header = request.headers.get("Authorization", "")
+        if header.startswith("Bearer "):
+            token = header[7:]
+        if not token:
+            raise HTTPException(401, "Требуется вход")
+        try:
+            payload = auth.decode_token(token)
+        except Exception as e:
+            raise HTTPException(401, "Сессия истекла") from e
+        user_id = int(payload["sub"])
+        set_context(
+            user_id=user_id,
+            tenant_id=payload.get("tenant_id"),
+            role=payload.get("role", "user"),
+            impersonating=bool(payload.get("imp")),
+        )
+    user = db_pg.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(401, "Пользователь не найден")
+    tenant_id = get_tenant_id()
+    tenant = db_pg.get_tenant(tenant_id) if tenant_id else None
+    return {
+        "server_mode": True,
+        "user_id": user_id,
+        "email": user["email"],
+        "role": get_user_role(),
+        "tenant_id": tenant_id,
+        "institution_name": tenant["institution_name"] if tenant else None,
+        "subscription": db_pg.subscription_info(tenant_id),
+        "impersonating": is_impersonating(),
+    }

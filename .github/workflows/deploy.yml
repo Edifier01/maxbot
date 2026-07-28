@@ -1,0 +1,28 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd ${{ secrets.DEPLOY_PATH }}
+            git pull origin main || git pull origin master
+            cd server
+            docker compose pull redis caddy postgres 2>/dev/null || true
+            docker compose up --build -d
+            sleep 10
+            docker compose exec -T app python -c "import urllib.request,json; r=urllib.request.urlopen('http://127.0.0.1:8765/api/health',timeout=10); print(json.loads(r.read()))"

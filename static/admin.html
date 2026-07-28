@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MAX Sender — Админ</title>
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <style>
+    :root {
+      --bg: #0f1117; --bg-soft: #1a1d27; --text: #e8eaef; --muted: #8b92a5;
+      --accent: #5b8def; --danger: #ef5b5b; --ok: #3dd68c; --line: #2a2f3d;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
+    header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+    main { padding: 1rem 1.25rem; max-width: 1100px; margin: 0 auto; }
+    h1 { margin: 0; font-size: 1.2rem; }
+    .hint { color: var(--muted); font-size: .85rem; }
+    a, button.link { color: var(--accent); background: none; border: none; cursor: pointer; font: inherit; }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: 1rem; }
+    th, td { text-align: left; padding: .55rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .panel { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+    input, button.btn {
+      padding: .45rem .65rem; border-radius: 6px; border: 1px solid var(--line);
+      background: var(--bg); color: var(--text);
+    }
+    button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; }
+    .badge { font-size: .75rem; padding: .15rem .45rem; border-radius: 4px; background: #2a3348; }
+    .badge.ok { background: #1a3d2e; color: var(--ok); }
+    .badge.no { background: #3d1a1a; color: var(--danger); }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Админ-панель</h1>
+    <span class="hint" id="adminEmail"></span>
+    <span style="margin-left:auto" class="row">
+      <a href="/">Кабинет (impersonation)</a>
+      <button class="link" onclick="logout()">Выход</button>
+    </span>
+  </header>
+  <main>
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <strong>Пользователи (учреждения)</strong>
+        <span class="row">
+          <a href="/#settings">Настройки рассылки</a>
+          <a href="/#messages">Сообщения (pool)</a>
+        </span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Учреждение</th>
+            <th>Email</th>
+            <th>Подписка</th>
+            <th>Статистика</th>
+            <th>Действия</th>
+          </tr>
+        </thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </div>
+  </main>
+  <script>
+    function token() { return sessionStorage.getItem('maxAuthToken') || ''; }
+    function authHeaders() {
+      const h = { 'Content-Type': 'application/json' };
+      const t = token();
+      if (t) h['Authorization'] = 'Bearer ' + t;
+      return h;
+    }
+    async function api(path, opts = {}) {
+      opts.headers = { ...authHeaders(), ...(opts.headers || {}) };
+      const r = await fetch('/api' + path, opts);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail || r.statusText);
+      return j;
+    }
+    function logout() {
+      sessionStorage.removeItem('maxAuthToken');
+      location.href = '/auth.html';
+    }
+    async function loadUsers() {
+      const items = (await api('/admin/users')).items;
+      const tbody = document.getElementById('usersBody');
+      tbody.innerHTML = items.map(u => {
+        const sub = u.subscription;
+        const subBadge = sub.active
+          ? `<span class="badge ok">до ${sub.expires_at ? sub.expires_at.slice(0, 10) : '?'}</span>`
+          : '<span class="badge no">нет</span>';
+        return `<tr>
+          <td>${esc(u.institution_name)}</td>
+          <td>${esc(u.email)}</td>
+          <td>${subBadge}</td>
+          <td id="stats-${u.tenant_id}"><button class="btn" onclick="loadStats(${u.tenant_id})">Загрузить</button></td>
+          <td class="row">
+            <button class="btn primary" onclick="impersonate(${u.tenant_id})">Войти в кабинет</button>
+            <button class="btn" onclick="grantMonth(${u.tenant_id})">+30 дней</button>
+            <input type="number" id="days-${u.tenant_id}" min="1" max="365" value="7" style="width:4rem">
+            <button class="btn" onclick="grantDays(${u.tenant_id})">Дней</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+    function esc(s) {
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    async function loadStats(tid) {
+      const s = await api('/admin/tenants/' + tid + '/stats');
+      document.getElementById('stats-' + tid).innerHTML =
+        `групп: ${s.groups}, акк: ${s.profiles}, ✓${s.sent} ✗${s.failed}`;
+    }
+    async function grantMonth(tid) {
+      await api('/admin/users/' + tid + '/subscription/month', { method: 'POST' });
+      await loadUsers();
+    }
+    async function grantDays(tid) {
+      const days = parseInt(document.getElementById('days-' + tid).value, 10) || 7;
+      await api('/admin/users/' + tid + '/subscription', {
+        method: 'POST', body: JSON.stringify({ days }),
+      });
+      await loadUsers();
+    }
+    async function impersonate(tid) {
+      const j = await api('/admin/impersonate/' + tid, { method: 'POST' });
+      sessionStorage.setItem('maxAuthToken', j.token);
+      sessionStorage.setItem('maxImpersonating', j.institution_name || '');
+      location.href = '/';
+    }
+    (async () => {
+      try {
+        const me = await api('/auth/me');
+        if (me.role !== 'admin') { location.href = '/'; return; }
+        document.getElementById('adminEmail').textContent = me.email;
+        await loadUsers();
+      } catch {
+        location.href = '/auth.html';
+      }
+    })();
+  </script>
+</body>
+</html>

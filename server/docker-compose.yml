@@ -1,0 +1,99 @@
+# MAX Sender — production stack (domain + HTTPS)
+# Запуск из папки server/:  docker compose up --build -d
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    expose:
+      - "8765"
+    environment:
+      MAX_SERVER_MODE: "1"
+      MAX_HOST: "0.0.0.0"
+      MAX_PORT: "8765"
+      WORKER_POOL_SIZE: "${WORKER_POOL_SIZE:-4}"
+      REDIS_URL: "redis://redis:6379/0"
+      USE_CELERY: "${USE_CELERY:-0}"
+      DATABASE_URL: "postgresql://maxsender:${POSTGRES_PASSWORD:-maxsender}@postgres:5432/maxsender"
+      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}"
+    volumes:
+      - max_server_data:/app/data
+    depends_on:
+      - redis
+      - postgres
+    restart: unless-stopped
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - max_server_redis:/data
+    restart: unless-stopped
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN:?set DOMAIN in .env}"
+      LETSENCRYPT_EMAIL: "${LETSENCRYPT_EMAIL:?set LETSENCRYPT_EMAIL in .env}"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+    networks:
+      - internal
+
+  celery-worker:
+    profiles: ["celery"]
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    command: ["celery", "-A", "celery_worker.app", "worker", "--loglevel=info", "--concurrency=4"]
+    environment:
+      MAX_SERVER_MODE: "1"
+      REDIS_URL: "redis://redis:6379/0"
+      USE_CELERY: "1"
+      DATABASE_URL: "postgresql://maxsender:${POSTGRES_PASSWORD:-maxsender}@postgres:5432/maxsender"
+    volumes:
+      - max_server_data:/app/data
+    depends_on:
+      - redis
+      - app
+      - postgres
+    restart: unless-stopped
+    networks:
+      - internal
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: maxsender
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-maxsender}"
+      POSTGRES_DB: maxsender
+    volumes:
+      - max_server_pg:/var/lib/postgresql/data
+      - ../schema_pg.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    restart: unless-stopped
+    networks:
+      - internal
+
+networks:
+  internal:
+
+volumes:
+  max_server_data:
+  max_server_redis:
+  max_server_pg:
+  caddy_data:
+  caddy_config:
