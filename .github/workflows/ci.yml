@@ -20,4 +20,5 @@ jobs:
       - name: Smoke tests
         env:
           MAX_TEST: "1"
+          MAX_SERVER_MODE: "0"
         run: pytest tests/ -q

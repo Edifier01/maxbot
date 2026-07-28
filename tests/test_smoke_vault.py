@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.conftest import setup_vault
+from conftest import setup_vault
 
 
 def test_vault_setup_unlock_lock_cycle(client):

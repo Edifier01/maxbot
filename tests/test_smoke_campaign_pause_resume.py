@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.conftest import queue_indices, seed_campaign_db, setup_vault
+from conftest import queue_indices, seed_campaign_db, setup_vault
 
 EXPECTED = (5, 7, 2)
 

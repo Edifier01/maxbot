@@ -14,9 +14,21 @@ def main_module(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     monkeypatch.setenv("MAX_DATA", str(data_dir))
     monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("MAX_SERVER_MODE", "0")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    import importlib
 
     import main
 
+    # Перезагрузка: подхватить env без server mode (JWT middleware)
+    try:
+        import server.app.config as srv_config
+
+        importlib.reload(srv_config)
+    except ImportError:
+        pass
+    importlib.reload(main)
     main.reset_test_runtime()
     main._refresh_data_paths()
     return main
