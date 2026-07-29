@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import shutil
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -67,6 +70,34 @@ async def grant_subscription(tenant_id: int, body: SubscriptionIn):
 @router.post("/users/{tenant_id}/subscription/month")
 async def grant_subscription_month(tenant_id: int):
     return await grant_subscription(tenant_id, SubscriptionIn(days=30))
+
+
+def _drop_tenant_sqlite(tenant_id: int) -> None:
+    import main as app_main
+
+    data_dir = app_main.ROOT / "data" / "tenants" / str(tenant_id)
+    key = str(data_dir)
+    with app_main._db_lock:
+        conn = app_main._tenant_db_conns.pop(key, None)
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.close()
+    if data_dir.is_dir():
+        shutil.rmtree(data_dir, ignore_errors=True)
+
+
+@router.delete("/users/{tenant_id}")
+async def delete_user(tenant_id: int):
+    _require_admin()
+    tenant = db_pg.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(404, "Учреждение не найдено")
+    if not db_pg.get_tenant_user(tenant_id):
+        raise HTTPException(404, "Пользователь учреждения не найден")
+    if not db_pg.delete_tenant(tenant_id):
+        raise HTTPException(404, "Учреждение не найдено")
+    _drop_tenant_sqlite(tenant_id)
+    return {"ok": True}
 
 
 @router.post("/impersonate/{tenant_id}")

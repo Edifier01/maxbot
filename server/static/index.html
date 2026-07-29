@@ -104,6 +104,7 @@
       margin: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: -.02em;
     }
     .header-meta { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; flex: 1; }
+    #btnLogout { margin-left: auto; }
     .badge {
       padding: .22rem .65rem; border-radius: 999px; font-size: .72rem;
       font-weight: 600; letter-spacing: .02em;
@@ -412,6 +413,7 @@
       <h1>MAX Sender</h1>
     </div>
     <div class="header-meta">
+      <button type="button" id="btnLogout" class="small" style="display:none" onclick="logoutUser()">Выход</button>
       <span id="runBadge" class="badge stop header-user-hide">остановлено</span>
       <span id="vaultBadge" class="badge warn header-user-hide">хранилище…</span>
       <span id="liveBadge" class="badge poll header-user-hide" title="Канал статуса">опрос</span>
@@ -554,7 +556,6 @@
         <input id="groupLink" placeholder="Пригласительная ссылка группы" style="max-width:420px">
         <button class="primary" onclick="addGroup()">Создать группу</button>
       </div>
-      <p class="hint" style="margin:0">CSV импорт: <code>телефон,метка</code> (колонки phone,label)</p>
       </div>
       <input type="file" id="csvFile" accept=".csv,.txt" style="display:none">
       <div id="groupsList"></div>
@@ -848,14 +849,24 @@
       else sessionStorage.removeItem('maxAuthToken');
     }
 
+    function logoutUser() {
+      setAuthToken('');
+      sessionStorage.removeItem('maxImpersonating');
+      location.href = '/auth.html';
+    }
+
     let _serverMode = false;
     let _userRole = 'local';
     let _subscriptionActive = true;
     let _adminGlobalMode = false;
     let _lastStatus = null;
 
+    function isUserRole() {
+      return _serverMode && _userRole === 'user';
+    }
+
     function applyCampaignButtonState(s) {
-      const isUser = _serverMode && _userRole === 'user';
+      const isUser = isUserRole();
       const start = document.getElementById('btnStart');
       const stop = document.getElementById('btnStop');
       if (!start || !stop) return;
@@ -941,7 +952,7 @@
     };
 
     function applyServerRoleUI() {
-      const isUser = _serverMode && _userRole === 'user';
+      const isUser = isUserRole();
       document.querySelectorAll('nav button[data-tab="messages"], nav button[data-tab="settings"]').forEach(el => {
         el.style.display = isUser ? 'none' : '';
       });
@@ -951,6 +962,8 @@
       document.querySelectorAll('.header-user-hide').forEach(el => {
         el.style.display = isUser ? 'none' : '';
       });
+      const logoutBtn = document.getElementById('btnLogout');
+      if (logoutBtn) logoutBtn.style.display = isUser ? '' : 'none';
       const userHint = document.getElementById('campaignUserHint');
       const adminHint = document.getElementById('campaignAdminHint');
       if (userHint) userHint.style.display = isUser ? '' : 'none';
@@ -1159,15 +1172,16 @@
 
     const groupsSection = document.getElementById('groups');
     groupsSection.addEventListener('focusin', (e) => {
-      if (e.target.matches('input') && e.target.closest('#groupsList')) {
+      if (e.target.matches('input, textarea') && e.target.closest('#groupsList')) {
         groupsRefreshPaused = true;
         focusedInputId = e.target.id;
       }
     });
     groupsSection.addEventListener('focusout', () => {
       setTimeout(() => {
+        if (authModalOpen) return;
         const el = document.activeElement;
-        if (!el || !groupsSection.contains(el) || !el.matches('input')) {
+        if (!el || !groupsSection.contains(el) || !el.matches('input, textarea')) {
           groupsRefreshPaused = false;
         }
       }, 300);
@@ -1192,6 +1206,7 @@
     function showAuthModal(title, message, password = false) {
       return new Promise(resolve => {
         authModalOpen = true;
+        groupsRefreshPaused = true;
         const overlay = document.getElementById('authModal');
         const input = document.getElementById('authModalInput');
         document.getElementById('authModalTitle').textContent = title;
@@ -1204,6 +1219,7 @@
 
         const finish = (val) => {
           authModalOpen = false;
+          groupsRefreshPaused = false;
           overlay.style.display = 'none';
           okBtn.onclick = null;
           cancelBtn.onclick = null;
@@ -1510,8 +1526,8 @@
           <div class="meta">Сегодня: ${p.messages_sent_today || 0} · ${esc(p.group_names || '')}</div>
           ${p.last_error ? `<div class="auth-error">${esc(p.last_error)}</div>` : ''}
           <div class="row" style="margin-top:.5rem;margin-bottom:0">
-            <button class="small" onclick="loginProfile(${p.id}, false, ${p.primary_group_id || 'null'})">Войти</button>
-            <button class="small" onclick="loginProfile(${p.id}, true, ${p.primary_group_id || 'null'})">Заново</button>
+            <button class="small" onclick="loginProfile(${p.id}, ${isUserRole()}, ${p.primary_group_id || 'null'})">Войти</button>
+            ${isUserRole() ? '' : `<button class="small" onclick="loginProfile(${p.id}, true, ${p.primary_group_id || 'null'})">Заново</button>`}
           </div>
         </div>
       `).join('');
@@ -1519,8 +1535,7 @@
 
     async function startCampaign() {
       try {
-        const isUser = _serverMode && _userRole === 'user';
-        if (!isUser) {
+        if (!isUserRole()) {
           const s = await api('/status');
           const prog = s.campaign_progress || {};
           const activeCount = (s.profiles && s.profiles.active) || 0;
@@ -1797,9 +1812,10 @@
 
     function profileActions(p, groupId) {
       const busy = ['connecting', 'waiting_sms', 'verifying_sms'].includes(p.auth_step);
+      const loginFresh = isUserRole();
       return `
-        <button onclick="loginProfile(${p.id}, false, ${groupId})" ${busy ? 'disabled' : ''}>Войти</button>
-        <button class="small" onclick="loginProfile(${p.id}, true, ${groupId})" ${busy ? 'disabled' : ''}>Заново</button>
+        <button onclick="loginProfile(${p.id}, ${loginFresh}, ${groupId})" ${busy ? 'disabled' : ''}>Войти</button>
+        ${isUserRole() ? '' : `<button class="small" onclick="loginProfile(${p.id}, true, ${groupId})" ${busy ? 'disabled' : ''}>Заново</button>`}
         ${busy ? `<button class="small" onclick="resetLogin(${p.id})">Сброс</button>` : ''}
         <button class="small danger" onclick="removeProfile(${groupId}, ${p.id})">Удалить</button>`;
     }
@@ -1810,7 +1826,7 @@
     }
 
     function saveDrafts() {
-      document.querySelectorAll('#groupsList input[id^="phone-"], #groupsList input[id^="label-"]').forEach(el => {
+      document.querySelectorAll('#groupsList input[id^="phone-"], #groupsList input[id^="label-"], #groupsList textarea[id^="groupProxy-"]').forEach(el => {
         draftInputs[el.id] = el.value;
       });
     }
@@ -1820,6 +1836,7 @@
         const el = document.getElementById(id);
         if (el) el.value = val;
       }
+      if (authModalOpen) return;
       if (focusedInputId) {
         const el = document.getElementById(focusedInputId);
         if (el) {
@@ -1959,7 +1976,7 @@
             </td>
             <td>${p.messages_sent_today || 0}${p.daily_limit != null ? '/'+p.daily_limit : ''}</td>
             <td>${profileActions(p, g.id)}</td>
-          </tr>`).join('') : '<tr><td colspan="5" class="hint">Профилей нет — добавьте номер или импортируйте CSV</td></tr>') : '';
+          </tr>`).join('') : `<tr><td colspan="5" class="hint">Профилей нет — ${isUserRole() ? 'добавьте номер' : 'добавьте номер или импортируйте CSV'}</td></tr>`) : '';
         return `
           <div class="group-card">
             <div class="group-head" onclick="toggleGroup(${g.id})">
@@ -1972,7 +1989,7 @@
             </div>
             ${open ? `
             <div class="group-body" onclick="event.stopPropagation()">
-              ${(!_serverMode) ? `<div class="row" style="margin-bottom:.75rem">
+              ${!isUserRole() ? `<div class="row" style="margin-bottom:.75rem">
                 <textarea id="groupProxy-${g.id}" rows="2" placeholder="Прокси: один URL или несколько (с новой строки / ;)" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
                 <button class="small" onclick="saveGroupProxy(${g.id})">Сохранить прокси</button>
               </div>` : ''}
@@ -1985,7 +2002,7 @@
                 <input id="phone-${g.id}" placeholder="+79991234567">
                 <input id="label-${g.id}" placeholder="Метка" style="max-width:120px">
                 <button class="primary" onclick="loginFromPhone(${g.id}, true)">Войти</button>
-                <button class="small" onclick="document.getElementById('csvFile').click()">Импорт CSV</button>
+                ${isUserRole() ? '' : `<button class="small" onclick="document.getElementById('csvFile').click()">Импорт CSV</button>`}
               </div>
             </div>` : ''}
           </div>`;
@@ -2243,7 +2260,7 @@
     })();
     setInterval(() => {
       if (_adminGlobalMode) return;
-      if (document.getElementById('groups').classList.contains('active')) loadGroups();
+      if (document.getElementById('groups').classList.contains('active') && !authModalOpen) loadGroups();
       if (document.getElementById('campaign').classList.contains('active')) {
         loadSendLog(sendLogOffset);
         loadCampaigns();

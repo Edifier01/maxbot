@@ -168,6 +168,25 @@ def admin_exists() -> bool:
         return cur.fetchone() is not None
 
 
+def get_tenant_user(tenant_id: int) -> dict[str, Any] | None:
+    with _get_conn().cursor() as cur:
+        cur.execute(
+            "SELECT * FROM users WHERE tenant_id = %s AND role = 'user' LIMIT 1",
+            (tenant_id,),
+        )
+        return cur.fetchone()
+
+
+def delete_tenant(tenant_id: int) -> bool:
+    with _get_conn().cursor() as cur:
+        cur.execute(
+            "DELETE FROM impersonation_log WHERE target_tenant_id = %s",
+            (tenant_id,),
+        )
+        cur.execute("DELETE FROM tenants WHERE id = %s", (tenant_id,))
+        return cur.rowcount > 0
+
+
 def close() -> None:
     global _conn
     if _conn is not None:
