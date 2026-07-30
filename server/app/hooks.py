@@ -1,18 +1,19 @@
-"""Точки расширения для серверной логики."""
+﻿"""Точки расширения для серверной логики."""
 
 from __future__ import annotations
 
 
 def before_start() -> None:
-    from server.app.config import is_server_mode
+    from app.config import is_server_mode
 
     if not is_server_mode():
         return
 
-    from server.app import auth, db_pg
-    from server.app.config import ADMIN_EMAIL, ADMIN_PASSWORD
-    from server.app.tenant_init import init_global_db
+    from app import auth, db_pg
+    from app.config import ADMIN_EMAIL, ADMIN_PASSWORD, require_jwt_secret
+    from app.tenant_init import init_global_db
 
+    require_jwt_secret()
     db_pg.init_schema()
 
     import main as app_main
@@ -29,10 +30,10 @@ def before_start() -> None:
 
 
 def after_shutdown() -> None:
-    from server.app.config import is_server_mode
+    from app.config import is_server_mode
 
     if not is_server_mode():
         return
-    from server.app import db_pg
+    from app import db_pg
 
     db_pg.close()

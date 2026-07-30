@@ -1,0 +1,14 @@
+---
+description: MAX Sender Server — standalone project rules
+alwaysApply: true
+---
+
+# MAX Sender Server
+
+- Это **самодостаточный** серверный проект. Корень workspace = папка с `docker-compose.yml` и `AGENTS.md`.
+- Не создавать runtime-зависимости на desktop или родительский monorepo.
+- Стек: Docker / VPS / Caddy / Redis / PostgreSQL / server-mode FastAPI.
+- Ядро: `main.py`; SaaS-слой: `app/`.
+- Не коммитить секреты, `data/`, `venv/`, `.env`.
+- Для рискованных изменений — Feature Plan и OK пользователя.
+- Entry AI: `AGENTS.md`, маршрутизация: `.cursor/rules/ai-skills-system.mdc`.

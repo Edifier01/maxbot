@@ -44,7 +44,6 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
     PUBLIC_PREFIXES = (
         "/static",
         "/api/health",
-        "/metrics",
         "/ws/",
     )
     PUBLIC_EXACT = {
@@ -76,10 +75,6 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
-        if path in self.PUBLIC_EXACT or any(
-            path.startswith(p) for p in self.PUBLIC_PREFIXES
-        ):
-            return await call_next(request)
 
         token = ""
         auth = request.headers.get("Authorization", "")
@@ -87,6 +82,19 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
             token = auth[7:]
         if not token:
             token = request.cookies.get("max_token", "")
+
+        if path == "/metrics":
+            internal = INTERNAL_SERVICE_TOKEN
+            if internal and token == internal:
+                return await call_next(request)
+            if not token:
+                return JSONResponse(status_code=401, content={"detail": "Требуется вход"})
+            # fall through to JWT validation below
+
+        if path in self.PUBLIC_EXACT or any(
+            path.startswith(p) for p in self.PUBLIC_PREFIXES
+        ):
+            return await call_next(request)
 
         internal = INTERNAL_SERVICE_TOKEN
         if (

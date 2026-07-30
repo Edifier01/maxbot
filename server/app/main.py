@@ -1,4 +1,4 @@
-"""Точка входа для серверного развёртывания.
+﻿"""Точка входа для серверного развёртывания.
 
 Пока делегирует в корневой main.py. Серверные отличия — в hooks.py и здесь.
 """
@@ -14,11 +14,11 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from server.app import hooks  # noqa: E402
+from app import hooks  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -30,10 +30,12 @@ def main(argv: list[str] | None = None) -> None:
     app_main._self_check_round_robin()
     app_main.init_db()
 
+    from app.campaign_runtime import RUNTIME
+
     def _handle_signal(signum, _frame):
-        if app_main._shutting_down:
+        if RUNTIME.shutting_down:
             return
-        app_main._shutting_down = True
+        RUNTIME.shutting_down = True
         app_main.append_log(f"Сигнал {signum}: шифрование сессий и выход…")
         app_main._encrypt_all_sessions()
         hooks.after_shutdown()

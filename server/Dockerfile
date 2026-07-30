@@ -1,4 +1,4 @@
-# Build context: корень репозитория (docker-compose: context ..)
+# Build context: project root (docker-compose: context .)
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -9,12 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt requirements-scale.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir -r requirements-scale.txt || true
+    && pip install --no-cache-dir -r requirements-scale.txt
 
-COPY main.py antiban_core.py celery_worker.py schema_pg.sql ./
+COPY main.py antiban_core.py celery_worker.py ./
+COPY schema_pg.sql schema_pg_legacy.sql ./
+COPY migrations ./migrations
 COPY static ./static
-COPY server/__init__.py ./server/__init__.py
-COPY server/app ./server/app
+COPY app ./app
 
 ENV MAX_HOST=0.0.0.0
 ENV MAX_PORT=8765
@@ -23,6 +24,11 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8765
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD python -c "import json,sys,urllib.request;\
+r=urllib.request.urlopen('http://127.0.0.1:8765/api/health',timeout=4);\
+d=json.loads(r.read());sys.exit(0 if d.get('db_ok') else 1)"
+
 VOLUME ["/app/data"]
 
-CMD ["python", "-m", "server.app.main", "--no-browser"]
+CMD ["python", "-m", "app.main", "--no-browser"]

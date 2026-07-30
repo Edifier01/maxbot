@@ -247,8 +247,8 @@ _metrics: dict[str, float] = {
 }
 _log: list[str] = []
 _log_lock = threading.Lock()
-_auth_sessions: dict[int, dict[str, Any]] = {}
-_login_tasks: dict[int, asyncio.Task] = {}
+_auth_sessions: dict[Any, dict[str, Any]] = {}
+_login_tasks: dict[Any, asyncio.Task] = {}
 _db_conn: sqlite3.Connection | None = None
 _tenant_db_conns: dict[str, sqlite3.Connection] = {}
 _db_lock = threading.Lock()
@@ -350,12 +350,12 @@ def _conn() -> sqlite3.Connection:
         key = str(_resolve_data_dir())
         with _db_lock:
             if key not in _tenant_db_conns:
-                _tenant_db_conns[key] = _sqlite_connect(DB_PATH)
+                _tenant_db_conns[key] = _sqlite_connect(_db_path())
             return _tenant_db_conns[key]
     with _db_lock:
         if _db_conn is None:
             DATA.mkdir(parents=True, exist_ok=True)
-            _db_conn = _sqlite_connect(DB_PATH)
+            _db_conn = _sqlite_connect(_db_path())
         return _db_conn
 
 
@@ -533,6 +533,14 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
     cols_sl = _table_columns(c, "send_log")
     if "sent_text" not in cols_sl:
         c.execute("ALTER TABLE send_log ADD COLUMN sent_text TEXT DEFAULT ''")
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_send_log_status_sent "
+        "ON send_log(status, sent_at)"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_send_log_profile_group "
+        "ON send_log(profile_id, group_id, status)"
+    )
 
 
 def _migrate_antiban_defaults(c: sqlite3.Connection) -> None:
@@ -838,8 +846,12 @@ def _load_log_from_db() -> None:
 
 
 
+def _backups_dir() -> Path:
+    return _resolve_data_dir() / "backups"
+
+
 def _db_path() -> Path:
-    return DB_PATH
+    return _resolve_data_dir() / "app.db"
 
 
 def _messages_file() -> Path:
@@ -1324,6 +1336,60 @@ def _clear_session(profile_id: int) -> None:
             p.unlink()
 
 
+def _auth_session_key(profile_id: int) -> Any:
+    if _is_server_mode():
+        from app.tenant import get_tenant_id
+
+        return (get_tenant_id(), profile_id)
+    return profile_id
+
+
+def _ensure_auth_session(profile_id: int) -> dict[str, Any]:
+    key = _auth_session_key(profile_id)
+    if key not in _auth_sessions:
+        _auth_sessions[key] = {
+            "sms_q": asyncio.Queue(),
+            "pwd_q": asyncio.Queue(),
+            "step": "idle",
+            "hint": "",
+        }
+    return _auth_sessions[key]
+
+
+def _set_auth_step(profile_id: int, step: str, hint: str = "") -> None:
+    sess = _ensure_auth_session(profile_id)
+    sess["step"] = step
+    sess["hint"] = hint
+
+
+def _drain_queue(q: asyncio.Queue) -> None:
+    while not q.empty():
+        try:
+            q.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+
+
+def _profile_auth_view(p: sqlite3.Row | dict) -> dict:
+    d = dict(p)
+    sess = _auth_sessions.get(_auth_session_key(int(d["id"])), {})
+    d["auth_step"] = sess.get("step", "idle")
+    d["auth_hint"] = sess.get("hint", "")
+    d["in_cooldown"] = _is_in_cooldown(d)
+    d["circuit_open"] = _is_circuit_open(int(d["id"]))
+    try:
+        wdays = max(1, int(get_setting("warmup_days") or "7"))
+    except ValueError:
+        wdays = 7
+    age = _profile_age_days(d)
+    d["warmup_day"] = min(age + 1, wdays)
+    d["warmup_active"] = (
+        (get_setting("warmup_enabled") or "1").strip() in ("1", "true", "yes")
+        and age < wdays
+    )
+    return d
+
+
 class _QueueSmsProvider:
     def __init__(self, q: asyncio.Queue[str], profile_id: int) -> None:
         self._q = q
@@ -1488,7 +1554,7 @@ async def _wait_login_done(
     """Пока ждём SMS/пароль — длинный таймаут, иначе короткий."""
     t0 = time.monotonic()
     while not done.is_set():
-        step = _auth_sessions.get(profile_id, {}).get("step", "connecting")
+        step = _auth_sessions.get(_auth_session_key(profile_id), {}).get("step", "connecting")
         if login_mode or step in _AUTH_STEPS_LONG:
             limit = auth_timeout
         else:
@@ -2633,11 +2699,11 @@ def _validate_proxy_for_group(
     return False, last_err or "прокси недоступен"
 
 
-def _preflight_group_proxies() -> None:
+async def _preflight_group_proxies() -> None:
     for group in _active_groups():
         if not _group_has_proxy_configured(group):
             continue
-        _validate_proxy_for_group(group, profile_id=None)
+        await asyncio.to_thread(_validate_proxy_for_group, group, None)
 
 
 def _dedupe_window_for_group(group_id: int) -> int:
@@ -2751,231 +2817,18 @@ def _daily_capacity_progress() -> dict[str, Any]:
     }
 
 
-def _worker_shutdown(reason: str) -> None:
-    append_log(reason)
-    with _conn() as c:
-        c.execute("UPDATE queue_state SET running=0 WHERE id=1")
-    append_log("Воркер остановлен")
-    status = "completed" if reason.startswith("Готово") else "stopped"
-    _finish_campaign(status, reason)
-    # уведомления в фоне
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_notify_campaign_end(status, reason))
-    except RuntimeError:
-        pass
-
-
-def _campaign_config_snapshot() -> str:
-    return json.dumps(
-        {
-            "delay_min_sec": get_setting("delay_min_sec"),
-            "delay_max_sec": get_setting("delay_max_sec"),
-            "daily_limit_min": get_setting("daily_limit_min"),
-            "daily_limit_max": get_setting("daily_limit_max"),
-            "jitter_percent": get_setting("jitter_percent"),
-            "message_pick_mode": get_setting("message_pick_mode"),
-            "campaign_goal": get_setting("campaign_goal"),
-            "worker_pool_size": get_setting("worker_pool_size"),
-            "human_rhythm_enabled": get_setting("human_rhythm_enabled"),
-            "send_windows_weekday": get_setting("send_windows_weekday"),
-            "send_windows_weekend": get_setting("send_windows_weekend"),
-            "day_skip_percent": get_setting("day_skip_percent"),
-            "role_plan_enabled": get_setting("role_plan_enabled"),
-            "role_active_percent": get_setting("role_active_percent"),
-            "role_quiet_percent": get_setting("role_quiet_percent"),
-            "role_active_min": get_setting("role_active_min"),
-            "role_active_max": get_setting("role_active_max"),
-            "role_quiet_limit": get_setting("role_quiet_limit"),
-            "human_pauses_enabled": get_setting("human_pauses_enabled"),
-            "break_after_n": get_setting("break_after_n"),
-            "warmup_start_min": get_setting("warmup_start_min"),
-            "warmup_start_max": get_setting("warmup_start_max"),
-            "lazy_day_percent": get_setting("lazy_day_percent"),
-            "human_presence_enabled": get_setting("human_presence_enabled"),
-            "human_texts_enabled": get_setting("human_texts_enabled"),
-            "text_dedupe_enabled": get_setting("text_dedupe_enabled"),
-            "messages_total": len(load_message_pool()),
-        },
-        ensure_ascii=False,
-    )
-
-
-def _begin_campaign(*, scheduled_for: str | None = None) -> int:
-    
-    total = len(load_message_pool())
-    with _conn() as c:
-        cur = c.execute(
-            "INSERT INTO campaigns (started_at, status, messages_total, scheduled_for, config_json) "
-            "VALUES (datetime('now'), 'running', ?, ?, ?)",
-            (total, scheduled_for, _campaign_config_snapshot()),
-        )
-        RUNTIME.current_campaign_id = int(cur.lastrowid)
-    append_log(f"Кампания #{RUNTIME.current_campaign_id} запущена ({total} сообщений)")
-    return RUNTIME.current_campaign_id or 0
-
-
-def _finish_campaign(status: str, reason: str = "") -> None:
-    cid = RUNTIME.current_campaign_id
-    if not cid:
-        # найти последнюю running
-        with _conn() as c:
-            row = c.execute(
-                "SELECT id FROM campaigns WHERE status='running' ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-            cid = row["id"] if row else None
-    if not cid:
-        return
-    with _conn() as c:
-        sent = c.execute(
-            "SELECT COUNT(*) n FROM send_log WHERE status='sent' AND sent_at >= "
-            "(SELECT started_at FROM campaigns WHERE id=?)",
-            (cid,),
-        ).fetchone()["n"]
-        failed = c.execute(
-            "SELECT COUNT(*) n FROM send_log WHERE status='failed' AND sent_at >= "
-            "(SELECT started_at FROM campaigns WHERE id=?)",
-            (cid,),
-        ).fetchone()["n"]
-        c.execute(
-            "UPDATE campaigns SET finished_at=datetime('now'), status=?, "
-            "messages_sent=?, messages_failed=?, reason=? WHERE id=?",
-            (status, sent, failed, reason[:500], cid),
-        )
-    RUNTIME.current_campaign_id = None
-
-
-def _http_post_json(url: str, payload: dict[str, Any], timeout: float = 15) -> None:
-    import json
-
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json", "User-Agent": "MAX-Sender/1.4"},
-        method="POST",
-    )
-    with urlopen(req, timeout=timeout) as resp:
-        resp.read()
-
-
-def _telegram_credentials() -> tuple[str, str]:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if token and chat:
-        return token, chat
-    if not _is_server_mode():
-        return (
-            get_setting("telegram_bot_token").strip(),
-            get_setting("telegram_chat_id").strip(),
-        )
-    return "", ""
-
-
-def _alert_institution_label() -> str:
-    if _is_server_mode():
-        try:
-            from app import db_pg
-            from app.tenant import get_tenant_id
-
-            tid = get_tenant_id()
-            if tid:
-                tenant = db_pg.get_tenant(tid)
-                if tenant:
-                    return f"{tenant['institution_name']} (#{tid})"
-        except Exception:
-            pass
-    return "локально"
-
-
-def _schedule_telegram(
-    title: str,
-    lines: list[str],
-    *,
-    dedupe_key: str | None = None,
-) -> None:
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_telegram_notify(title, lines, dedupe_key=dedupe_key))
-    except RuntimeError:
-        pass
-
-
-async def _telegram_notify(
-    title: str,
-    lines: list[str],
-    *,
-    dedupe_key: str | None = None,
-) -> None:
-    token, chat_id = _telegram_credentials()
-    if not token or not chat_id:
-        return
-    if dedupe_key:
-        now = time.time()
-        if now - _tg_notify_at.get(dedupe_key, 0.0) < _TG_DEDUPE_SEC:
-            return
-        _tg_notify_at[dedupe_key] = now
-    text = (
-        f"MAX Sender · {title}\n"
-        f"Учреждение: {_alert_institution_label()}\n"
-        + "\n".join(lines)
-    )
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        await asyncio.to_thread(
-            _http_post_json, url, {"chat_id": chat_id, "text": text[:4000]}
-        )
-    except Exception as e:
-        append_log(f"Telegram ошибка: {e}")
-
-
-async def _notify_campaign_end(status: str, reason: str) -> None:
-    payload = {
-        "event": "campaign_finished",
-        "status": status,
-        "reason": reason,
-        "version": APP_VERSION,
-        "at": datetime.now(timezone.utc).isoformat(),
-    }
-    with _conn() as c:
-        row = c.execute(
-            "SELECT * FROM campaigns ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-    if row:
-        payload["campaign"] = dict(row)
-
-    webhook = get_setting("webhook_url").strip()
-    if webhook:
-        try:
-            await asyncio.to_thread(_http_post_json, webhook, payload)
-            append_log("Вебхук: уведомление отправлено")
-        except Exception as e:
-            append_log(f"Ошибка вебхука: {e}")
-
-    token = get_setting("telegram_bot_token").strip()
-    chat_id = get_setting("telegram_chat_id").strip()
-    if token and chat_id:
-        _status_ru = {
-            "completed": "завершена",
-            "stopped": "остановлена",
-            "paused": "на паузе",
-            "running": "идёт",
-            "failed": "с ошибкой",
-        }.get(str(status), str(status))
-        text = (
-            f"MAX Sender: кампания {_status_ru}\n"
-            f"{reason}\n"
-            f"отправлено={payload.get('campaign', {}).get('messages_sent', '?')} "
-            f"ошибок={payload.get('campaign', {}).get('messages_failed', '?')}"
-        )
-        try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            await asyncio.to_thread(
-                _http_post_json, url, {"chat_id": chat_id, "text": text}
-            )
-            append_log("Telegram: уведомление отправлено")
-        except Exception as e:
-            append_log(f"Telegram ошибка: {e}")
+from app.campaign_worker import (
+    begin_campaign as _begin_campaign,
+    finish_campaign as _finish_campaign,
+    notify_campaign_end as _notify_campaign_end,
+    schedule_telegram as _schedule_telegram,
+    scheduler_loop as _scheduler_loop,
+    start_worker as _start_worker,
+    stop_all_workers as _stop_all_workers,
+    stop_worker as _stop_worker,
+    watchdog_loop as _watchdog_loop,
+    worker_shutdown as _worker_shutdown,
+)
 
 
 def backup_database() -> Path | None:
@@ -2987,7 +2840,7 @@ def backup_database() -> Path | None:
         # checkpoint WAL перед копированием
         with _conn() as c:
             c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        shutil.copy2(DB_PATH, dest)
+        shutil.copy2(_db_path(), dest)
         files = sorted(BACKUPS.glob("app-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
         for old in files[BACKUP_KEEP:]:
             old.unlink(missing_ok=True)
@@ -3261,420 +3114,6 @@ async def _send_with_retry(
     return False
 
 
-def _claim_next_job() -> dict[str, Any] | str | None:
-    """Атомарно взять следующее сообщение для пула.
-
-    Returns:
-      dict — задача
-      \"DONE\" — очередь исчерпана (первый воркер должен завершить кампанию)
-      \"STOP\" — running=0 или уже объявлен DONE
-      None — временно нечего делать (нет профилей и т.п.)
-    """
-    global _pool_done_announced
-    with _claim_lock:
-        with _conn() as c:
-            qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-            if not qs or not qs["running"]:
-                return "STOP"
-            _reset_daily_counts(c)
-
-        messages = load_message_pool()
-        groups = _active_groups()
-        if not messages or not groups:
-            return None
-
-        with _conn() as c:
-            qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-            if not qs or not qs["running"]:
-                return "STOP"
-            pi, mi, gi = qs["profile_idx"], qs["message_idx"], qs["group_idx"]
-
-            if _campaign_goal() == "message_pool":
-                if _message_pick_mode() == "random_norepeat":
-                    bag = _ensure_message_bag(c, len(messages))
-                    if not bag:
-                        if not _pool_done_announced:
-                            _pool_done_announced = True
-                            return "DONE"
-                        return "STOP"
-                elif mi >= len(messages):
-                    if not _pool_done_announced:
-                        _pool_done_announced = True
-                        return "DONE"
-                    return "STOP"
-
-            group = groups[gi % len(groups)]
-            profiles = _active_profiles_for_group(group["id"])
-            if not profiles:
-                if not _has_active_profiles():
-                    if not _pool_done_announced:
-                        _pool_done_announced = True
-                        return "NO_PROFILES"
-                    return "STOP"
-                c.execute(
-                    "UPDATE queue_state SET group_idx=? WHERE id=1",
-                    (next_index(gi, len(groups)),),
-                )
-                return None
-
-            profile = None
-            attempts = 0
-            while attempts < len(profiles):
-                cand = profiles[pi % len(profiles)]
-                pi = next_index(pi, len(profiles))
-                attempts += 1
-                if _is_circuit_open(cand["id"]):
-                    continue
-                if not _can_send_in_group(cand, group["id"]):
-                    continue
-                profile = cand
-                break
-
-            if profile is None:
-                c.execute(
-                    "UPDATE queue_state SET profile_idx=?, group_idx=? WHERE id=1",
-                    (pi, next_index(gi, len(groups))),
-                )
-                return None
-
-            picked = _pick_next_message(c, messages, mi)
-            if picked is None:
-                if not _pool_done_announced:
-                    _pool_done_announced = True
-                    return "DONE"
-                return "STOP"
-
-            text, pool_idx, progress_next, bag_mode = picked
-            gi_next = next_index(gi, len(groups))
-            if bag_mode:
-                c.execute(
-                    "UPDATE queue_state SET profile_idx=?, group_idx=? WHERE id=1",
-                    (pi, gi_next),
-                )
-            else:
-                c.execute(
-                    "UPDATE queue_state SET message_idx=?, profile_idx=?, group_idx=? WHERE id=1",
-                    (progress_next, pi, gi_next),
-                )
-            return {
-                "profile": profile,
-                "group": group,
-                "text": text,
-                "mi": pool_idx,
-                "pi": pi,
-                "gi_next": gi_next,
-                "mi_next": progress_next,
-            }
-
-
-async def _pool_worker_loop(worker_id: int) -> None:
-    append_log(f"Воркер пула #{worker_id} стартовал")
-    # Расфазировка: не ускоряем паузы, а разводим воркеры по времени
-    n = _pool_size()
-    if n > 1 and worker_id > 1:
-        base = float(_setting_int("delay_min_sec", 60))
-        phase = random.uniform(0.0, max(5.0, base * 0.6))
-        stagger = phase * ((worker_id - 1) / max(1, n - 1))
-        end_at = time.monotonic() + stagger
-        while time.monotonic() < end_at:
-            _touch_worker_activity()
-            await asyncio.sleep(min(5.0, end_at - time.monotonic()))
-    _touch_worker_activity()
-    while True:
-        _touch_worker_activity()
-        if await _wait_if_outside_send_window():
-            continue
-        await _maybe_idle_presence()
-        job = _claim_next_job()
-        if job == "STOP":
-            append_log(f"Воркер пула #{worker_id} остановлен")
-            return
-        if job == "DONE":
-            if _campaign_goal() == "daily_limits":
-                _worker_shutdown(
-                    "Готово: дневные лимиты всех аккаунтов исчерпаны"
-                )
-            else:
-                _worker_shutdown("Готово: все сообщения отправлены (pool)")
-            return
-        if job == "NO_PROFILES":
-            _worker_shutdown("Нет активных профилей ни в одной группе")
-            return
-        if job is None:
-            if not _has_sendable_profile():
-                if _has_sendable_profile(ignore_human_break=True):
-                    wait = min(60.0, _seconds_until_any_human_break_ends())
-                    end_at = time.monotonic() + wait
-                    while time.monotonic() < end_at:
-                        _touch_worker_activity()
-                        await asyncio.sleep(min(15.0, end_at - time.monotonic()))
-                    continue
-                _worker_shutdown(
-                    "Готово: дневные лимиты всех аккаунтов исчерпаны"
-                    if _campaign_goal() == "daily_limits"
-                    else "Некому отправлять: нет активных профилей или дневной лимит исчерпан"
-                )
-                return
-            await asyncio.sleep(2)
-            continue
-
-        sent = await _send_with_retry(
-            job["profile"],
-            job["group"],
-            job["text"],
-            job["mi"],
-            job["pi"],
-            job["gi_next"],
-            job["mi_next"],
-            advance_queue=False,
-        )
-        if not sent:
-            _return_to_message_bag(job["mi"])
-            await asyncio.sleep(3)
-            _touch_worker_activity()
-            continue
-        await _sleep_send_delay(pool_scale=True)
-
-
-async def _worker_loop() -> None:
-    append_log("Воркер запущен")
-    _touch_worker_activity()
-    while True:
-        _touch_worker_activity()
-        if await _wait_if_outside_send_window():
-            continue
-        await _maybe_idle_presence()
-        with _conn() as c:
-            qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-            if not qs or not qs["running"]:
-                append_log("Воркер остановлен")
-                return
-            _reset_daily_counts(c)
-
-        messages = load_message_pool()
-        groups = _active_groups()
-        if not messages:
-            append_log("Нет сообщений — загрузите файл сообщений (.txt)")
-            await asyncio.sleep(5)
-            continue
-        if not groups:
-            append_log("Нет активных групп")
-            await asyncio.sleep(5)
-            continue
-
-        with _conn() as c:
-            qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-            pi, mi, gi = qs["profile_idx"], qs["message_idx"], qs["group_idx"]
-            if _campaign_goal() == "message_pool":
-                if _message_pick_mode() == "random_norepeat":
-                    bag = _ensure_message_bag(c, len(messages))
-                    if not bag:
-                        _worker_shutdown(
-                            f"Готово: все {len(messages)} сообщений отправлены"
-                        )
-                        return
-                elif mi >= len(messages):
-                    _worker_shutdown(
-                        f"Готово: все {len(messages)} сообщений отправлены"
-                    )
-                    return
-
-        group = groups[gi % len(groups)]
-        profiles = _active_profiles_for_group(group["id"])
-        if not profiles:
-            if not _has_active_profiles():
-                _worker_shutdown("Нет активных профилей ни в одной группе")
-                return
-            append_log(
-                f"Группа «{group['name']}»: сегодня некого слать "
-                f"(роли/skip), следующая"
-            )
-            with _conn() as c:
-                c.execute(
-                    "UPDATE queue_state SET group_idx=? WHERE id=1",
-                    (next_index(gi, len(groups)),),
-                )
-            await asyncio.sleep(2)
-            continue
-
-        # ponytail: linear scan for next sendable profile (O(n) per step; fine for 1000)
-        sent = False
-        attempts = 0
-        while attempts < len(profiles) and not sent:
-            profile = profiles[pi % len(profiles)]
-            pi = next_index(pi, len(profiles))
-            attempts += 1
-            if _is_circuit_open(profile["id"]):
-                continue
-            if not _can_send_in_group(profile, group["id"]):
-                continue
-
-            with _conn() as c:
-                picked = _pick_next_message(c, messages, mi)
-            if picked is None:
-                _worker_shutdown(
-                    f"Готово: все {len(messages)} сообщений отправлены"
-                )
-                return
-            text, pool_idx, progress_next, bag_mode = picked
-            gi_next = next_index(gi, len(groups))
-            sent = await _send_with_retry(
-                profile,
-                group,
-                text,
-                pool_idx,
-                pi,
-                gi_next,
-                progress_next,
-                advance_queue=not bag_mode,
-            )
-            if not sent and bag_mode:
-                _return_to_message_bag(pool_idx)
-            mi = progress_next
-
-        if sent:
-            await _sleep_send_delay(pool_scale=False)
-        else:
-            if not _has_sendable_profile():
-                if _has_sendable_profile(ignore_human_break=True):
-                    wait = min(60.0, _seconds_until_any_human_break_ends())
-                    end_at = time.monotonic() + wait
-                    while time.monotonic() < end_at:
-                        _touch_worker_activity()
-                        await asyncio.sleep(min(15.0, end_at - time.monotonic()))
-                    continue
-                _worker_shutdown(
-                    "Готово: дневные лимиты всех аккаунтов исчерпаны"
-                    if _campaign_goal() == "daily_limits"
-                    else "Некому отправлять: нет активных профилей или дневной лимит исчерпан"
-                )
-                return
-            # в этой группе некого — переходим к следующей
-            with _conn() as c:
-                c.execute(
-                    "UPDATE queue_state SET profile_idx=?, group_idx=? WHERE id=1",
-                    (pi, next_index(gi, len(groups))),
-                )
-            open_ids = [p["id"] for p in profiles if _is_circuit_open(p["id"])]
-            if open_ids and len(open_ids) >= len(profiles):
-                append_log(
-                    "Все профили группы в автопаузе — следующая группа"
-                )
-            await asyncio.sleep(1)
-            _touch_worker_activity()
-
-
-async def _pool_supervisor() -> None:
-    
-    n = _pool_size()
-    RUNTIME.pool_done_announced = False
-    append_log(f"Пул воркеров: {n} параллельных")
-    RUNTIME.pool_tasks = [asyncio.create_task(_pool_worker_loop(i + 1)) for i in range(n)]
-    try:
-        await asyncio.gather(*RUNTIME.pool_tasks)
-    except asyncio.CancelledError:
-        for t in RUNTIME.pool_tasks:
-            t.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await asyncio.gather(*RUNTIME.pool_tasks, return_exceptions=True)
-        raise
-    finally:
-        RUNTIME.pool_tasks = []
-
-
-def _scheduler_tenant_ids() -> list[int | None]:
-    if not _is_server_mode():
-        return [None]
-    ids: list[int | None] = []
-    tenants_root = ROOT / "data" / "tenants"
-    if tenants_root.is_dir():
-        for entry in sorted(tenants_root.iterdir()):
-            if entry.is_dir() and (entry / "app.db").is_file():
-                try:
-                    ids.append(int(entry.name))
-                except ValueError:
-                    continue
-    return ids or [None]
-
-
-async def _scheduler_tick() -> None:
-    with _conn() as c:
-        row = c.execute("SELECT * FROM campaign_schedule WHERE id=1").fetchone()
-    if row and row["enabled"] and row["start_at"]:
-        start_at = _parse_iso_datetime(row["start_at"])
-        now = datetime.now(timezone.utc)
-        rt = REGISTRY.worker()
-        worker_busy = rt.worker_task and not rt.worker_task.done()
-        if now >= start_at and not worker_busy:
-            with _conn() as c:
-                c.execute("UPDATE campaign_schedule SET enabled=0 WHERE id=1")
-            append_log(
-                f"Расписание: старт кампании (запланировано на {row['start_at']})"
-            )
-            try:
-                _require_vault_unlocked()
-            except HTTPException as e:
-                append_log(f"Расписание: пропуск — {e.detail}")
-            else:
-                if load_message_pool() and _has_sendable_profile():
-                    await _start_worker(scheduled_for=row["start_at"])
-                else:
-                    append_log("Расписание: нет сообщений или профилей — пропуск")
-    await _try_auto_resume(log_prefix="Автовозобновление")
-
-
-async def _scheduler_loop() -> None:
-    from app.tenant import tenant_scope
-
-    while True:
-        await asyncio.sleep(15)
-        if REGISTRY.app.shutting_down:
-            return
-        for tid in _scheduler_tenant_ids():
-            try:
-                with tenant_scope(tenant_id=tid):
-                    await _scheduler_tick()
-            except Exception as e:
-                append_log(f"Ошибка планировщика (tenant={tid}): {e}")
-
-
-async def _watchdog_loop() -> None:
-    while True:
-        await asyncio.sleep(60)
-        if REGISTRY.app.shutting_down:
-            return
-        for key, rt in REGISTRY.worker_items():
-            if not rt.worker_task or rt.worker_task.done():
-                continue
-            idle = time.monotonic() - rt.worker_last_activity
-            if idle <= WORKER_TIMEOUT:
-                continue
-            tid = REGISTRY._tenant_from_key(key)
-            append_log(
-                f"Сторож: воркер tenant={tid or 'local'} завис "
-                f"({idle:.0f}с без активности) — перезапуск"
-            )
-            if rt.worker_ctx_snapshot is not None:
-                from app.tenant import restore_context, clear_context
-
-                restore_context(rt.worker_ctx_snapshot)
-                try:
-                    await _stop_worker(
-                        finish_status="stopped",
-                        reason="Перезапуск сторожем",
-                        tenant_id=tid,
-                    )
-                    await _start_worker(record_campaign=False)
-                finally:
-                    clear_context()
-            else:
-                await _stop_worker(
-                    finish_status="stopped",
-                    reason="Перезапуск сторожем",
-                    tenant_id=tid,
-                )
-                await _start_worker(record_campaign=False)
-
 async def _backup_loop() -> None:
     last_backup = 0.0
     while True:
@@ -3697,124 +3136,6 @@ async def _backup_loop() -> None:
             last_backup = now
 
 
-async def _start_worker(
-    *,
-    record_campaign: bool = True,
-    scheduled_for: str | None = None,
-) -> None:
-    """Запуск воркера / пула без сброса индексов прогресса."""
-    from app.tenant import clear_context, get_tenant_id, restore_context, snapshot_context
-
-    ctx_snap = snapshot_context()
-    tid = get_tenant_id()
-    rt = REGISTRY.worker_for(tid)
-
-    async def _worker_task() -> None:
-        restore_context(ctx_snap)
-        rt.worker_ctx_snapshot = ctx_snap
-        rt.tenant_id = tid
-        try:
-            if _pool_size() > 1:
-                await _pool_supervisor()
-            else:
-                await _worker_loop()
-        finally:
-            clear_context()
-
-    async with rt.worker_lock:
-        if rt.worker_task and not rt.worker_task.done():
-            return
-        rt.touch_activity()
-        rt.pool_done_announced = False
-        _preflight_group_proxies()
-        with _conn() as c:
-            c.execute("UPDATE queue_state SET running=1 WHERE id=1")
-            msgs = load_message_pool()
-            if _message_pick_mode() == "random_norepeat" and msgs:
-                qs = c.execute("SELECT message_idx FROM queue_state WHERE id=1").fetchone()
-                if int(qs["message_idx"] if qs else 0) == 0 and not _get_message_bag(c):
-                    bag = list(range(len(msgs)))
-                    random.shuffle(bag)
-                    _set_message_bag(c, bag)
-        if record_campaign:
-            _begin_campaign(scheduled_for=scheduled_for)
-            _metric_inc("campaigns_started_total")
-        rt.worker_task = asyncio.create_task(_worker_task())
-
-
-def _reset_queue_progress() -> None:
-    n = len(load_message_pool())
-    with _conn() as c:
-        c.execute(
-            "UPDATE queue_state SET profile_idx=0, message_idx=0, group_idx=0 WHERE id=1"
-        )
-    _rebuild_message_bag(n)
-
-
-async def _stop_worker(
-    *,
-    finish_status: str | None = "stopped",
-    reason: str = "Остановлено пользователем",
-    tenant_id: int | None = None,
-) -> None:
-    from app.tenant import get_tenant_id
-
-    if tenant_id is None:
-        tenant_id = get_tenant_id()
-    rt = REGISTRY.worker_for(tenant_id)
-    was_running = bool(rt.worker_task and not rt.worker_task.done())
-    with _conn() as c:
-        c.execute("UPDATE queue_state SET running=0 WHERE id=1")
-    if rt.worker_task:
-        rt.worker_task.cancel()
-        try:
-            await rt.worker_task
-        except asyncio.CancelledError:
-            pass
-        rt.worker_task = None
-    for t in list(rt.pool_tasks):
-        t.cancel()
-    rt.pool_tasks = []
-    if was_running and finish_status:
-        with _conn() as c:
-            still = c.execute(
-                "SELECT 1 FROM campaigns WHERE status='running' LIMIT 1"
-            ).fetchone()
-        if still:
-            _finish_campaign(finish_status, reason)
-            _metric_inc("campaigns_finished_total")
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_notify_campaign_end(finish_status, reason))
-            except RuntimeError:
-                pass
-
-
-async def _stop_all_workers(
-    *,
-    finish_status: str | None = "stopped",
-    reason: str = "Остановка сервера",
-) -> None:
-    from app.tenant import clear_context, restore_context
-
-    for key, rt in list(REGISTRY.worker_items()):
-        tid = REGISTRY._tenant_from_key(key)
-        if rt.worker_ctx_snapshot is not None:
-            restore_context(rt.worker_ctx_snapshot)
-            try:
-                await _stop_worker(
-                    finish_status=finish_status,
-                    reason=reason,
-                    tenant_id=tid,
-                )
-            finally:
-                clear_context()
-        else:
-            await _stop_worker(
-                finish_status=finish_status,
-                reason=reason,
-                tenant_id=tid,
-            )
 
 
 def _build_status_payload() -> dict[str, Any]:
@@ -3958,7 +3279,8 @@ async def lifespan(_app: FastAPI):
 
 
 def _encrypt_all_sessions() -> None:
-    for profile_id in list(_auth_sessions.keys()):
+    for key in list(_auth_sessions.keys()):
+        profile_id = key[1] if isinstance(key, tuple) else key
         try:
             _encrypt_session(profile_id)
         except Exception:

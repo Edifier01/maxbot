@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import shutil
 from datetime import datetime, timedelta, timezone
@@ -57,21 +58,21 @@ async def list_expiring(days: int = 7):
 @router.get("/users")
 async def list_users():
     _require_admin()
-    items = db_pg.list_tenants_with_users()
+    items = await asyncio.to_thread(db_pg.list_tenants_with_users)
     result = []
     for row in items:
-        tid = row["tenant_id"]
-        sub = db_pg.subscription_info(tid)
         result.append(
             {
-                "tenant_id": tid,
+                "tenant_id": row["tenant_id"],
                 "institution_name": row["institution_name"],
                 "email": row["email"],
                 "user_id": row["user_id"],
                 "created_at": row["created_at"].isoformat()
                 if hasattr(row["created_at"], "isoformat")
                 else str(row["created_at"]),
-                "subscription": sub,
+                "subscription": db_pg.subscription_info_from_expires(
+                    row.get("subscription_expires")
+                ),
             }
         )
     return {"items": result}
@@ -115,6 +116,20 @@ async def delete_user(tenant_id: int):
         raise HTTPException(404, "Учреждение не найдено")
     if not db_pg.get_tenant_user(tenant_id):
         raise HTTPException(404, "Пользователь учреждения не найден")
+
+    from app.campaign_runtime import REGISTRY
+    from app.campaign_worker import stop_worker
+    from app.tenant import tenant_scope
+
+    rt = REGISTRY.worker_for(tenant_id)
+    if rt.worker_task and not rt.worker_task.done():
+        with tenant_scope(tenant_id=tenant_id, role="admin"):
+            await stop_worker(
+                finish_status="stopped",
+                reason="Учреждение удалено",
+                tenant_id=tenant_id,
+            )
+
     if not db_pg.delete_tenant(tenant_id):
         raise HTTPException(404, "Учреждение не найдено")
     _drop_tenant_sqlite(tenant_id)

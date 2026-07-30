@@ -1,18 +1,21 @@
-"""JWT и хеширование паролей."""
+﻿"""JWT и хеширование паролей."""
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import bcrypt
 import jwt
 
-from server.app import db_pg
-from server.app.config import JWT_ALGORITHM, JWT_EXPIRE_HOURS, JWT_SECRET
+from app import db_pg
+from app.config import JWT_ALGORITHM, JWT_EXPIRE_HOURS, JWT_SECRET
 
 
 def hash_password(password: str) -> str:
+    if len(password.encode("utf-8")) > 72:
+        raise ValueError("Пароль слишком длинный (максимум 72 байта)")
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
@@ -34,6 +37,7 @@ def create_token(
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user_id),
+        "jti": secrets.token_urlsafe(16),
         "tenant_id": tenant_id,
         "role": role,
         "imp": impersonating,
@@ -46,6 +50,13 @@ def create_token(
 
 def decode_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+
+
+def token_expires_at(payload: dict[str, Any]) -> datetime:
+    exp = payload.get("exp")
+    if exp is None:
+        return datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
+    return datetime.fromtimestamp(int(exp), tz=timezone.utc)
 
 
 def authenticate(email: str, password: str) -> dict[str, Any] | None:
@@ -62,18 +73,8 @@ def register_user(
     email: str,
     password: str,
 ) -> dict[str, Any]:
-    if db_pg.get_user_by_email(email):
-        raise ValueError("Email уже зарегистрирован")
-    tenant_id = db_pg.create_tenant(institution_name)
-    user_id = db_pg.create_user(
+    return db_pg.register_tenant_user(
+        institution_name,
         email,
         hash_password(password),
-        tenant_id=tenant_id,
-        role="user",
     )
-    return {
-        "user_id": user_id,
-        "tenant_id": tenant_id,
-        "email": email.strip().lower(),
-        "role": "user",
-    }

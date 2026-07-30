@@ -2,19 +2,18 @@
 
 ## Current Phase
 
-Milestone 5 — Production Readiness **COMPLETED**
+Worker monolith refactor — **phase 1 COMPLETED**
 
 ## Recently Completed (2026-07-30)
 
-- Register rollback, Redis auth rate limit
-- Enhanced health/metrics, ops alerts, subscription lifecycle
-- Admin expiring subs + user subscription date in UI
-- main.py recovered (44 pytest passed)
+- Worker extraction: `main.py` → `app/campaign_worker.py` (mechanical, zero behavior change)
+- pytest 44 passed, 4 skipped
+- ADR 003 accepted (phase 1)
 
 ## Next Actions
 
-1. Commit Milestone 5 baseline
-2. `/start-feature` for worker extraction when ready
+1. Commit worker extraction baseline
+2. `/start-feature` for phase 2 (lazy bridge removal, send/pacing move) when ready
 
 ## Last Updated
 

@@ -1,10 +1,28 @@
 # Tasks
 
+## Epic: Worker Monolith Refactor
+
+Status: COMPLETED (phase 1)  
+Owner: backend-engineer  
+Scope: mechanical extraction → `app/campaign_worker.py`, lazy main bridge
+
+Tasks:
+- [x] Update extract/patch scripts with current line ranges
+- [x] Generate `app/campaign_worker.py` (~780 lines)
+- [x] Patch `main.py` imports (re-export `_start_worker`, etc.)
+- [x] Fix `test_worker_tenant_runtime` patch target
+- [x] ADR 003 → Accepted (phase 1)
+- [ ] Phase 2: decouple lazy `_m()` bridge, move send/pacing (future `/start-feature`)
+
+Validation:
+- [x] pytest 44 passed, 4 skipped
+
+---
+
 ## Epic: Milestone 5 — Production Readiness
 
 Status: COMPLETED  
-Owner: backend + frontend + devops  
-Scope: monitoring, subscription lifecycle, register rollback, Redis auth RL
+Owner: backend + frontend + devops
 
 Tasks:
 - [x] Register rollback on init_tenant_db failure
@@ -15,18 +33,7 @@ Tasks:
 - [x] Admin API + UI expiring subscriptions
 - [x] User index.html subscription expiry date
 - [x] PRODUCTION-OPS D-4 alerts runbook
-- [ ] Worker monolith extraction — **deferred** (ADR 003)
-
-Validation:
-- [x] pytest 44 passed, 4 skipped
-- [x] ADR 003 deferred worker extraction
-
----
-
-## Epic: Worker Monolith Refactor
-
-Status: BACKLOG (deferred per ADR 003)  
-Depends on: committed main.py baseline + `/start-feature`
+- [x] Worker monolith extraction — phase 1 (ADR 003)
 
 ---
 

@@ -47,6 +47,16 @@ def _token_response(user: dict) -> dict:
 async def register(body: RegisterIn):
     if not is_server_mode():
         raise HTTPException(400, "Регистрация доступна только на сервере")
+    import os
+
+    if os.environ.get("REGISTRATION_OPEN", "1").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
+        raise HTTPException(
+            403, "Регистрация закрыта. Обратитесь к администратору."
+        )
     if body.password != body.password_confirm:
         raise HTTPException(400, "Пароли не совпадают")
     try:

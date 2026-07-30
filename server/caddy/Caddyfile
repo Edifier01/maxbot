@@ -1,4 +1,4 @@
-# DOMAIN и LETSENCRYPT_EMAIL — environment контейнера caddy (из server/.env)
+# DOMAIN и LETSENCRYPT_EMAIL — environment контейнера caddy (из .env)
 # В Caddyfile переменные окружения: {$VAR}, не {env.VAR}
 
 {
@@ -6,6 +6,13 @@
 }
 
 {$DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+	}
 	reverse_proxy app:8765 {
 		transport http {
 			versions 1.1

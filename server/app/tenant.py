@@ -1,9 +1,12 @@
-"""Контекст tenant/user для серверного режима."""
+﻿"""Контекст tenant/user для серверного режима."""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 _tenant_id: ContextVar[int | None] = ContextVar("tenant_id", default=None)
 _user_id: ContextVar[int | None] = ContextVar("user_id", default=None)
@@ -29,6 +32,59 @@ def set_context(
 
 def clear_context() -> None:
     set_context()
+
+
+@dataclass(frozen=True)
+class _ContextSnapshot:
+    user_id: int | None
+    tenant_id: int | None
+    role: str
+    impersonating: bool
+    use_global_data: bool
+
+
+def snapshot_context() -> _ContextSnapshot:
+    return _ContextSnapshot(
+        user_id=get_user_id(),
+        tenant_id=get_tenant_id(),
+        role=get_user_role(),
+        impersonating=is_impersonating(),
+        use_global_data=use_global_data(),
+    )
+
+
+def restore_context(snap: _ContextSnapshot) -> None:
+    set_context(
+        user_id=snap.user_id,
+        tenant_id=snap.tenant_id,
+        role=snap.role,
+        impersonating=snap.impersonating,
+        use_global_data=snap.use_global_data,
+    )
+
+
+@contextmanager
+def tenant_scope(
+    *,
+    user_id: int | None = None,
+    tenant_id: int | None = None,
+    role: str = "",
+    impersonating: bool = False,
+    use_global_data: bool = False,
+) -> Iterator[None]:
+    """Временно сменить tenant context и восстановить (P3-1)."""
+    saved = snapshot_context()
+    set_context(
+        user_id=user_id if user_id is not None else saved.user_id,
+        tenant_id=tenant_id,
+        role=role or saved.role,
+        impersonating=impersonating,
+        use_global_data=use_global_data,
+    )
+    try:
+        yield
+    finally:
+        restore_context(saved)
 
 
 def get_tenant_id() -> int | None:

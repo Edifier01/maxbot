@@ -103,11 +103,11 @@ def _apply_pending_migrations() -> None:
         return
     for path in sorted(migrations_dir.glob("*.sql")):
         version = path.stem
-        with _cursor() as cur:
-            if _migration_done(cur, version):
-                continue
         sql = path.read_text(encoding="utf-8")
         with _cursor(transaction=True) as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (12345,))
+            if _migration_done(cur, version):
+                continue
             cur.execute(sql)
             cur.execute(
                 "INSERT INTO schema_migrations (version) VALUES (%s) ON CONFLICT DO NOTHING",
@@ -222,6 +222,19 @@ def subscription_active(tenant_id: int | None) -> bool:
             (tenant_id, _now()),
         )
         return cur.fetchone() is not None
+
+
+def subscription_info_from_expires(expires_at: Any) -> dict[str, Any]:
+    if expires_at is None:
+        return {"active": False, "expires_at": None}
+    if expires_at <= _now():
+        return {"active": False, "expires_at": None}
+    return {
+        "active": True,
+        "expires_at": expires_at.isoformat()
+        if hasattr(expires_at, "isoformat")
+        else str(expires_at),
+    }
 
 
 def subscription_info(tenant_id: int | None) -> dict[str, Any]:
@@ -376,6 +389,13 @@ def is_token_revoked(jti: str) -> bool:
             (jti, _now()),
         )
         return cur.fetchone() is not None
+
+
+def cleanup_revoked_tokens() -> int:
+    """Delete expired rows from revoked_tokens. Returns deleted count."""
+    with _cursor() as cur:
+        cur.execute("DELETE FROM revoked_tokens WHERE expires_at < %s", (_now(),))
+        return cur.rowcount or 0
 
 
 def close() -> None:

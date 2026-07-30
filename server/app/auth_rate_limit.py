@@ -8,6 +8,7 @@ from collections import defaultdict
 
 _redis_client = None
 _redis_failed = False
+_last_redis_retry: float = 0.0
 
 
 def auth_rate_limit_config() -> tuple[int, float]:
@@ -23,23 +24,32 @@ def auth_rate_limit_config() -> tuple[int, float]:
 
 
 def _get_redis():
-    global _redis_client, _redis_failed
-    if _redis_failed:
-        return None
+    global _redis_client, _redis_failed, _last_redis_retry
     url = os.environ.get("REDIS_URL", "").strip()
     if not url:
         return None
+    if _redis_failed and time.time() - _last_redis_retry < 60:
+        return None
     if _redis_client is not None:
-        return _redis_client
+        try:
+            _redis_client.ping()
+            return _redis_client
+        except Exception:
+            _redis_client = None
+            _redis_failed = True
+            _last_redis_retry = time.time()
+            return None
     try:
         import redis
 
         _redis_client = redis.from_url(url, decode_responses=True)
         _redis_client.ping()
+        _redis_failed = False
         return _redis_client
     except Exception:
         _redis_failed = True
         _redis_client = None
+        _last_redis_retry = time.time()
         return None
 
 
@@ -53,7 +63,9 @@ def check_auth_rate_limit(key: str, limit: int, window: float) -> bool:
                 r.expire(key, int(window))
             return count <= limit
         except Exception:
-            pass
+            _redis_failed = True
+            _last_redis_retry = time.time()
+            _redis_client = None
     return _memory_check(key, limit, window)
 
 
@@ -76,7 +88,8 @@ def reset_memory_limits() -> None:
 
 
 def reset_for_tests() -> None:
-    global _redis_client, _redis_failed
+    global _redis_client, _redis_failed, _last_redis_retry
     _redis_client = None
     _redis_failed = False
+    _last_redis_retry = 0.0
     _memory.clear()

@@ -1,0 +1,14 @@
+---
+description: Rules for MAX Sender server codebase
+globs: "**/*"
+alwaysApply: false
+---
+
+# Server Codebase
+
+- Docker build context — `.` (корень проекта), без зависимости от соседних папок.
+- Серверные расширения — в `app/`; legacy FastAPI — `main.py`.
+- **Load skills**: `maxserver-fastapi-backend`, `maxserver-server-deploy`, `maxserver-postgresql`, `maxserver-auth-security`.
+- Run `docker compose config` after Docker, compose, Caddy, or env changes.
+- Do not expose the app port publicly without Caddy and auth controls.
+- Treat auth, tenant, JWT, admin, secrets, and data isolation changes as security-sensitive.

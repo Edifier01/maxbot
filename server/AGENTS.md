@@ -1,64 +1,77 @@
-# MAX Sender — Server Agent Guide
+# MAX Sender Server — AI System
 
-Контекст для AI-агента при работе с **серверной** частью проекта.
+Самодостаточный серверный проект: FastAPI, Docker, PostgreSQL, Caddy. Конфигурация AI — в `.cursor/` этой же папки.
 
-## Стек
+Откройте **эту папку** как корень workspace в Cursor — desktop не нужен.
 
-| Слой | Технология |
-|------|------------|
-| Backend | Python 3.12, FastAPI, uvicorn, PyMax |
-| UI | `static/index.html` — один файл, vanilla CSS |
-| Данные | SQLite (`data/`), volume в Docker |
-| Очереди | Redis (+ опционально Celery) |
-| Proxy | Caddy (HTTPS, Let's Encrypt) |
-| Метрики | `GET /metrics` (Prometheus) |
+## Быстрый старт
 
-## Структура
+1. `/start-feature [задача]` — Feature Plan → **ждать `proceed`** → реализация
+2. `/deploy-server [изменение]` — deploy checklist
+3. Загрузить skills по домену (см. таблицу ниже)
+4. Назначить agents → реализация → verifier (PASSED/FAILED)
 
-```
-server/
-  app/              — серверная логика (hooks.py, main.py)
-  caddy/            — reverse proxy
-  docker-compose.yml
-  Dockerfile
-  skills-curated/   — ⭐ используй только этот набор скиллов
-  skills/           — полная библиотека (~1900), не сканировать целиком
-```
+## Project Plan
 
-## Skills — обязательно
+Стратегический план: `docs/PROJECT_PLAN.md`  
+Workflow + model routing: `docs/MASTER-AI-WORKFLOW.md`  
+Bootstrap source: `ai-agent-system-bootstrap/`
 
-1. Прочитай `server/skills-curated/SKILL.md`
-2. Выбери скиллы из `server/skills-curated/manifest.json`
-3. Открой полный файл скилла (`server/skills/<name>/SKILL.md`) перед работой
+## Skills
 
-### По типу задачи
+| Skill | Когда |
+|-------|-------|
+| `context-loading` | Старт, resume |
+| `start-feature` | Feature Plan + proceed gate |
+| `subagent-orchestrator` | Multi-domain после proceed |
+| `maxserver-server-deploy` | Docker, VPS, Caddy, deploy, CI/CD |
+| `maxserver-fastapi-backend` | API, hooks, `app/` |
+| `maxserver-postgresql` | Schema, `db_pg.py`, migrations |
+| `maxserver-auth-security` | JWT, tenant, secrets |
+| `maxserver-static-ui` | Vanilla HTML/CSS/JS UI |
+| `maxserver-campaign` | Anti-ban pacing, warmup, sending |
+| `maxserver-testing` | pytest, smoke, deploy verify |
 
-- **Deploy / Docker / domain** → `docker-expert`, `devops-deploy`, `vps-server-management`
-- **Security / PIN / secrets** → `security-and-hardening`, `secrets-management`, `container-security-hardening`
-- **API / server logic** → `python-fastapi-development`, `fastapi-pro`, `async-python-patterns`
-- **UI / dashboard** → `ui-ux-pro-max`, `web-design-guidelines`, `ui-a11y`
-- **Monitoring** → `prometheus-configuration`
-- **Tests** → `webapp-testing`
+Инвентарь: `.cursor/skills/SKILLS-INVENTORY.md`
 
-## Правила изменений
+## Agents
 
-1. Серверные отличия от локальной версии — в `server/app/`, не ломая `run.bat` / exe.
-2. Инфраструктура — `server/docker-compose.yml`, `.env`, `caddy/Caddyfile`.
-3. UI общий с локальной версией: `static/index.html` (при необходимости — отдельные server-стили позже).
-4. Не публиковать порт 8765 без Caddy/PIN.
-5. Не коммитить `server/.env`, `data/.app_key`.
+| Agent | Model | Файл |
+|-------|-------|------|
+| Orchestrator | GPT-5.5 | `.cursor/agents/project-orchestrator.md` |
+| Verifier | Composer 2.5 | `.cursor/agents/verifier.md` |
+| Backend | Composer 2.5 | `.cursor/agents/backend-engineer.md` |
+| Frontend | Composer 2.5 | `.cursor/agents/frontend-engineer.md` |
+| Database | Composer 2.5 | `.cursor/agents/database-engineer.md` |
+| DevOps | Composer 2.5 | `.cursor/agents/devops-engineer.md` |
+| Security | Opus | `.cursor/agents/security-engineer.md` |
+| Campaign | Composer 2.5 | `.cursor/agents/campaign-specialist.md` |
+| QA | Composer 2.5 | `.cursor/agents/qa-engineer.md` |
 
-## Деплой (кратко)
+## Rules
 
-```bash
-cd server
-cp .env.example .env   # DOMAIN, LETSENCRYPT_EMAIL
-docker compose up --build -d
-```
+- `max-sender-workspace.mdc` — общие правила (always)
+- `ai-skills-system.mdc` — маршрутизация skills/agents (always)
+- `server-workspace.mdc` — globs для кода проекта
 
-Проверка: `curl -fsS https://$DOMAIN/api/health`
+## Project Management
 
-## Что ещё не реализовано
+Перед работой читать:
 
-- Отдельная серверная бизнес-логика (заглушки в `server/app/hooks.py`)
-- CI/CD pipeline (скилл `deployment-pipeline-design` — когда понадобится)
+- `.cursor/project-management/CURRENT_CONTEXT.md`
+- `.cursor/project-management/PROJECT_STATUS.md`
+- `.cursor/project-management/TASKS.md`
+- `.cursor/project-management/DECISIONS.md`
+- `.cursor/project-management/HANDOFF.md`
+
+## Команды
+
+- `/start-feature [описание]` → Feature Plan → `proceed` → реализация
+- `/deploy-server [описание]` → devops-engineer + deploy checklist
+
+## Документация
+
+- `docs/PROJECT_PLAN.md` — vision, milestones, risks
+- `docs/MASTER-AI-WORKFLOW.md` — model routing, coordination
+- `docs/PRODUCTION-OPS.md` — production runbook
+- `.cursor/workflows/feature-lifecycle.md` — жизненный цикл фичи

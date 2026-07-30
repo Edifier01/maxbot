@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 
 import jwt
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 
 router = APIRouter(tags=["monitor"])
@@ -52,12 +52,32 @@ def _authenticate_ws(ws: WebSocket) -> bool:
 
 
 @router.get("/api/health")
-async def health():
+async def health(request: Request):
     import main as m
 
     import time
 
     from app import auth_rate_limit, db_pg
+
+    try:
+        if m._is_server_mode():
+            db_ok = db_pg.ping()
+        else:
+            with m._conn() as c:
+                c.execute("SELECT 1").fetchone()
+            db_ok = True
+    except Exception:
+        db_ok = False
+
+    token = request.headers.get("Authorization", "")
+    if not token:
+        token = request.cookies.get("max_token", "")
+    if not token.strip():
+        vs = m.vault_status()
+        return {
+            "ok": db_ok and (vs["unlocked"] or vs["needs_setup"] or vs["legacy"]),
+            "db_ok": db_ok,
+        }
 
     started = getattr(m, "_app_started_at", None)
     uptime = time.time() - started if started else 0.0
@@ -72,15 +92,6 @@ async def health():
         except Exception:
             expiring_7d = -1
 
-    try:
-        if m._is_server_mode():
-            db_ok = db_pg.ping()
-        else:
-            with m._conn() as c:
-                c.execute("SELECT 1").fetchone()
-            db_ok = True
-    except Exception:
-        db_ok = False
     vs = m.vault_status()
     return {
         "ok": db_ok and (vs["unlocked"] or vs["needs_setup"] or vs["legacy"]),

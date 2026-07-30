@@ -1,11 +1,11 @@
 # MAX Sender — production stack (domain + HTTPS)
-# Запуск из папки server/:  docker compose up --build -d
+# Запуск из корня проекта:  docker compose up --build -d
 
 services:
   app:
     build:
-      context: ..
-      dockerfile: server/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     expose:
       - "8765"
     environment:
@@ -13,12 +13,15 @@ services:
       MAX_HOST: "0.0.0.0"
       MAX_PORT: "8765"
       WORKER_POOL_SIZE: "${WORKER_POOL_SIZE:-4}"
-      REDIS_URL: "redis://redis:6379/0"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?задайте REDIS_PASSWORD в .env}@redis:6379/0"
       USE_CELERY: "${USE_CELERY:-0}"
       DATABASE_URL: "postgresql://maxsender:${POSTGRES_PASSWORD:-maxsender}@postgres:5432/maxsender"
-      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env}"
-      ADMIN_EMAIL: "${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      JWT_SECRET: "${JWT_SECRET:?задайте JWT_SECRET в .env}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:?задайте ADMIN_EMAIL в .env}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?задайте ADMIN_PASSWORD в .env}"
+      INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?задайте INTERNAL_SERVICE_TOKEN в .env}"
     volumes:
       - max_server_data:/app/data
     depends_on:
@@ -26,12 +29,27 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,sys,urllib.request;r=urllib.request.urlopen('http://127.0.0.1:8765/api/health',timeout=4);d=json.loads(r.read());sys.exit(0 if d.get('db_ok') else 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
     networks:
       - internal
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?задайте REDIS_PASSWORD в .env}"]
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?задайте REDIS_PASSWORD в .env}"
     volumes:
       - max_server_redis:/data
     restart: unless-stopped
@@ -44,14 +62,15 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      DOMAIN: "${DOMAIN:?set DOMAIN in .env}"
-      LETSENCRYPT_EMAIL: "${LETSENCRYPT_EMAIL:?set LETSENCRYPT_EMAIL in .env}"
+      DOMAIN: "${DOMAIN:?задайте DOMAIN в .env}"
+      LETSENCRYPT_EMAIL: "${LETSENCRYPT_EMAIL:?задайте LETSENCRYPT_EMAIL в .env}"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - app
+      app:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - internal
@@ -59,20 +78,26 @@ services:
   celery-worker:
     profiles: ["celery"]
     build:
-      context: ..
-      dockerfile: server/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     command: ["celery", "-A", "celery_worker.app", "worker", "--loglevel=info", "--concurrency=4"]
     environment:
       MAX_SERVER_MODE: "1"
-      REDIS_URL: "redis://redis:6379/0"
+      MAX_HOST: "app"
+      MAX_PORT: "8765"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?задайте REDIS_PASSWORD в .env}@redis:6379/0"
       USE_CELERY: "1"
       DATABASE_URL: "postgresql://maxsender:${POSTGRES_PASSWORD:-maxsender}@postgres:5432/maxsender"
+      INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?задайте INTERNAL_SERVICE_TOKEN в .env}"
     volumes:
       - max_server_data:/app/data
     depends_on:
-      - redis
-      - app
-      - postgres
+      app:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - internal
@@ -85,7 +110,9 @@ services:
       POSTGRES_DB: maxsender
     volumes:
       - max_server_pg:/var/lib/postgresql/data
-      - ../schema_pg.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./schema_pg.sql:/docker-entrypoint-initdb.d/01_bootstrap.sql:ro
+      - ./migrations/001_saas_core.sql:/docker-entrypoint-initdb.d/02_001_saas_core.sql:ro
+      - ./migrations/002_revoked_tokens.sql:/docker-entrypoint-initdb.d/03_002_revoked_tokens.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U maxsender -d maxsender"]
       interval: 5s

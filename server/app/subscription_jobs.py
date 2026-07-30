@@ -12,6 +12,7 @@ _WARN_DAYS = (7, 1)
 _CHECK_INTERVAL_SEC = 3600.0
 _last_warn_day: dict[tuple[int, int], str] = {}
 _stopped_expired: set[int] = set()
+_last_revoke_cleanup_day: str = ""
 
 
 def _main():
@@ -40,6 +41,16 @@ async def _tick() -> None:
 
     m = _main()
     today = datetime.now(timezone.utc).date().isoformat()
+
+    global _last_revoke_cleanup_day
+    if _last_revoke_cleanup_day != today:
+        try:
+            n = await asyncio.to_thread(db_pg.cleanup_revoked_tokens)
+            if n:
+                m.append_log(f"Очистка revoked_tokens: удалено {n}")
+        except Exception as e:
+            m.append_log(f"Очистка revoked_tokens: {e}")
+        _last_revoke_cleanup_day = today
 
     for days in _WARN_DAYS:
         for row in db_pg.list_expiring_subscriptions(within_days=days):
@@ -99,5 +110,7 @@ async def _stop_tenant_worker(tid: int, row: dict[str, Any]) -> None:
 
 
 def reset_for_tests() -> None:
+    global _last_revoke_cleanup_day
     _last_warn_day.clear()
     _stopped_expired.clear()
+    _last_revoke_cleanup_day = ""
