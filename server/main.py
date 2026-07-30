@@ -1,4 +1,4 @@
-"""MAX local sender — ponytail MVP: one file for logic, minimal deps."""
+﻿"""MAX local sender — ponytail MVP: one file for logic, minimal deps."""
 
 from __future__ import annotations
 
@@ -32,13 +32,14 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, model_validator
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import antiban_core
+
+from app.campaign_runtime import REGISTRY, RUNTIME
 
 HOST = os.environ.get("MAX_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MAX_PORT", "8765"))
@@ -119,7 +120,7 @@ def _is_test_mode() -> bool:
 
 def _is_server_mode() -> bool:
     try:
-        from server.app.config import is_server_mode
+        from app.config import is_server_mode
 
         return is_server_mode()
     except ImportError:
@@ -131,7 +132,7 @@ def _resolve_data_dir() -> Path:
     if override:
         return Path(override)
     if _is_server_mode():
-        from server.app.tenant import get_effective_data_dir
+        from app.tenant import get_effective_data_dir
 
         return get_effective_data_dir(ROOT)
     return ROOT / "data"
@@ -157,12 +158,12 @@ MESSAGES_FILE = DATA / "messages" / "active.txt"
 DB_PATH = DATA / "app.db"
 
 DEFAULTS = {
-    # Антибан: паузы, лимиты, один отправитель
-    "delay_min_sec": "60",
-    "delay_max_sec": "180",
-    "max_msgs_per_profile_day": "12",  # legacy; фактический лимит — daily_limit_min/max
+    # Антибан: паузы, лимиты, один отправитель (scale: group rotation + 1 proxy/group)
+    "delay_min_sec": "5",
+    "delay_max_sec": "15",
+    "max_msgs_per_profile_day": "10",  # legacy; фактический лимит — daily_limit_min/max
     "daily_limit_min": "5",
-    "daily_limit_max": "12",
+    "daily_limit_max": "10",
     "jitter_percent": "40",
     "message_pick_mode": "random_norepeat",  # random_norepeat | round_robin
     # daily_limits — пока у аккаунтов есть дневной лимит; message_pool — пока не кончится TXT
@@ -182,22 +183,24 @@ DEFAULTS = {
     "human_rhythm_enabled": "1",
     "send_windows_weekday": "9-13,16-21",
     "send_windows_weekend": "11-14,17-20",
-    "day_skip_percent": "20",
+    "day_skip_percent": "40",
     "role_plan_enabled": "1",
+    "role_active_percent": "30",
+    "role_quiet_percent": "30",
     "role_active_min": "5",
     "role_active_max": "10",
     "role_quiet_limit": "1",
     # Человечность C: неровные паузы, перерыв после N, разный jitter
     "human_pauses_enabled": "1",
-    "short_pause_chance": "15",
+    "short_pause_chance": "8",
     "short_pause_min_sec": "30",
     "short_pause_max_sec": "50",
-    "long_pause_chance": "10",
-    "long_pause_min_sec": "300",
-    "long_pause_max_sec": "900",
-    "break_after_n": "4",
-    "break_min_sec": "1200",
-    "break_max_sec": "2400",
+    "long_pause_chance": "3",
+    "long_pause_min_sec": "120",
+    "long_pause_max_sec": "300",
+    "break_after_n": "8",
+    "break_min_sec": "600",
+    "break_max_sec": "1200",
     "jitter_morning_percent": "55",
     "jitter_evening_percent": "35",
     # Человечность D: warmup 1–2 дня + lazy days у старых
@@ -232,16 +235,8 @@ _APP_SALT_PATH = DATA / ".app_salt"
 _APP_VAULT_PATH = DATA / ".app_vault"
 BACKUPS = DATA / "backups"
 
-_worker_task: asyncio.Task | None = None
-_watchdog_task: asyncio.Task | None = None
-_scheduler_task: asyncio.Task | None = None
-_backup_task: asyncio.Task | None = None
-_pool_tasks: list[asyncio.Task] = []
-_worker_lock = asyncio.Lock()
 _claim_lock = threading.Lock()
-_worker_last_activity: float = 0.0
-_current_campaign_id: int | None = None
-_pool_done_announced = False
+_app_started_at: float | None = None
 _metrics: dict[str, float] = {
     "messages_sent_total": 0,
     "messages_failed_total": 0,
@@ -257,40 +252,28 @@ _login_tasks: dict[int, asyncio.Task] = {}
 _db_conn: sqlite3.Connection | None = None
 _tenant_db_conns: dict[str, sqlite3.Connection] = {}
 _db_lock = threading.Lock()
-_settings_cache: dict[str, str] = {}
+_settings_cache: dict = {}
 _settings_cache_lock = threading.Lock()
 _rate_counters: dict[str, list[float]] = defaultdict(list)
-_shutting_down = False
-_consecutive_errors: dict[int, int] = {}
-_circuit_opened_at: dict[int, float] = {}
 _fernet: Fernet | None = None
 _vault_unlocked = False
-# Phase C: серия отправок и «перерыв» по аккаунту (in-memory)
-_human_burst_count: dict[int, int] = {}
-_human_break_until: dict[int, datetime] = {}
 
 
 def reset_test_runtime() -> None:
     """Сброс in-memory состояния между pytest-тестами (MAX_TEST=1)."""
-    global _db_conn, _fernet, _vault_unlocked, _worker_task, _watchdog_task
-    global _scheduler_task, _backup_task, _pool_tasks, _current_campaign_id
-    global _pool_done_announced, _shutting_down, _worker_last_activity
+    global _db_conn, _fernet, _vault_unlocked
     with _db_lock:
+        for conn in list(_tenant_db_conns.values()):
+            with contextlib.suppress(Exception):
+                conn.close()
+        _tenant_db_conns.clear()
         if _db_conn is not None:
             with contextlib.suppress(Exception):
                 _db_conn.close()
             _db_conn = None
     _fernet = None
     _vault_unlocked = False
-    _worker_task = None
-    _watchdog_task = None
-    _scheduler_task = None
-    _backup_task = None
-    _pool_tasks = []
-    _current_campaign_id = None
-    _pool_done_announced = False
-    _shutting_down = False
-    _worker_last_activity = 0.0
+    REGISTRY.reset_test()
     with _settings_cache_lock:
         _settings_cache.clear()
     with _log_lock:
@@ -298,10 +281,6 @@ def reset_test_runtime() -> None:
     _auth_sessions.clear()
     _login_tasks.clear()
     _rate_counters.clear()
-    _consecutive_errors.clear()
-    _circuit_opened_at.clear()
-    _human_burst_count.clear()
-    _human_break_until.clear()
     _metrics.update(
         {
             "messages_sent_total": 0,
@@ -368,7 +347,6 @@ def _conn() -> sqlite3.Connection:
             "Уберите DATABASE_URL или не задайте MAX_USE_DATABASE_URL=1."
         )
     if _is_server_mode():
-        _refresh_data_paths()
         key = str(_resolve_data_dir())
         with _db_lock:
             if key not in _tenant_db_conns:
@@ -595,6 +573,43 @@ def _migrate_antiban_defaults(c: sqlite3.Connection) -> None:
         c.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('antiban_delays_v17', '1')"
         )
+    # v18: scale profile — короткие паузы, роли %, ослабленные human_pauses
+    flag18 = c.execute(
+        "SELECT value FROM settings WHERE key='campaign_scale_v18'"
+    ).fetchone()
+    if not flag18:
+        v18_map = {
+            "delay_min_sec": ("60", "5"),
+            "delay_max_sec": ("180", "15"),
+            "daily_limit_max": ("12", "10"),
+            "max_msgs_per_profile_day": ("12", "10"),
+            "day_skip_percent": ("20", "40"),
+            "short_pause_chance": ("15", "8"),
+            "long_pause_chance": ("10", "3"),
+            "long_pause_min_sec": ("300", "120"),
+            "long_pause_max_sec": ("900", "300"),
+            "break_after_n": ("4", "8"),
+            "break_min_sec": ("1200", "600"),
+            "break_max_sec": ("2400", "1200"),
+        }
+        for key, (old, new) in v18_map.items():
+            row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            if row and row["value"] == old:
+                c.execute("UPDATE settings SET value=? WHERE key=?", (new, key))
+        for key, val in (
+            ("role_active_percent", "30"),
+            ("role_quiet_percent", "30"),
+        ):
+            row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            if not row:
+                c.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?)", (key, val)
+                )
+            elif str(row["value"]).strip() in ("", "0"):
+                c.execute("UPDATE settings SET value=? WHERE key=?", (val, key))
+        c.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('campaign_scale_v18', '1')"
+        )
     _settings_cache.clear()
 
 
@@ -618,7 +633,7 @@ def _local_today() -> date:
 
 def _load_antiban_state() -> None:
     """Восстановить burst/break/circuit из SQLite после рестарта."""
-    global _human_burst_count, _human_break_until, _consecutive_errors, _circuit_opened_at
+    
     now = _local_now()
     wall = time.time()
     with _conn() as c:
@@ -627,7 +642,7 @@ def _load_antiban_state() -> None:
         pid = int(row["profile_id"])
         burst = int(row["burst_count"] or 0)
         if burst > 0:
-            _human_burst_count[pid] = burst
+            RUNTIME.human_burst_count[pid] = burst
         raw_break = row["break_until"]
         if raw_break:
             try:
@@ -635,12 +650,12 @@ def _load_antiban_state() -> None:
                 if until.tzinfo is not None:
                     until = until.replace(tzinfo=None)
                 if until > now:
-                    _human_break_until[pid] = until
+                    RUNTIME.human_break_until[pid] = until
             except ValueError:
                 pass
         errs = int(row["consecutive_errors"] or 0)
         if errs > 0:
-            _consecutive_errors[pid] = errs
+            RUNTIME.consecutive_errors[pid] = errs
         opened = row["circuit_opened_at"]
         if opened is not None and errs >= MAX_CONSECUTIVE_ERRORS:
             try:
@@ -650,16 +665,16 @@ def _load_antiban_state() -> None:
             # wall-clock; если срок вышел — не восстанавливаем
             mins = max(1.0, _setting_float("circuit_break_minutes", float(CIRCUIT_BREAK_MINUTES)))
             if wall - opened_f < mins * 60:
-                _circuit_opened_at[pid] = opened_f
+                RUNTIME.circuit_opened_at[pid] = opened_f
             else:
-                _consecutive_errors.pop(pid, None)
+                RUNTIME.consecutive_errors.pop(pid, None)
 
 
 def _persist_antiban_profile(profile_id: int) -> None:
-    burst = _human_burst_count.get(profile_id, 0)
-    until = _human_break_until.get(profile_id)
-    errs = _consecutive_errors.get(profile_id, 0)
-    opened = _circuit_opened_at.get(profile_id)
+    burst = RUNTIME.human_burst_count.get(profile_id, 0)
+    until = RUNTIME.human_break_until.get(profile_id)
+    errs = RUNTIME.consecutive_errors.get(profile_id, 0)
+    opened = RUNTIME.circuit_opened_at.get(profile_id)
     if burst <= 0 and until is None and errs <= 0 and opened is None:
         with _conn() as c:
             c.execute("DELETE FROM antiban_state WHERE profile_id=?", (profile_id,))
@@ -686,19 +701,37 @@ def _persist_antiban_profile(profile_id: int) -> None:
         )
 
 
-def get_setting(key: str) -> str:
-    with _settings_cache_lock:
-        if key in _settings_cache:
-            return _settings_cache[key]
+def _scoped_sqlite_conn() -> sqlite3.Connection:
+    """Settings/messages SQLite: tenant scope or global admin (server mode)."""
     if _is_server_mode():
-        conn = _global_conn()
-        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    else:
-        with _conn() as c:
-            row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        from app.tenant import use_global_data
+
+        if use_global_data():
+            return _global_conn()
+    return _conn()
+
+
+def _settings_cache_scope() -> tuple[str, int | None]:
+    if not _is_server_mode():
+        return ("local", None)
+    from app.tenant import get_tenant_id, use_global_data
+
+    if use_global_data():
+        return ("global", None)
+    return ("tenant", get_tenant_id())
+
+
+def get_setting(key: str) -> str:
+    scope = _settings_cache_scope()
+    cache_key = (scope[0], scope[1], key)
+    with _settings_cache_lock:
+        if cache_key in _settings_cache:
+            return _settings_cache[cache_key]
+    conn = _scoped_sqlite_conn()
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     val = row["value"] if row else DEFAULTS.get(key, "")
     with _settings_cache_lock:
-        _settings_cache[key] = val
+        _settings_cache[cache_key] = val
     return val
 
 
@@ -725,22 +758,16 @@ def _write_settings_audit(key: str, old_value: str, new_value: str) -> None:
 
 def set_setting(key: str, value: str) -> None:
     old = get_setting(key)
-    if _is_server_mode():
-        conn = _global_conn()
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, value),
-        )
-    else:
-        with _conn() as c:
-            c.execute(
-                "INSERT INTO settings (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, value),
-            )
+    conn = _scoped_sqlite_conn()
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
+    scope = _settings_cache_scope()
+    cache_key = (scope[0], scope[1], key)
     with _settings_cache_lock:
-        _settings_cache[key] = value
+        _settings_cache[cache_key] = value
     if old != value:
         _write_settings_audit(key, old, value)
         append_log(f"Настройка изменена: {key}")
@@ -808,6 +835,21 @@ def _load_log_from_db() -> None:
 
 # --- messages file -----------------------------------------------------------
 
+
+
+
+def _db_path() -> Path:
+    return DB_PATH
+
+
+def _messages_file() -> Path:
+    if _is_server_mode():
+        from app.tenant import use_global_data
+
+        if use_global_data():
+            return ROOT / "data" / "global" / "messages" / "active.txt"
+        return _resolve_data_dir() / "messages" / "active.txt"
+    return MESSAGES_FILE
 
 def parse_messages_text(raw: str) -> list[str]:
     lines = []
@@ -1229,7 +1271,7 @@ def _prepare_auto_resume_pool() -> bool:
 async def _try_auto_resume(*, log_prefix: str = "Автовозобновление") -> bool:
     if not _auto_run_enabled():
         return False
-    if _worker_task and not _worker_task.done():
+    if RUNTIME.worker_busy():
         return False
     if not _vault_ready_for_send():
         return False
@@ -1627,6 +1669,10 @@ def _role_plan_enabled() -> bool:
     return _human_rhythm_enabled() and _setting_truthy("role_plan_enabled", "1")
 
 
+def _role_percent_mode() -> bool:
+    return _setting_float("role_active_percent", 0.0) > 0.0
+
+
 def _day_skip_percent() -> float:
     try:
         p = float(get_setting("day_skip_percent") or "0")
@@ -1758,35 +1804,49 @@ def _ensure_group_role_plan(group_id: int) -> None:
         random.shuffle(ids)
         n = len(ids)
         skip_pct = _day_skip_percent()
-        skip_n = int(round(n * skip_pct / 100.0)) if skip_pct > 0 else 0
-        skip_n = max(0, min(n, skip_n))
-        # не скипать всех: хотя бы один может писать
-        if skip_n >= n and n > 0:
-            skip_n = n - 1
-        skip_ids = set(ids[:skip_n])
-        remaining = [i for i in ids if i not in skip_ids]
-
-        try:
-            a_min = max(0, int(get_setting("role_active_min") or "5"))
-        except ValueError:
-            a_min = 5
-        try:
-            a_max = max(0, int(get_setting("role_active_max") or "10"))
-        except ValueError:
-            a_max = 10
-        if a_min > a_max:
-            a_min, a_max = a_max, a_min
-        if not remaining:
-            active_n = 0
+        if _role_percent_mode():
+            active_pct = max(0.0, min(100.0, _setting_float("role_active_percent", 30.0)))
+            quiet_pct = max(0.0, min(100.0, _setting_float("role_quiet_percent", 30.0)))
+            skip_n, active_n, quiet_n = antiban_core.split_role_counts(
+                n,
+                skip_percent=skip_pct,
+                active_percent=active_pct,
+                quiet_percent=quiet_pct,
+            )
+            skip_ids = set(ids[:skip_n])
+            remaining = ids[skip_n:]
+            active_ids = set(remaining[:active_n])
+            quiet_ids = set(remaining[active_n:])
         else:
-            lo = min(a_min, len(remaining))
-            hi = min(a_max, len(remaining))
-            if lo > hi:
-                lo, hi = hi, lo
-            active_n = random.randint(lo, hi) if hi >= lo else len(remaining)
+            skip_n = int(round(n * skip_pct / 100.0)) if skip_pct > 0 else 0
+            skip_n = max(0, min(n, skip_n))
+            # не скипать всех: хотя бы один может писать
+            if skip_n >= n and n > 0:
+                skip_n = n - 1
+            skip_ids = set(ids[:skip_n])
+            remaining = [i for i in ids if i not in skip_ids]
 
-        active_ids = set(remaining[:active_n])
-        quiet_ids = set(remaining[active_n:])
+            try:
+                a_min = max(0, int(get_setting("role_active_min") or "5"))
+            except ValueError:
+                a_min = 5
+            try:
+                a_max = max(0, int(get_setting("role_active_max") or "10"))
+            except ValueError:
+                a_max = 10
+            if a_min > a_max:
+                a_min, a_max = a_max, a_min
+            if not remaining:
+                active_n = 0
+            else:
+                lo = min(a_min, len(remaining))
+                hi = min(a_max, len(remaining))
+                if lo > hi:
+                    lo, hi = hi, lo
+                active_n = random.randint(lo, hi) if hi >= lo else len(remaining)
+
+            active_ids = set(remaining[:active_n])
+            quiet_ids = set(remaining[active_n:])
 
         # порядок отправки: только active+quiet, shuffle
         send_order = list(active_ids | quiet_ids)
@@ -1950,7 +2010,7 @@ async def _sleep_send_delay(*, pool_scale: bool = False) -> None:
 
 
 def _is_in_human_break(profile_id: int) -> bool:
-    until = _human_break_until.get(profile_id)
+    until = RUNTIME.human_break_until.get(profile_id)
     if not until:
         return False
     if _local_now() >= until:
@@ -1967,7 +2027,7 @@ def _note_human_burst(profile_id: int) -> None:
     n = _setting_int("break_after_n", 4)
     if n <= 0:
         return
-    burst = _human_burst_count.get(profile_id, 0) + 1
+    burst = RUNTIME.human_burst_count.get(profile_id, 0) + 1
     if burst < n:
         _human_burst_count[profile_id] = burst
         _persist_antiban_profile(profile_id)
@@ -2499,6 +2559,87 @@ def _group_proxy(group_id: int, profile_id: int | None = None) -> str | None:
     return antiban_core.pick_proxy_from_pool(raw, profile_id)
 
 
+_PROXY_RECHECK_SEC = 300.0
+_proxy_bad_until: dict[str, tuple[float, str]] = {}
+_tg_notify_at: dict[str, float] = {}
+_TG_DEDUPE_SEC = 300.0
+
+
+def _group_proxy_raw(group_id: int) -> str:
+    with _conn() as c:
+        row = c.execute("SELECT proxy FROM groups WHERE id=?", (group_id,)).fetchone()
+    if not row:
+        return ""
+    try:
+        return (row["proxy"] or "").strip()
+    except (KeyError, IndexError):
+        return ""
+
+
+def _group_has_proxy_configured(group: sqlite3.Row | dict[str, Any]) -> bool:
+    raw = ""
+    try:
+        raw = (group["proxy"] or "").strip()
+    except (KeyError, IndexError, TypeError):
+        raw = _group_proxy_raw(int(group["id"]))
+    return bool(antiban_core.parse_proxy_list(raw))
+
+
+def _proxy_host_label(proxy_url: str) -> str:
+    return proxy_url.split("@")[-1] if proxy_url else ""
+
+
+def _validate_proxy_for_group(
+    group: sqlite3.Row | dict[str, Any],
+    profile_id: int | None,
+) -> tuple[bool, str]:
+    """True = можно работать (прокси не задан или доступен)."""
+    gid = int(group["id"])
+    raw = _group_proxy_raw(gid)
+    if not antiban_core.parse_proxy_list(raw):
+        return True, ""
+    if profile_id is not None:
+        urls = [u for u in [_group_proxy(gid, profile_id)] if u]
+    else:
+        urls = antiban_core.parse_proxy_list(raw)
+    last_err = ""
+    gname = str(group["name"])
+    for proxy_url in urls:
+        key = f"{gid}:{_proxy_host_label(proxy_url)}"
+        now = time.time()
+        bad = _proxy_bad_until.get(key)
+        if bad and now < bad[0]:
+            last_err = bad[1]
+            continue
+        ok, err = antiban_core.check_proxy(proxy_url)
+        if ok:
+            _proxy_bad_until.pop(key, None)
+            return True, ""
+        _proxy_bad_until[key] = (now + _PROXY_RECHECK_SEC, err)
+        last_err = err
+        append_log(
+            f"Прокси недоступен: группа «{gname}» "
+            f"({_proxy_host_label(proxy_url)}): {err}"
+        )
+        _schedule_telegram(
+            "Прокси недоступен",
+            [
+                f"Группа: {gname} (#{gid})",
+                f"Прокси: {_proxy_host_label(proxy_url)}",
+                f"Ошибка: {err}",
+            ],
+            dedupe_key=f"proxy:{key}",
+        )
+    return False, last_err or "прокси недоступен"
+
+
+def _preflight_group_proxies() -> None:
+    for group in _active_groups():
+        if not _group_has_proxy_configured(group):
+            continue
+        _validate_proxy_for_group(group, profile_id=None)
+
+
 def _dedupe_window_for_group(group_id: int) -> int:
     """Минимум из настройки; растёт с числом аккаунтов в группе (×2)."""
     configured = max(1, _setting_int("text_dedupe_window", 6))
@@ -2641,6 +2782,8 @@ def _campaign_config_snapshot() -> str:
             "send_windows_weekend": get_setting("send_windows_weekend"),
             "day_skip_percent": get_setting("day_skip_percent"),
             "role_plan_enabled": get_setting("role_plan_enabled"),
+            "role_active_percent": get_setting("role_active_percent"),
+            "role_quiet_percent": get_setting("role_quiet_percent"),
             "role_active_min": get_setting("role_active_min"),
             "role_active_max": get_setting("role_active_max"),
             "role_quiet_limit": get_setting("role_quiet_limit"),
@@ -2659,7 +2802,7 @@ def _campaign_config_snapshot() -> str:
 
 
 def _begin_campaign(*, scheduled_for: str | None = None) -> int:
-    global _current_campaign_id
+    
     total = len(load_message_pool())
     with _conn() as c:
         cur = c.execute(
@@ -2667,14 +2810,13 @@ def _begin_campaign(*, scheduled_for: str | None = None) -> int:
             "VALUES (datetime('now'), 'running', ?, ?, ?)",
             (total, scheduled_for, _campaign_config_snapshot()),
         )
-        _current_campaign_id = int(cur.lastrowid)
-    append_log(f"Кампания #{_current_campaign_id} запущена ({total} сообщений)")
-    return _current_campaign_id
+        RUNTIME.current_campaign_id = int(cur.lastrowid)
+    append_log(f"Кампания #{RUNTIME.current_campaign_id} запущена ({total} сообщений)")
+    return RUNTIME.current_campaign_id or 0
 
 
 def _finish_campaign(status: str, reason: str = "") -> None:
-    global _current_campaign_id
-    cid = _current_campaign_id
+    cid = RUNTIME.current_campaign_id
     if not cid:
         # найти последнюю running
         with _conn() as c:
@@ -2700,7 +2842,7 @@ def _finish_campaign(status: str, reason: str = "") -> None:
             "messages_sent=?, messages_failed=?, reason=? WHERE id=?",
             (status, sent, failed, reason[:500], cid),
         )
-    _current_campaign_id = None
+    RUNTIME.current_campaign_id = None
 
 
 def _http_post_json(url: str, payload: dict[str, Any], timeout: float = 15) -> None:
@@ -2715,6 +2857,76 @@ def _http_post_json(url: str, payload: dict[str, Any], timeout: float = 15) -> N
     )
     with urlopen(req, timeout=timeout) as resp:
         resp.read()
+
+
+def _telegram_credentials() -> tuple[str, str]:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if token and chat:
+        return token, chat
+    if not _is_server_mode():
+        return (
+            get_setting("telegram_bot_token").strip(),
+            get_setting("telegram_chat_id").strip(),
+        )
+    return "", ""
+
+
+def _alert_institution_label() -> str:
+    if _is_server_mode():
+        try:
+            from app import db_pg
+            from app.tenant import get_tenant_id
+
+            tid = get_tenant_id()
+            if tid:
+                tenant = db_pg.get_tenant(tid)
+                if tenant:
+                    return f"{tenant['institution_name']} (#{tid})"
+        except Exception:
+            pass
+    return "локально"
+
+
+def _schedule_telegram(
+    title: str,
+    lines: list[str],
+    *,
+    dedupe_key: str | None = None,
+) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_telegram_notify(title, lines, dedupe_key=dedupe_key))
+    except RuntimeError:
+        pass
+
+
+async def _telegram_notify(
+    title: str,
+    lines: list[str],
+    *,
+    dedupe_key: str | None = None,
+) -> None:
+    token, chat_id = _telegram_credentials()
+    if not token or not chat_id:
+        return
+    if dedupe_key:
+        now = time.time()
+        if now - _tg_notify_at.get(dedupe_key, 0.0) < _TG_DEDUPE_SEC:
+            return
+        _tg_notify_at[dedupe_key] = now
+    text = (
+        f"MAX Sender · {title}\n"
+        f"Учреждение: {_alert_institution_label()}\n"
+        + "\n".join(lines)
+    )
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        await asyncio.to_thread(
+            _http_post_json, url, {"chat_id": chat_id, "text": text[:4000]}
+        )
+    except Exception as e:
+        append_log(f"Telegram ошибка: {e}")
 
 
 async def _notify_campaign_end(status: str, reason: str) -> None:
@@ -2795,16 +3007,40 @@ def _parse_iso_datetime(value: str) -> datetime:
     return dt
 
 
-def _reset_auth_on_startup() -> None:
-    _auth_sessions.clear()
-    _login_tasks.clear()
-    # незавершённые кампании пометить stopped
-    with _conn() as c:
+def _sqlite_reset_running_campaigns(db_path: Path) -> None:
+    if not db_path.is_file():
+        return
+    with sqlite3.connect(db_path) as c:
         c.execute(
             "UPDATE campaigns SET status='stopped', finished_at=datetime('now'), "
             "reason='Сервер перезапущен' WHERE status='running'"
         )
         c.execute("UPDATE queue_state SET running=0 WHERE id=1")
+
+
+def _tenant_sqlite_paths() -> list[Path]:
+    paths: list[Path] = []
+    if _is_server_mode():
+        tenants_root = ROOT / "data" / "tenants"
+        if tenants_root.is_dir():
+            for entry in tenants_root.iterdir():
+                if entry.is_dir():
+                    db = entry / "app.db"
+                    if db.is_file():
+                        paths.append(db)
+        for extra in (ROOT / "data" / "global" / "app.db", ROOT / "data" / "app.db"):
+            if extra.is_file():
+                paths.append(extra)
+    else:
+        paths.append(_db_path())
+    return paths
+
+
+def _reset_auth_on_startup() -> None:
+    _auth_sessions.clear()
+    _login_tasks.clear()
+    for db_path in _tenant_sqlite_paths():
+        _sqlite_reset_running_campaigns(db_path)
     append_log(
         "Сервер запущен. Если вход был прерван — нажмите «Войти» снова."
     )
@@ -2822,22 +3058,21 @@ def _is_auth_error(err: str) -> bool:
 
 
 def _touch_worker_activity() -> None:
-    global _worker_last_activity
-    _worker_last_activity = time.monotonic()
+    RUNTIME.touch_activity()
 
 
 def _on_success(profile_id: int) -> None:
-    _consecutive_errors.pop(profile_id, None)
-    _circuit_opened_at.pop(profile_id, None)
+    RUNTIME.consecutive_errors.pop(profile_id, None)
+    RUNTIME.circuit_opened_at.pop(profile_id, None)
     _persist_antiban_profile(profile_id)
 
 
 def _on_error(profile_id: int) -> None:
-    n = _consecutive_errors.get(profile_id, 0) + 1
-    _consecutive_errors[profile_id] = n
+    n = RUNTIME.consecutive_errors.get(profile_id, 0) + 1
+    RUNTIME.consecutive_errors[profile_id] = n
     mins = max(1.0, _setting_float("circuit_break_minutes", float(CIRCUIT_BREAK_MINUTES)))
     if n >= MAX_CONSECUTIVE_ERRORS:
-        _circuit_opened_at.setdefault(profile_id, time.time())
+        RUNTIME.circuit_opened_at.setdefault(profile_id, time.time())
         append_log(
             f"Автопауза: профиль #{profile_id} отключён на "
             f"{int(mins)} мин после {n} ошибок подряд"
@@ -2846,10 +3081,10 @@ def _on_error(profile_id: int) -> None:
 
 
 def _is_circuit_open(profile_id: int) -> bool:
-    count = _consecutive_errors.get(profile_id, 0)
+    count = RUNTIME.consecutive_errors.get(profile_id, 0)
     if count < MAX_CONSECUTIVE_ERRORS:
         return False
-    opened = _circuit_opened_at.get(profile_id, 0.0)
+    opened = RUNTIME.circuit_opened_at.get(profile_id, 0.0)
     mins = max(1.0, _setting_float("circuit_break_minutes", float(CIRCUIT_BREAK_MINUTES)))
     if time.time() - opened > mins * 60:
         _on_success(profile_id)
@@ -2859,7 +3094,25 @@ def _is_circuit_open(profile_id: int) -> bool:
 
 
 def _circuit_open_count() -> int:
-    return sum(1 for pid in list(_consecutive_errors) if _is_circuit_open(pid))
+    total = 0
+    for _, rt in REGISTRY.worker_items():
+        total += sum(
+            1 for pid in list(rt.consecutive_errors) if _is_circuit_open_for(pid, rt)
+        )
+    if not REGISTRY.worker_items():
+        total += sum(
+            1 for pid in list(RUNTIME.consecutive_errors) if _is_circuit_open(pid)
+        )
+    return total
+
+
+def _is_circuit_open_for(profile_id: int, rt) -> bool:
+    count = rt.consecutive_errors.get(profile_id, 0)
+    if count < MAX_CONSECUTIVE_ERRORS:
+        return False
+    opened = rt.circuit_opened_at.get(profile_id, 0.0)
+    mins = max(1.0, _setting_float("circuit_break_minutes", float(CIRCUIT_BREAK_MINUTES)))
+    return time.time() - opened <= mins * 60
 
 
 def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> None:
@@ -3312,79 +3565,121 @@ async def _worker_loop() -> None:
 
 
 async def _pool_supervisor() -> None:
-    global _pool_tasks, _pool_done_announced
+    
     n = _pool_size()
-    _pool_done_announced = False
+    RUNTIME.pool_done_announced = False
     append_log(f"Пул воркеров: {n} параллельных")
-    _pool_tasks = [asyncio.create_task(_pool_worker_loop(i + 1)) for i in range(n)]
+    RUNTIME.pool_tasks = [asyncio.create_task(_pool_worker_loop(i + 1)) for i in range(n)]
     try:
-        await asyncio.gather(*_pool_tasks)
+        await asyncio.gather(*RUNTIME.pool_tasks)
     except asyncio.CancelledError:
-        for t in _pool_tasks:
+        for t in RUNTIME.pool_tasks:
             t.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await asyncio.gather(*_pool_tasks, return_exceptions=True)
+            await asyncio.gather(*RUNTIME.pool_tasks, return_exceptions=True)
         raise
     finally:
-        _pool_tasks = []
+        RUNTIME.pool_tasks = []
+
+
+def _scheduler_tenant_ids() -> list[int | None]:
+    if not _is_server_mode():
+        return [None]
+    ids: list[int | None] = []
+    tenants_root = ROOT / "data" / "tenants"
+    if tenants_root.is_dir():
+        for entry in sorted(tenants_root.iterdir()):
+            if entry.is_dir() and (entry / "app.db").is_file():
+                try:
+                    ids.append(int(entry.name))
+                except ValueError:
+                    continue
+    return ids or [None]
+
+
+async def _scheduler_tick() -> None:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM campaign_schedule WHERE id=1").fetchone()
+    if row and row["enabled"] and row["start_at"]:
+        start_at = _parse_iso_datetime(row["start_at"])
+        now = datetime.now(timezone.utc)
+        rt = REGISTRY.worker()
+        worker_busy = rt.worker_task and not rt.worker_task.done()
+        if now >= start_at and not worker_busy:
+            with _conn() as c:
+                c.execute("UPDATE campaign_schedule SET enabled=0 WHERE id=1")
+            append_log(
+                f"Расписание: старт кампании (запланировано на {row['start_at']})"
+            )
+            try:
+                _require_vault_unlocked()
+            except HTTPException as e:
+                append_log(f"Расписание: пропуск — {e.detail}")
+            else:
+                if load_message_pool() and _has_sendable_profile():
+                    await _start_worker(scheduled_for=row["start_at"])
+                else:
+                    append_log("Расписание: нет сообщений или профилей — пропуск")
+    await _try_auto_resume(log_prefix="Автовозобновление")
+
+
+async def _scheduler_loop() -> None:
+    from app.tenant import tenant_scope
+
+    while True:
+        await asyncio.sleep(15)
+        if REGISTRY.app.shutting_down:
+            return
+        for tid in _scheduler_tenant_ids():
+            try:
+                with tenant_scope(tenant_id=tid):
+                    await _scheduler_tick()
+            except Exception as e:
+                append_log(f"Ошибка планировщика (tenant={tid}): {e}")
 
 
 async def _watchdog_loop() -> None:
     while True:
         await asyncio.sleep(60)
-        if _shutting_down:
+        if REGISTRY.app.shutting_down:
             return
-        if _worker_task and not _worker_task.done():
-            idle = time.monotonic() - _worker_last_activity
-            if idle > WORKER_TIMEOUT:
-                append_log(
-                    f"Сторож: воркер завис ({idle:.0f}с без активности) — перезапуск"
-                )
-                await _stop_worker(finish_status="stopped", reason="Перезапуск сторожем")
-                await _start_worker(record_campaign=False)
+        for key, rt in REGISTRY.worker_items():
+            if not rt.worker_task or rt.worker_task.done():
+                continue
+            idle = time.monotonic() - rt.worker_last_activity
+            if idle <= WORKER_TIMEOUT:
+                continue
+            tid = REGISTRY._tenant_from_key(key)
+            append_log(
+                f"Сторож: воркер tenant={tid or 'local'} завис "
+                f"({idle:.0f}с без активности) — перезапуск"
+            )
+            if rt.worker_ctx_snapshot is not None:
+                from app.tenant import restore_context, clear_context
 
-
-async def _scheduler_loop() -> None:
-    while True:
-        await asyncio.sleep(15)
-        if _shutting_down:
-            return
-        try:
-            with _conn() as c:
-                row = c.execute(
-                    "SELECT * FROM campaign_schedule WHERE id=1"
-                ).fetchone()
-            if row and row["enabled"] and row["start_at"]:
-                start_at = _parse_iso_datetime(row["start_at"])
-                now = datetime.now(timezone.utc)
-                worker_busy = _worker_task and not _worker_task.done()
-                if now >= start_at and not worker_busy:
-                    with _conn() as c:
-                        c.execute(
-                            "UPDATE campaign_schedule SET enabled=0 WHERE id=1"
-                        )
-                    append_log(
-                        f"Расписание: старт кампании (запланировано на {row['start_at']})"
+                restore_context(rt.worker_ctx_snapshot)
+                try:
+                    await _stop_worker(
+                        finish_status="stopped",
+                        reason="Перезапуск сторожем",
+                        tenant_id=tid,
                     )
-                    try:
-                        _require_vault_unlocked()
-                    except HTTPException as e:
-                        append_log(f"Расписание: пропуск — {e.detail}")
-                    else:
-                        if load_message_pool() and _has_sendable_profile():
-                            await _start_worker(scheduled_for=row["start_at"])
-                        else:
-                            append_log("Расписание: нет сообщений или профилей — пропуск")
-            await _try_auto_resume(log_prefix="Автовозобновление")
-        except Exception as e:
-            append_log(f"Ошибка планировщика: {e}")
-
+                    await _start_worker(record_campaign=False)
+                finally:
+                    clear_context()
+            else:
+                await _stop_worker(
+                    finish_status="stopped",
+                    reason="Перезапуск сторожем",
+                    tenant_id=tid,
+                )
+                await _start_worker(record_campaign=False)
 
 async def _backup_loop() -> None:
     last_backup = 0.0
     while True:
         await asyncio.sleep(60)
-        if _shutting_down:
+        if REGISTRY.app.shutting_down:
             return
         try:
             hours = float(get_setting("backup_interval_hours") or "24")
@@ -3408,15 +3703,32 @@ async def _start_worker(
     scheduled_for: str | None = None,
 ) -> None:
     """Запуск воркера / пула без сброса индексов прогресса."""
-    global _worker_task, _pool_done_announced
-    async with _worker_lock:
-        if _worker_task and not _worker_task.done():
+    from app.tenant import clear_context, get_tenant_id, restore_context, snapshot_context
+
+    ctx_snap = snapshot_context()
+    tid = get_tenant_id()
+    rt = REGISTRY.worker_for(tid)
+
+    async def _worker_task() -> None:
+        restore_context(ctx_snap)
+        rt.worker_ctx_snapshot = ctx_snap
+        rt.tenant_id = tid
+        try:
+            if _pool_size() > 1:
+                await _pool_supervisor()
+            else:
+                await _worker_loop()
+        finally:
+            clear_context()
+
+    async with rt.worker_lock:
+        if rt.worker_task and not rt.worker_task.done():
             return
-        _touch_worker_activity()
-        _pool_done_announced = False
+        rt.touch_activity()
+        rt.pool_done_announced = False
+        _preflight_group_proxies()
         with _conn() as c:
             c.execute("UPDATE queue_state SET running=1 WHERE id=1")
-            # колода на старте, если ещё не собрана
             msgs = load_message_pool()
             if _message_pick_mode() == "random_norepeat" and msgs:
                 qs = c.execute("SELECT message_idx FROM queue_state WHERE id=1").fetchone()
@@ -3427,11 +3739,7 @@ async def _start_worker(
         if record_campaign:
             _begin_campaign(scheduled_for=scheduled_for)
             _metric_inc("campaigns_started_total")
-        n = _pool_size()
-        if n > 1:
-            _worker_task = asyncio.create_task(_pool_supervisor())
-        else:
-            _worker_task = asyncio.create_task(_worker_loop())
+        rt.worker_task = asyncio.create_task(_worker_task())
 
 
 def _reset_queue_progress() -> None:
@@ -3447,21 +3755,26 @@ async def _stop_worker(
     *,
     finish_status: str | None = "stopped",
     reason: str = "Остановлено пользователем",
+    tenant_id: int | None = None,
 ) -> None:
-    global _worker_task, _pool_tasks
-    was_running = bool(_worker_task and not _worker_task.done())
+    from app.tenant import get_tenant_id
+
+    if tenant_id is None:
+        tenant_id = get_tenant_id()
+    rt = REGISTRY.worker_for(tenant_id)
+    was_running = bool(rt.worker_task and not rt.worker_task.done())
     with _conn() as c:
         c.execute("UPDATE queue_state SET running=0 WHERE id=1")
-    if _worker_task:
-        _worker_task.cancel()
+    if rt.worker_task:
+        rt.worker_task.cancel()
         try:
-            await _worker_task
+            await rt.worker_task
         except asyncio.CancelledError:
             pass
-        _worker_task = None
-    for t in list(_pool_tasks):
+        rt.worker_task = None
+    for t in list(rt.pool_tasks):
         t.cancel()
-    _pool_tasks = []
+    rt.pool_tasks = []
     if was_running and finish_status:
         with _conn() as c:
             still = c.execute(
@@ -3477,232 +3790,74 @@ async def _stop_worker(
                 pass
 
 
-# --- API models --------------------------------------------------------------
+async def _stop_all_workers(
+    *,
+    finish_status: str | None = "stopped",
+    reason: str = "Остановка сервера",
+) -> None:
+    from app.tenant import clear_context, restore_context
 
-
-class ProfileIn(BaseModel):
-    phone: str
-    label: str = ""
-    proxy: str = ""
-
-
-class ProfilePatchIn(BaseModel):
-    label: str | None = None
-    proxy: str | None = None
-
-
-class CodeIn(BaseModel):
-    code: str
-
-
-class GroupIn(BaseModel):
-    name: str
-    max_chat_id: str = ""
-    invite_link: str = ""
-    proxy: str = ""
-
-
-class GroupPatchIn(BaseModel):
-    name: str | None = None
-    max_chat_id: str | None = None
-    invite_link: str | None = None
-    proxy: str | None = None
-
-
-class SettingsIn(BaseModel):
-    delay_min_sec: int | None = None
-    delay_max_sec: int | None = None
-    max_msgs_per_profile_day: int | None = None
-    daily_limit_min: int | None = None
-    daily_limit_max: int | None = None
-    jitter_percent: int | None = None
-    message_pick_mode: str | None = None
-    campaign_goal: str | None = None
-    warmup_enabled: int | None = None
-    warmup_days: int | None = None
-    cooldown_reauth_hours: float | None = None
-    cooldown_fail_hours: float | None = None
-    password_max_attempts: int | None = None
-    api_pin: str | None = None
-    webhook_url: str | None = None
-    telegram_bot_token: str | None = None
-    telegram_chat_id: str | None = None
-    backup_interval_hours: float | None = None
-    worker_pool_size: int | None = None
-    human_rhythm_enabled: int | None = None
-    send_windows_weekday: str | None = None
-    send_windows_weekend: str | None = None
-    day_skip_percent: float | None = None
-    role_plan_enabled: int | None = None
-    role_active_min: int | None = None
-    role_active_max: int | None = None
-    role_quiet_limit: int | None = None
-    human_pauses_enabled: int | None = None
-    short_pause_chance: float | None = None
-    short_pause_min_sec: int | None = None
-    short_pause_max_sec: int | None = None
-    long_pause_chance: float | None = None
-    long_pause_min_sec: int | None = None
-    long_pause_max_sec: int | None = None
-    break_after_n: int | None = None
-    break_min_sec: int | None = None
-    break_max_sec: int | None = None
-    jitter_morning_percent: int | None = None
-    jitter_evening_percent: int | None = None
-    warmup_start_min: int | None = None
-    warmup_start_max: int | None = None
-    lazy_day_percent: float | None = None
-    lazy_day_factor: float | None = None
-    human_presence_enabled: int | None = None
-    presence_history_chance: float | None = None
-    presence_read_chance: float | None = None
-    presence_react_chance: float | None = None
-    presence_reactions: str | None = None
-    presence_idle_chance: float | None = None
-    human_texts_enabled: int | None = None
-    text_dedupe_enabled: int | None = None
-    text_similarity_max: float | None = None
-    text_dedupe_window: int | None = None
-    text_length_variety: int | None = None
-    timezone_offset_hours: float | None = None
-    circuit_break_minutes: float | None = None
-    cooldown_fail_max_hours: float | None = None
-    cooldown_disable_after_fails: int | None = None
-
-    @model_validator(mode="after")
-    def check_delays(self) -> SettingsIn:
-        lo = self.delay_min_sec
-        hi = self.delay_max_sec
-        if lo is not None and hi is not None and lo > hi:
-            raise ValueError("Мин. пауза не может быть больше макс. паузы")
-        if self.jitter_percent is not None and not (0 <= self.jitter_percent <= 100):
-            raise ValueError("Разброс (%) должен быть от 0 до 100")
-        if self.max_msgs_per_profile_day is not None and self.max_msgs_per_profile_day < 1:
-            raise ValueError("Лимит сообщений в день должен быть ≥ 1")
-        dlo, dhi = self.daily_limit_min, self.daily_limit_max
-        if dlo is not None and dlo < 1:
-            raise ValueError("Лимит/день мин должен быть ≥ 1")
-        if dhi is not None and dhi < 1:
-            raise ValueError("Лимит/день макс должен быть ≥ 1")
-        if dlo is not None and dhi is not None and dlo > dhi:
-            raise ValueError("Лимит/день мин не может быть больше макс")
-        if self.message_pick_mode is not None and self.message_pick_mode not in (
-            "random_norepeat",
-            "round_robin",
-        ):
-            raise ValueError("Режим сообщений: случайно без повтора или по кругу")
-        if self.campaign_goal is not None and self.campaign_goal not in (
-            "daily_limits",
-            "message_pool",
-        ):
-            raise ValueError("Цель кампании: дневные лимиты или пул сообщений")
-        if self.warmup_days is not None and self.warmup_days < 1:
-            raise ValueError("Дней прогрева должно быть ≥ 1")
-        if self.cooldown_reauth_hours is not None and self.cooldown_reauth_hours < 0:
-            raise ValueError("Пауза после повторного входа (ч) должна быть ≥ 0")
-        if self.cooldown_fail_hours is not None and self.cooldown_fail_hours < 0:
-            raise ValueError("Пауза после ошибки (ч) должна быть ≥ 0")
-        if self.password_max_attempts is not None and self.password_max_attempts < 1:
-            raise ValueError("Макс. попыток пароля должно быть ≥ 1")
-        if self.backup_interval_hours is not None and self.backup_interval_hours < 0:
-            raise ValueError("Интервал резервной копии (ч) должен быть ≥ 0")
-        if self.worker_pool_size is not None and not (1 <= self.worker_pool_size <= 32):
-            raise ValueError("Пул воркеров должен быть от 1 до 32")
-        if self.day_skip_percent is not None and not (0 <= self.day_skip_percent <= 100):
-            raise ValueError("Пропуск дня (%) должен быть от 0 до 100")
-        if self.role_active_min is not None and self.role_active_min < 0:
-            raise ValueError("Активных мин должно быть ≥ 0")
-        if self.role_active_max is not None and self.role_active_max < 0:
-            raise ValueError("Активных макс должно быть ≥ 0")
-        if (
-            self.role_active_min is not None
-            and self.role_active_max is not None
-            and self.role_active_min > self.role_active_max
-        ):
-            raise ValueError("Активных мин не может быть больше макс")
-        if self.role_quiet_limit is not None and self.role_quiet_limit < 0:
-            raise ValueError("Лимит тихих должен быть ≥ 0")
-        for pct_name, pct_val in (
-            ("short_pause_chance", self.short_pause_chance),
-            ("long_pause_chance", self.long_pause_chance),
-            ("lazy_day_percent", self.lazy_day_percent),
-            ("jitter_morning_percent", self.jitter_morning_percent),
-            ("jitter_evening_percent", self.jitter_evening_percent),
-            ("presence_history_chance", self.presence_history_chance),
-            ("presence_read_chance", self.presence_read_chance),
-            ("presence_react_chance", self.presence_react_chance),
-            ("presence_idle_chance", self.presence_idle_chance),
-        ):
-            if pct_val is not None and not (0 <= pct_val <= 100):
-                raise ValueError(f"Параметр «{pct_name}» должен быть от 0 до 100")
-        if self.text_similarity_max is not None and not (
-            0.5 <= self.text_similarity_max <= 0.99
-        ):
-            raise ValueError("Сходство текстов должно быть от 0.5 до 0.99")
-        if self.text_dedupe_window is not None and self.text_dedupe_window < 1:
-            raise ValueError("Окно антидублей должно быть ≥ 1")
-        _range_labels = {
-            "short_pause": "Короткая пауза",
-            "long_pause": "Длинная пауза",
-            "break": "Перерыв",
-            "warmup_start": "Прогрев старт",
-        }
-        for a, b, name in (
-            (self.short_pause_min_sec, self.short_pause_max_sec, "short_pause"),
-            (self.long_pause_min_sec, self.long_pause_max_sec, "long_pause"),
-            (self.break_min_sec, self.break_max_sec, "break"),
-            (self.warmup_start_min, self.warmup_start_max, "warmup_start"),
-        ):
-            label = _range_labels.get(name, name)
-            if a is not None and a < 0:
-                raise ValueError(f"{label}: мин должно быть ≥ 0")
-            if b is not None and b < 0:
-                raise ValueError(f"{label}: макс должно быть ≥ 0")
-            if a is not None and b is not None and a > b:
-                raise ValueError(f"{label}: мин не может быть больше макс")
-        if self.break_after_n is not None and self.break_after_n < 0:
-            raise ValueError("Перерыв после N должен быть ≥ 0")
-        if self.lazy_day_factor is not None and not (0.05 <= self.lazy_day_factor <= 1.0):
-            raise ValueError("Коэффициент ленивого дня должен быть от 0.05 до 1.0")
-        for field, raw, field_ru in (
-            ("send_windows_weekday", self.send_windows_weekday, "Окна будни"),
-            ("send_windows_weekend", self.send_windows_weekend, "Окна выходные"),
-        ):
-            if raw is None:
-                continue
-            s = str(raw).strip()
-            if not s:
-                continue
-            if not _parse_send_windows(s):
-                raise ValueError(
-                    f"{field_ru}: ожидается формат вроде 9-13,16-21 или 09:00-13:00"
+    for key, rt in list(REGISTRY.worker_items()):
+        tid = REGISTRY._tenant_from_key(key)
+        if rt.worker_ctx_snapshot is not None:
+            restore_context(rt.worker_ctx_snapshot)
+            try:
+                await _stop_worker(
+                    finish_status=finish_status,
+                    reason=reason,
+                    tenant_id=tid,
                 )
-        if self.timezone_offset_hours is not None and not (
-            -12.0 <= self.timezone_offset_hours <= 14.0
-        ):
-            raise ValueError("Часовой пояс UTC+ должен быть от -12 до 14")
-        if self.circuit_break_minutes is not None and self.circuit_break_minutes < 1:
-            raise ValueError("Автопауза (мин) должна быть ≥ 1")
-        if self.cooldown_fail_max_hours is not None and self.cooldown_fail_max_hours < 0:
-            raise ValueError("Макс. пауза после ошибки (ч) должна быть ≥ 0")
-        if (
-            self.cooldown_disable_after_fails is not None
-            and self.cooldown_disable_after_fails < 0
-        ):
-            raise ValueError("Отключение после N ошибок должно быть ≥ 0")
-        return self
+            finally:
+                clear_context()
+        else:
+            await _stop_worker(
+                finish_status=finish_status,
+                reason=reason,
+                tenant_id=tid,
+            )
 
 
-class VaultPasswordIn(BaseModel):
-    password: str
+def _build_status_payload() -> dict[str, Any]:
+    with _conn() as c:
+        qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
+        counts = c.execute(
+            "SELECT status, COUNT(*) n FROM profiles GROUP BY status"
+        ).fetchall()
+    messages_total = len(load_message_pool())
+    message_idx = qs["message_idx"] if qs else 0
+    if _campaign_goal() == "daily_limits":
+        progress = _daily_capacity_progress()
+    else:
+        progress = {
+            "goal": "message_pool",
+            "sent": min(message_idx, messages_total),
+            "total": messages_total,
+            "remaining": max(0, messages_total - message_idx),
+            "messages_in_pool": messages_total,
+        }
+    return {
+        "running": bool(qs and qs["running"]),
+        "queue": dict(qs) if qs else {},
+        "profiles": {r["status"]: r["n"] for r in counts},
+        "messages_count": messages_total,
+        "campaign_progress": progress,
+        "campaign_goal": _campaign_goal(),
+        "auto_run": _auto_run_enabled(),
+        "message_pick_mode": _message_pick_mode(),
+        "vault": vault_status(),
+        "circuit_open": _circuit_open_count(),
+        "worker_pool_size": _pool_size(),
+        "db_backend": DB_BACKEND,
+        "log": _log[-80:],
+        "version": APP_VERSION,
+    }
 
 
-class BulkProfilesIn(BaseModel):
-    profiles: list[ProfileIn]
-
-
-class ScheduleIn(BaseModel):
-    start_at: str  # ISO-8601
+def _ws_pin_ok(pin: str) -> bool:
+    stored = get_setting("api_pin").strip()
+    if not stored:
+        return True
+    return _verify_pin(pin or "", stored)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -3757,16 +3912,23 @@ class ApiPinMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global _watchdog_task, _scheduler_task, _backup_task, _shutting_down
+    global _app_started_at
     init_db()
     _load_log_from_db()
     _load_antiban_state()
     _try_legacy_unlock()
     _reset_auth_on_startup()
+    _app_started_at = time.time()
     if not _is_test_mode():
-        _watchdog_task = asyncio.create_task(_watchdog_loop())
-        _scheduler_task = asyncio.create_task(_scheduler_loop())
-        _backup_task = asyncio.create_task(_backup_loop())
+        RUNTIME.watchdog_task = asyncio.create_task(_watchdog_loop())
+        RUNTIME.scheduler_task = asyncio.create_task(_scheduler_loop())
+        RUNTIME.backup_task = asyncio.create_task(_backup_loop())
+        if _is_server_mode():
+            from app.ops_monitor import ops_alert_loop
+            from app.subscription_jobs import subscription_lifecycle_loop
+
+            RUNTIME.ops_alert_task = asyncio.create_task(ops_alert_loop())
+            RUNTIME.subscription_task = asyncio.create_task(subscription_lifecycle_loop())
 
         async def _startup_auto_resume() -> None:
             await asyncio.sleep(2)
@@ -3776,15 +3938,22 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        _shutting_down = True
+        REGISTRY.app.shutting_down = True
         if not _is_test_mode():
-            for task in (_watchdog_task, _scheduler_task, _backup_task):
+            for task in (
+                RUNTIME.watchdog_task,
+                RUNTIME.scheduler_task,
+                RUNTIME.backup_task,
+                RUNTIME.ops_alert_task,
+                RUNTIME.subscription_task,
+            ):
                 if task:
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
-            _watchdog_task = _scheduler_task = _backup_task = None
-        await _stop_worker(finish_status="stopped", reason="Остановка сервера")
+            RUNTIME.watchdog_task = RUNTIME.scheduler_task = RUNTIME.backup_task = None
+            RUNTIME.ops_alert_task = RUNTIME.subscription_task = None
+        await _stop_all_workers(finish_status="stopped", reason="Остановка сервера")
         _encrypt_all_sessions()
 
 
@@ -3810,1127 +3979,8 @@ app = FastAPI(title="MAX Sender", lifespan=lifespan)
 app.add_middleware(ApiPinMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
-
-
-@app.get("/")
-async def index():
-    return FileResponse(STATIC / "index.html")
-
-
-@app.get("/auth.html")
-async def auth_page():
-    return FileResponse(STATIC / "auth.html")
-
-
-@app.get("/admin.html")
-async def admin_page():
-    return FileResponse(STATIC / "admin.html")
-
-
-@app.get("/api/health")
-async def health():
-    try:
-        if _is_server_mode():
-            import server.app.db_pg as db_pg
-
-            db_pg._get_conn().execute("SELECT 1")
-            db_ok = True
-        else:
-            with _conn() as c:
-                c.execute("SELECT 1").fetchone()
-            db_ok = True
-    except Exception:
-        db_ok = False
-    vs = vault_status()
-    return {
-        "ok": db_ok and (vs["unlocked"] or vs["needs_setup"] or vs["legacy"]),
-        "db_ok": db_ok,
-        "server_mode": _is_server_mode(),
-        "worker_running": bool(_worker_task and not _worker_task.done()),
-        "worker_pool_size": _pool_size(),
-        "db_backend": DB_BACKEND,
-        "redis_configured": bool(REDIS_URL),
-        "celery_enabled": USE_CELERY,
-        "vault": vs,
-        "circuit_open": _circuit_open_count(),
-        "version": APP_VERSION,
-    }
-
-
-@app.get("/metrics")
-async def prometheus_metrics():
-    """Prometheus text exposition format."""
-    lines = [
-        "# HELP max_sender_info Build info",
-        "# TYPE max_sender_info gauge",
-        f'max_sender_info{{version="{APP_VERSION}",db="{DB_BACKEND}"}} 1',
-        "# HELP max_sender_messages_sent_total Sent messages",
-        "# TYPE max_sender_messages_sent_total counter",
-        f"max_sender_messages_sent_total {_metrics.get('messages_sent_total', 0):.0f}",
-        "# HELP max_sender_messages_failed_total Failed messages",
-        "# TYPE max_sender_messages_failed_total counter",
-        f"max_sender_messages_failed_total {_metrics.get('messages_failed_total', 0):.0f}",
-        "# HELP max_sender_campaigns_started_total Campaigns started",
-        "# TYPE max_sender_campaigns_started_total counter",
-        f"max_sender_campaigns_started_total {_metrics.get('campaigns_started_total', 0):.0f}",
-        "# HELP max_sender_campaigns_finished_total Campaigns finished",
-        "# TYPE max_sender_campaigns_finished_total counter",
-        f"max_sender_campaigns_finished_total {_metrics.get('campaigns_finished_total', 0):.0f}",
-        "# HELP max_sender_worker_running Worker running flag",
-        "# TYPE max_sender_worker_running gauge",
-        f"max_sender_worker_running {1 if (_worker_task and not _worker_task.done()) else 0}",
-        "# HELP max_sender_worker_pool_size Configured pool size",
-        "# TYPE max_sender_worker_pool_size gauge",
-        f"max_sender_worker_pool_size {_pool_size()}",
-        "# HELP max_sender_circuit_open Profiles in circuit breaker",
-        "# TYPE max_sender_circuit_open gauge",
-        f"max_sender_circuit_open {_circuit_open_count()}",
-        "# HELP max_sender_backups_total DB backups created",
-        "# TYPE max_sender_backups_total counter",
-        f"max_sender_backups_total {_metrics.get('backups_total', 0):.0f}",
-    ]
-    body = "\n".join(lines) + "\n"
-    return PlainTextResponse(body, media_type="text/plain; version=0.0.4; charset=utf-8")
-
-
-@app.get("/api/vault/status")
-async def api_vault_status():
-    return vault_status()
-
-
-@app.post("/api/vault/setup")
-async def api_vault_setup(body: VaultPasswordIn):
-    try:
-        return setup_vault(body.password)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-
-
-@app.post("/api/vault/unlock")
-async def api_vault_unlock(body: VaultPasswordIn):
-    try:
-        unlock_vault(body.password)
-    except ValueError as e:
-        raise HTTPException(401, str(e)) from e
-    return {"ok": True, **vault_status()}
-
-
-@app.post("/api/vault/lock")
-async def api_vault_lock():
-    if vault_status()["legacy"]:
-        raise HTTPException(
-            400,
-            "Старый ключ нельзя заблокировать — сначала защитите хранилище паролем",
-        )
-    if not vault_status()["protected"]:
-        raise HTTPException(400, "Хранилище ещё не защищено")
-    lock_vault()
-    return {"ok": True, **vault_status()}
-
-
-@app.get("/api/status")
-async def status():
-    return _build_status_payload()
-
-
-def _build_status_payload() -> dict[str, Any]:
-    with _conn() as c:
-        qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-        counts = c.execute(
-            "SELECT status, COUNT(*) n FROM profiles GROUP BY status"
-        ).fetchall()
-    messages_total = len(load_message_pool())
-    message_idx = qs["message_idx"] if qs else 0
-    if _campaign_goal() == "daily_limits":
-        progress = _daily_capacity_progress()
-    else:
-        progress = {
-            "goal": "message_pool",
-            "sent": min(message_idx, messages_total),
-            "total": messages_total,
-            "remaining": max(0, messages_total - message_idx),
-            "messages_in_pool": messages_total,
-        }
-    return {
-        "running": bool(qs and qs["running"]),
-        "queue": dict(qs) if qs else {},
-        "profiles": {r["status"]: r["n"] for r in counts},
-        "messages_count": messages_total,
-        "campaign_progress": progress,
-        "campaign_goal": _campaign_goal(),
-        "auto_run": _auto_run_enabled(),
-        "message_pick_mode": _message_pick_mode(),
-        "vault": vault_status(),
-        "circuit_open": _circuit_open_count(),
-        "worker_pool_size": _pool_size(),
-        "db_backend": DB_BACKEND,
-        "log": _log[-80:],
-        "version": APP_VERSION,
-    }
-
-
-def _ws_pin_ok(pin: str) -> bool:
-    stored = get_setting("api_pin").strip()
-    if not stored:
-        return True
-    return _verify_pin(pin or "", stored)
-
-
-@app.websocket("/ws/status")
-async def ws_status(ws: WebSocket):
-    """Пуш статуса ~1/с. PIN: ?pin=… (браузерный WS не шлёт Authorization)."""
-    pin = (ws.query_params.get("pin") or "").strip()
-    if not _ws_pin_ok(pin):
-        await ws.close(code=4401)
-        return
-    await ws.accept()
-    try:
-        while not _shutting_down:
-            await ws.send_json(_build_status_payload())
-            await asyncio.sleep(1.0)
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        with contextlib.suppress(Exception):
-            await ws.close()
-
-
-def _normalize_phone(phone: str) -> str:
-    phone = phone.strip()
-    if not phone.startswith("+"):
-        phone = "+" + phone.lstrip("+")
-    return phone
-
-
-def _ensure_auth_session(profile_id: int) -> dict[str, Any]:
-    if profile_id not in _auth_sessions:
-        _auth_sessions[profile_id] = {
-            "sms_q": asyncio.Queue(),
-            "pwd_q": asyncio.Queue(),
-            "step": "idle",
-            "hint": "",
-        }
-    return _auth_sessions[profile_id]
-
-
-def _set_auth_step(profile_id: int, step: str, hint: str = "") -> None:
-    sess = _ensure_auth_session(profile_id)
-    sess["step"] = step
-    sess["hint"] = hint
-
-
-def _drain_queue(q: asyncio.Queue) -> None:
-    while not q.empty():
-        try:
-            q.get_nowait()
-        except asyncio.QueueEmpty:
-            break
-
-
-def _profile_auth_view(p: sqlite3.Row | dict) -> dict:
-    d = dict(p)
-    sess = _auth_sessions.get(d["id"], {})
-    d["auth_step"] = sess.get("step", "idle")
-    d["auth_hint"] = sess.get("hint", "")
-    d["in_cooldown"] = _is_in_cooldown(d)
-    d["circuit_open"] = _is_circuit_open(int(d["id"]))
-    try:
-        wdays = max(1, int(get_setting("warmup_days") or "7"))
-    except ValueError:
-        wdays = 7
-    age = _profile_age_days(d)
-    d["warmup_day"] = min(age + 1, wdays)
-    d["warmup_active"] = (
-        (get_setting("warmup_enabled") or "1").strip() in ("1", "true", "yes")
-        and age < wdays
-    )
-    return d
-
-
-def _profiles_for_group(c: sqlite3.Connection, group_id: int) -> list[sqlite3.Row]:
-    return c.execute(
-        """
-        SELECT p.*, gp.order_index FROM profiles p
-        JOIN group_profiles gp ON gp.profile_id = p.id
-        WHERE gp.group_id=? AND gp.is_enabled=1
-        ORDER BY gp.order_index, p.id
-        """,
-        (group_id,),
-    ).fetchall()
-
-
-def _delete_profile_if_orphan(profile_id: int) -> None:
-    with _conn() as c:
-        linked = c.execute(
-            "SELECT 1 FROM group_profiles WHERE profile_id=?", (profile_id,)
-        ).fetchone()
-        if linked:
-            return
-        c.execute("DELETE FROM profiles WHERE id=?", (profile_id,))
-    d = SESSIONS / str(profile_id)
-    if d.exists():
-        shutil.rmtree(d, ignore_errors=True)
-    _auth_sessions.pop(profile_id, None)
-
-
-@app.get("/api/profiles")
-async def list_profiles(offset: int = 0, limit: int = 50, q: str = ""):
-    """Только профили, привязанные хотя бы к одной группе."""
-    base = """
-        FROM profiles p
-        WHERE EXISTS (SELECT 1 FROM group_profiles gp WHERE gp.profile_id = p.id)
-    """
-    with _conn() as c:
-        if q:
-            rows = c.execute(
-                f"SELECT p.* {base} AND (p.phone LIKE ? OR p.label LIKE ?) "
-                "ORDER BY p.id LIMIT ? OFFSET ?",
-                (f"%{q}%", f"%{q}%", limit, offset),
-            ).fetchall()
-            total = c.execute(
-                f"SELECT COUNT(*) n {base} AND (p.phone LIKE ? OR p.label LIKE ?)",
-                (f"%{q}%", f"%{q}%"),
-            ).fetchone()["n"]
-        else:
-            rows = c.execute(
-                f"SELECT p.* {base} ORDER BY p.id LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
-            total = c.execute(f"SELECT COUNT(*) n {base}").fetchone()["n"]
-    return {"items": [dict(r) for r in rows], "total": total}
-
-
-@app.get("/api/profiles/{profile_id}")
-async def get_profile(profile_id: int):
-    with _conn() as c:
-        p = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
-    if not p:
-        raise HTTPException(404, "Профиль не найден")
-    return _profile_auth_view(p)
-
-
-@app.patch("/api/profiles/{profile_id}")
-async def patch_profile(profile_id: int, body: ProfilePatchIn):
-    data = body.model_dump(exclude_unset=True)
-    if not data:
-        raise HTTPException(400, "Нечего обновлять")
-    with _conn() as c:
-        p = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
-        if not p:
-            raise HTTPException(404, "Профиль не найден")
-        if "label" in data:
-            c.execute(
-                "UPDATE profiles SET label=? WHERE id=?",
-                (str(data["label"] or "").strip(), profile_id),
-            )
-        if "proxy" in data:
-            proxy = str(data["proxy"] or "").strip()
-            c.execute(
-                "UPDATE profiles SET proxy=? WHERE id=?",
-                (proxy, profile_id),
-            )
-            append_log(
-                f"Прокси #{profile_id}: {'задан' if proxy else 'очищен'}"
-            )
-        p2 = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
-    return _profile_auth_view(p2)
-
-
-@app.post("/api/profiles/{profile_id}/login/reset")
-async def reset_login(profile_id: int):
-    """Сброс зависшего входа и удаление сессии."""
-    task = _login_tasks.get(profile_id)
-    if task and not task.done():
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-    _clear_session(profile_id)
-    sess = _ensure_auth_session(profile_id)
-    _drain_queue(sess["sms_q"])
-    _drain_queue(sess["pwd_q"])
-    _set_auth_step(profile_id, "idle")
-    with _conn() as c:
-        c.execute(
-            "UPDATE profiles SET status=?, last_error='' WHERE id=?",
-            (ProfileStatus.PENDING, profile_id),
-        )
-    return {"ok": True}
-
-
-@app.post("/api/profiles/{profile_id}/login")
-async def login_profile(
-    profile_id: int, fresh: bool = False, group_id: int | None = None
-):
-    _require_vault_unlocked()
-    with _conn() as c:
-        p = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
-    if not p:
-        raise HTTPException(404, "Профиль не найден")
-    if group_id is not None:
-        with _conn() as c:
-            linked = c.execute(
-                "SELECT 1 FROM group_profiles WHERE group_id=? AND profile_id=?",
-                (group_id, profile_id),
-            ).fetchone()
-        if not linked:
-            raise HTTPException(400, "Профиль не состоит в этой группе")
-
-    task = _login_tasks.get(profile_id)
-    if task and not task.done():
-        sess = _ensure_auth_session(profile_id)
-        return {
-            "ok": True,
-            "message": "Вход уже выполняется",
-            "auth_step": sess["step"],
-            "auth_hint": sess.get("hint", ""),
-        }
-
-    sess = _ensure_auth_session(profile_id)
-    _drain_queue(sess["sms_q"])
-    _drain_queue(sess["pwd_q"])
-    _set_auth_step(profile_id, "connecting")
-
-    async def _login():
-        try:
-            me_id = None
-            try:
-                me_id = await _login_max(
-                    profile_id, p["phone"], fresh=fresh, group_id=group_id
-                )
-            except Exception:
-                if not fresh:
-                    append_log(f"Профиль #{profile_id}: сессия не подошла, повтор по SMS…")
-                    me_id = await _login_max(
-                        profile_id, p["phone"], fresh=True, group_id=group_id
-                    )
-                else:
-                    raise
-            with _conn() as c:
-                c.execute(
-                    "UPDATE profiles SET status=?, last_error='' WHERE id=?",
-                    (ProfileStatus.ACTIVE, profile_id),
-                )
-            _clear_cooldown(profile_id)
-            _set_auth_step(profile_id, "idle")
-            append_log(f"Профиль #{profile_id} авторизован (id={me_id})")
-        except Exception as e:
-            err = str(e)
-            with _conn() as c:
-                c.execute(
-                    "UPDATE profiles SET status=?, last_error=? WHERE id=?",
-                    (ProfileStatus.NEEDS_REAUTH, err, profile_id),
-                )
-            _set_auth_step(profile_id, "error")
-            append_log(f"Ошибка входа #{profile_id}: {err}")
-        finally:
-            if _auth_sessions.get(profile_id, {}).get("step") == "connecting":
-                _set_auth_step(profile_id, "idle")
-
-    _login_tasks[profile_id] = asyncio.create_task(_login())
-    msg = (
-        "Новый вход: дождитесь SMS → код → OK. Облачный пароль — если MAX запросит."
-        if fresh
-        else "Вход запущен. Если придёт SMS — введите код → OK."
-    )
-    return {"ok": True, "message": msg, "auth_step": "connecting"}
-
-
-@app.post("/api/profiles/{profile_id}/sms")
-async def submit_sms(profile_id: int, body: CodeIn):
-    sess = _auth_sessions.get(profile_id)
-    if not sess:
-        raise HTTPException(404, "Сначала нажмите «Войти»")
-    code = body.code.strip()
-    if not code:
-        raise HTTPException(400, "Введите SMS-код")
-    await sess["sms_q"].put(code)
-    _set_auth_step(profile_id, "verifying_sms")
-    return {"ok": True, "message": "Код отправлен"}
-
-
-@app.post("/api/profiles/{profile_id}/password")
-async def submit_password(profile_id: int, body: CodeIn):
-    sess = _auth_sessions.get(profile_id)
-    if not sess:
-        raise HTTPException(404, "Сначала нажмите «Войти»")
-    code = body.code.strip()
-    if not code:
-        raise HTTPException(400, "Введите облачный пароль")
-    await sess["pwd_q"].put(code)
-    _set_auth_step(profile_id, "verifying_password")
-    return {"ok": True}
-
-
-@app.patch("/api/profiles/{profile_id}/disable")
-async def disable_profile(profile_id: int):
-    with _conn() as c:
-        c.execute(
-            "UPDATE profiles SET status=? WHERE id=?",
-            (ProfileStatus.DISABLED, profile_id),
-        )
-    return {"ok": True}
-
-
-@app.get("/api/groups")
-async def list_groups():
-    with _conn() as c:
-        rows = c.execute(
-            """
-            SELECT g.*,
-                   COUNT(CASE WHEN gp.is_enabled=1 AND p.status=? THEN 1 END) AS active_count,
-                   COUNT(CASE WHEN gp.is_enabled=1 THEN 1 END) AS profiles_count
-            FROM groups g
-            LEFT JOIN group_profiles gp ON gp.group_id = g.id
-            LEFT JOIN profiles p ON p.id = gp.profile_id
-            GROUP BY g.id
-            ORDER BY g.id
-            """,
-            (ProfileStatus.ACTIVE,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-@app.get("/api/groups/{group_id}/profiles")
-async def list_group_profiles(group_id: int, offset: int = 0, limit: int = 20):
-    with _conn() as c:
-        if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
-            raise HTTPException(404, "Группа не найдена")
-        total = c.execute(
-            "SELECT COUNT(*) n FROM group_profiles WHERE group_id=? AND is_enabled=1",
-            (group_id,),
-        ).fetchone()["n"]
-        rows = c.execute(
-            """
-            SELECT p.*, gp.order_index FROM profiles p
-            JOIN group_profiles gp ON gp.profile_id = p.id
-            WHERE gp.group_id=? AND gp.is_enabled=1
-            ORDER BY gp.order_index, p.id
-            LIMIT ? OFFSET ?
-            """,
-            (group_id, min(max(limit, 1), 100), max(offset, 0)),
-        ).fetchall()
-    items = [_profile_auth_view(p) for p in rows]
-    return {"items": items, "total": total, "offset": offset, "limit": limit}
-
-
-@app.post("/api/groups")
-async def add_group(body: GroupIn):
-    invite = (body.invite_link or "").strip()
-    if not invite:
-        raise HTTPException(400, "Укажите пригласительную ссылку группы")
-    proxy = "" if _is_server_mode() else (body.proxy or "").strip()
-    with _conn() as c:
-        cur = c.execute(
-            "INSERT INTO groups (name, max_chat_id, invite_link, proxy) VALUES (?, ?, ?, ?)",
-            (
-                body.name,
-                "",
-                invite,
-                proxy,
-            ),
-        )
-        gid = cur.lastrowid
-    return {"id": gid}
-
-
-@app.patch("/api/groups/{group_id}")
-async def patch_group(group_id: int, body: GroupPatchIn):
-    data = body.model_dump(exclude_unset=True)
-    if not data:
-        raise HTTPException(400, "Нечего обновлять")
-    if _is_server_mode() and "proxy" in data:
-        data.pop("proxy")
-    if "max_chat_id" in data:
-        data.pop("max_chat_id")
-    with _conn() as c:
-        if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
-            raise HTTPException(404, "Группа не найдена")
-        if "name" in data and data["name"] is not None:
-            c.execute(
-                "UPDATE groups SET name=? WHERE id=?",
-                (str(data["name"]).strip(), group_id),
-            )
-        if "max_chat_id" in data:
-            c.execute(
-                "UPDATE groups SET max_chat_id=? WHERE id=?",
-                (str(data["max_chat_id"] or "").strip(), group_id),
-            )
-        if "invite_link" in data:
-            c.execute(
-                "UPDATE groups SET invite_link=? WHERE id=?",
-                (str(data["invite_link"] or "").strip(), group_id),
-            )
-        if "proxy" in data:
-            proxy = str(data["proxy"] or "").strip()
-            c.execute("UPDATE groups SET proxy=? WHERE id=?", (proxy, group_id))
-            append_log(
-                f"Прокси группы #{group_id}: {'задан' if proxy else 'очищен'}"
-            )
-        row = c.execute("SELECT * FROM groups WHERE id=?", (group_id,)).fetchone()
-    return dict(row)
-
-
-@app.post("/api/groups/{group_id}/profiles")
-async def add_group_profile(group_id: int, body: ProfileIn):
-    phone = _normalize_phone(body.phone)
-    with _conn() as c:
-        g = c.execute("SELECT id FROM groups WHERE id=?", (group_id,)).fetchone()
-        if not g:
-            raise HTTPException(404, "Группа не найдена")
-
-        row = c.execute("SELECT * FROM profiles WHERE phone=?", (phone,)).fetchone()
-        if row:
-            pid = row["id"]
-            linked = c.execute(
-                "SELECT 1 FROM group_profiles WHERE group_id=? AND profile_id=?",
-                (group_id, pid),
-            ).fetchone()
-            if linked:
-                raise HTTPException(400, "Этот номер уже в группе")
-        else:
-            cur = c.execute(
-                "INSERT INTO profiles (phone, label, status, proxy) VALUES (?, ?, ?, ?)",
-                (
-                    phone,
-                    body.label.strip(),
-                    ProfileStatus.PENDING,
-                    (body.proxy or "").strip(),
-                ),
-            )
-            pid = cur.lastrowid
-        if body.proxy is not None and str(body.proxy).strip() != "":
-            c.execute(
-                "UPDATE profiles SET proxy=? WHERE id=?",
-                (body.proxy.strip(), pid),
-            )
-
-        n = c.execute(
-            "SELECT COALESCE(MAX(order_index), -1) n FROM group_profiles WHERE group_id=?",
-            (group_id,),
-        ).fetchone()["n"]
-        c.execute(
-            "INSERT INTO group_profiles (group_id, profile_id, order_index) VALUES (?, ?, ?)",
-            (group_id, pid, n + 1),
-        )
-
-    _ensure_auth_session(pid)
-    append_log(f"Профиль {phone} добавлен в группу #{group_id}")
-    return {"id": pid, "phone": phone, "group_id": group_id}
-
-
-@app.post("/api/groups/{group_id}/profiles/bulk")
-async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
-    """Импорт phone,label. Пропускает уже существующие в группе."""
-    if not body.profiles:
-        raise HTTPException(400, "Список профилей пуст")
-    if len(body.profiles) > 2000:
-        raise HTTPException(400, "Максимум 2000 профилей за раз")
-
-    added, skipped, errors = [], [], []
-    with _conn() as c:
-        if not c.execute("SELECT id FROM groups WHERE id=?", (group_id,)).fetchone():
-            raise HTTPException(404, "Группа не найдена")
-        order_n = c.execute(
-            "SELECT COALESCE(MAX(order_index), -1) n FROM group_profiles WHERE group_id=?",
-            (group_id,),
-        ).fetchone()["n"]
-
-        for item in body.profiles:
-            try:
-                phone = _normalize_phone(item.phone)
-                if len(phone) < 8:
-                    errors.append({"phone": item.phone, "error": "Некорректный номер"})
-                    continue
-                row = c.execute(
-                    "SELECT * FROM profiles WHERE phone=?", (phone,)
-                ).fetchone()
-                if row:
-                    pid = row["id"]
-                    linked = c.execute(
-                        "SELECT 1 FROM group_profiles WHERE group_id=? AND profile_id=?",
-                        (group_id, pid),
-                    ).fetchone()
-                    if linked:
-                        skipped.append(phone)
-                        continue
-                else:
-                    cur = c.execute(
-                        "INSERT INTO profiles (phone, label, status, proxy) VALUES (?, ?, ?, ?)",
-                        (
-                            phone,
-                            (item.label or "").strip(),
-                            ProfileStatus.PENDING,
-                            (item.proxy or "").strip(),
-                        ),
-                    )
-                    pid = cur.lastrowid
-                if (item.proxy or "").strip():
-                    c.execute(
-                        "UPDATE profiles SET proxy=? WHERE id=?",
-                        (item.proxy.strip(), pid),
-                    )
-                order_n += 1
-                c.execute(
-                    "INSERT INTO group_profiles (group_id, profile_id, order_index) "
-                    "VALUES (?, ?, ?)",
-                    (group_id, pid, order_n),
-                )
-                added.append({"id": pid, "phone": phone})
-            except Exception as e:
-                errors.append({"phone": getattr(item, "phone", "?"), "error": str(e)})
-
-    for a in added:
-        _ensure_auth_session(a["id"])
-    append_log(
-        f"Массовый импорт в группу #{group_id}: +{len(added)}, пропуск {len(skipped)}, "
-        f"ошибок {len(errors)}"
-    )
-    return {
-        "added": len(added),
-        "skipped": len(skipped),
-        "errors": errors[:50],
-        "items": added,
-    }
-
-
-@app.delete("/api/groups/{group_id}")
-async def delete_group(group_id: int):
-    with _conn() as c:
-        if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
-            raise HTTPException(404, "Группа не найдена")
-        pids = [
-            r["profile_id"]
-            for r in c.execute(
-                "SELECT profile_id FROM group_profiles WHERE group_id=?", (group_id,)
-            ).fetchall()
-        ]
-        c.execute("DELETE FROM group_profiles WHERE group_id=?", (group_id,))
-        c.execute("DELETE FROM groups WHERE id=?", (group_id,))
-    for pid in pids:
-        _delete_profile_if_orphan(pid)
-    append_log(f"Группа #{group_id} удалена")
-    return {"ok": True}
-
-
-@app.delete("/api/groups/{group_id}/profiles/{profile_id}")
-async def remove_group_profile(group_id: int, profile_id: int):
-    with _conn() as c:
-        row = c.execute(
-            "SELECT 1 FROM group_profiles WHERE group_id=? AND profile_id=?",
-            (group_id, profile_id),
-        ).fetchone()
-        if not row:
-            raise HTTPException(404, "Профиль не в этой группе")
-        c.execute(
-            "DELETE FROM group_profiles WHERE group_id=? AND profile_id=?",
-            (group_id, profile_id),
-        )
-    _delete_profile_if_orphan(profile_id)
-    append_log(f"Профиль #{profile_id} удалён из группы #{group_id}")
-    return {"ok": True}
-
-
-@app.get("/api/messages")
-async def get_messages():
-    msgs = load_message_pool()
-    meta = {}
-    if MESSAGES_FILE.exists():
-        meta["file"] = "active.txt"
-        meta["size"] = MESSAGES_FILE.stat().st_size
-    with _conn() as c:
-        row = c.execute("SELECT loaded_at FROM message_pool LIMIT 1").fetchone()
-        if row:
-            meta["loaded_at"] = row["loaded_at"]
-    return {"count": len(msgs), "messages": msgs, "meta": meta}
-
-
-@app.post("/api/messages/upload")
-async def upload_messages(file: UploadFile = File(...)):
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "Файл слишком большой (максимум 5 МБ)")
-    try:
-        n = save_messages_file(content)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    append_log(f"Загружено {n} сообщений")
-    return {"count": n}
-
-
-@app.get("/api/settings")
-async def get_settings():
-    hide = {"api_pin", "telegram_bot_token"}
-    out = {k: get_setting(k) for k in DEFAULTS if k not in hide}
-    out["api_pin_set"] = _pin_is_set()
-    out["telegram_bot_token_set"] = bool(get_setting("telegram_bot_token").strip())
-    out["vault"] = vault_status()
-    with _conn() as c:
-        sched = c.execute("SELECT * FROM campaign_schedule WHERE id=1").fetchone()
-    out["schedule"] = dict(sched) if sched else {"enabled": 0, "start_at": None}
-    return out
-
-
-@app.put("/api/settings")
-async def update_settings(body: SettingsIn):
-    data = body.model_dump(exclude_unset=True)
-    if "api_pin" in data:
-        pin = data.pop("api_pin")
-        if pin is None or str(pin).strip() == "":
-            set_setting("api_pin", "")
-        else:
-            set_setting("api_pin", _hash_pin(str(pin).strip()))
-    if "telegram_bot_token" in data:
-        tok = data.pop("telegram_bot_token")
-        if tok is None or str(tok).strip() == "":
-            pass  # не затираем пустой строкой случайно — только явное
-        else:
-            set_setting("telegram_bot_token", str(tok).strip())
-    prev_mode = _message_pick_mode()
-    for field, val in data.items():
-        set_setting(field, "" if val is None else str(val))
-    # legacy-поле = верхняя граница дневного лимита
-    if "daily_limit_max" in data and "max_msgs_per_profile_day" not in data:
-        set_setting("max_msgs_per_profile_day", str(data["daily_limit_max"]))
-    if "message_pick_mode" in data and data["message_pick_mode"] != prev_mode:
-        qs_mi = 0
-        with _conn() as c:
-            row = c.execute("SELECT message_idx FROM queue_state WHERE id=1").fetchone()
-            qs_mi = int(row["message_idx"] if row else 0)
-        if qs_mi == 0:
-            _rebuild_message_bag()
-    return {"ok": True}
-
-
-@app.get("/api/settings/audit")
-async def settings_audit(limit: int = 50):
-    limit = min(max(limit, 1), 200)
-    with _conn() as c:
-        rows = c.execute(
-            "SELECT * FROM settings_audit ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return {"items": [dict(r) for r in rows]}
-
-
-@app.post("/api/campaign/start")
-async def campaign_start():
-    _require_vault_unlocked()
-    messages = load_message_pool()
-    if not messages:
-        raise HTTPException(400, "Сначала загрузите файл сообщений")
-    if not _active_groups():
-        raise HTTPException(400, "Создайте хотя бы одну группу")
-    if not _has_active_profiles():
-        raise HTTPException(400, "Нет активных профилей — войдите в аккаунты")
-    if not _has_sendable_profile():
-        raise HTTPException(
-            400,
-            "Некому отправлять: все профили исчерпали дневной лимит или не авторизованы",
-        )
-    set_setting("auto_run", "1")
-    await _start_worker()
-    return {"ok": True, "campaign_id": _current_campaign_id}
-
-
-@app.post("/api/campaign/stop")
-async def campaign_stop():
-    set_setting("auto_run", "0")
-    await _stop_worker(finish_status="stopped", reason="Остановлено пользователем")
-    return {"ok": True}
-
-
-@app.post("/api/campaign/pause")
-async def campaign_pause():
-    """Остановить без сброса индексов."""
-    await _stop_worker(finish_status="paused", reason="Пауза")
-    append_log("Рассылка на паузе")
-    return {"ok": True}
-
-
-@app.post("/api/campaign/reset")
-async def campaign_reset():
-    """Сбросить прогресс — начать рассылку с начала."""
-    if _worker_task and not _worker_task.done():
-        raise HTTPException(400, "Остановите рассылку перед сбросом прогресса")
-    _reset_queue_progress()
-    append_log("Прогресс рассылки сброшен")
-    return {"ok": True}
-
-
-@app.post("/api/campaign/schedule")
-async def campaign_schedule(body: ScheduleIn):
-    """Запланировать старт. start_at — ISO-8601 (UTC или с offset)."""
-    try:
-        start_at = _parse_iso_datetime(body.start_at)
-    except ValueError as e:
-        raise HTTPException(400, f"Некорректная дата: {e}") from e
-    if start_at <= datetime.now(timezone.utc):
-        raise HTTPException(400, "Время старта должно быть в будущем")
-    iso = start_at.isoformat()
-    with _conn() as c:
-        c.execute(
-            "UPDATE campaign_schedule SET start_at=?, enabled=1, "
-            "created_at=datetime('now') WHERE id=1",
-            (iso,),
-        )
-    append_log(f"Рассылка запланирована на {iso}")
-    return {"ok": True, "start_at": iso, "enabled": True}
-
-
-@app.delete("/api/campaign/schedule")
-async def campaign_schedule_cancel():
-    with _conn() as c:
-        c.execute(
-            "UPDATE campaign_schedule SET enabled=0, start_at=NULL WHERE id=1"
-        )
-    append_log("Расписание отменено")
-    return {"ok": True}
-
-
-@app.get("/api/campaign/schedule")
-async def campaign_schedule_get():
-    with _conn() as c:
-        row = c.execute("SELECT * FROM campaign_schedule WHERE id=1").fetchone()
-    return dict(row) if row else {"enabled": 0, "start_at": None}
-
-
-@app.post("/api/campaign/retry_failed")
-async def campaign_retry_failed():
-    """Повторить сообщения, у которых есть failed и нет успешного sent."""
-    _require_vault_unlocked()
-    if _worker_task and not _worker_task.done():
-        raise HTTPException(400, "Сначала остановите текущую рассылку")
-    with _conn() as c:
-        row = c.execute(
-            """
-            SELECT MIN(sl.message_idx) AS mi
-            FROM send_log sl
-            WHERE sl.status='failed'
-              AND NOT EXISTS (
-                SELECT 1 FROM send_log s2
-                WHERE s2.message_idx = sl.message_idx AND s2.status='sent'
-              )
-            """
-        ).fetchone()
-    if row is None or row["mi"] is None:
-        raise HTTPException(400, "Нет ошибочных сообщений для повтора")
-    mi = int(row["mi"])
-    with _conn() as c:
-        c.execute(
-            "UPDATE queue_state SET message_idx=?, profile_idx=0, group_idx=0 WHERE id=1",
-            (mi,),
-        )
-    append_log(f"Повтор ошибок: продолжение с индекса={mi}")
-    if not _has_sendable_profile():
-        raise HTTPException(400, "Нет доступных профилей для отправки")
-    await _start_worker()
-    return {"ok": True, "message_idx": mi, "campaign_id": _current_campaign_id}
-
-
-@app.post("/api/campaign/test")
-async def campaign_test():
-    """Тестовая отправка первого сообщения первым активным профилем."""
-    _require_vault_unlocked()
-    messages = load_message_pool()
-    if not messages:
-        raise HTTPException(400, "Нет сообщений")
-    groups = _active_groups()
-    if not groups:
-        raise HTTPException(400, "Нет групп")
-    profile = None
-    group = None
-    for g in groups:
-        profiles = _active_profiles_for_group(g["id"])
-        for p in profiles:
-            if _is_circuit_open(p["id"]):
-                continue
-            if _can_send_in_group(p, g["id"]):
-                profile, group = p, g
-                break
-        if profile:
-            break
-    if not profile or not group:
-        raise HTTPException(400, "Нет активного профиля для теста")
-    text = messages[0]
-    ok = await _send_with_retry(profile, group, text, 0, 0, 0, 0)
-    # тест не должен двигать прогресс кампании — откатим индексы если сдвинулись
-    # _send_with_retry при успехе пишет message_idx=0 next... actually mi_next=0 means stays?
-    # We passed mi_next=0, so it sets message_idx=0. OK.
-    if not ok:
-        raise HTTPException(502, "Тест не удался — смотрите лог / нужен повторный вход")
-    append_log(f"Тест отправки успешен #{profile['id']} → «{group['name']}»")
-    return {
-        "ok": True,
-        "profile_id": profile["id"],
-        "phone": profile["phone"],
-        "group_id": group["id"],
-        "text_preview": text[:80],
-    }
-
-
-@app.get("/api/campaigns")
-async def list_campaigns(limit: int = 50):
-    limit = min(max(limit, 1), 200)
-    with _conn() as c:
-        rows = c.execute(
-            "SELECT * FROM campaigns ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return {"items": [dict(r) for r in rows]}
-
-
-@app.post("/api/backup")
-async def api_backup_now():
-    path = backup_database()
-    if not path:
-        raise HTTPException(500, "Не удалось создать резервную копию")
-    return {"ok": True, "file": path.name}
-
-
-@app.get("/api/backups")
-async def api_list_backups():
-    BACKUPS.mkdir(parents=True, exist_ok=True)
-    files = sorted(BACKUPS.glob("app-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return {
-        "items": [
-            {
-                "file": f.name,
-                "size": f.stat().st_size,
-                "mtime": datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="seconds"),
-            }
-            for f in files[:50]
-        ]
-    }
-
-
-@app.get("/api/log")
-async def get_log():
-    return {"lines": _log[-200:]}
-
-
-@app.get("/api/dashboard")
-async def dashboard():
-    """Сводка по всем профилям и группам для вкладки Dashboard."""
-    with _conn() as c:
-        counts = c.execute(
-            "SELECT status, COUNT(*) n FROM profiles "
-            "WHERE EXISTS (SELECT 1 FROM group_profiles gp WHERE gp.profile_id = profiles.id) "
-            "GROUP BY status"
-        ).fetchall()
-        profiles = c.execute(
-            """
-            SELECT p.*,
-                   GROUP_CONCAT(g.name, ', ') AS group_names,
-                   MIN(g.id) AS primary_group_id
-            FROM profiles p
-            JOIN group_profiles gp ON gp.profile_id = p.id AND gp.is_enabled=1
-            JOIN groups g ON g.id = gp.group_id
-            GROUP BY p.id
-            ORDER BY
-              CASE p.status
-                WHEN 'needs_reauth' THEN 0
-                WHEN 'pending' THEN 1
-                WHEN 'active' THEN 2
-                ELSE 3
-              END,
-              p.id
-            LIMIT 500
-            """
-        ).fetchall()
-        groups_n = c.execute("SELECT COUNT(*) n FROM groups").fetchone()["n"]
-        sent_today = c.execute(
-            "SELECT COUNT(*) n FROM send_log WHERE date(sent_at)=date('now') AND status='sent'"
-        ).fetchone()["n"]
-        failed_today = c.execute(
-            "SELECT COUNT(*) n FROM send_log WHERE date(sent_at)=date('now') AND status='failed'"
-        ).fetchone()["n"]
-        qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-    items = []
-    for p in profiles:
-        d = _profile_auth_view(p)
-        d["circuit_open"] = _is_circuit_open(p["id"])
-        items.append(d)
-    if _campaign_goal() == "daily_limits":
-        prog = _daily_capacity_progress()
-    else:
-        msgs = len(load_message_pool())
-        mi = int(qs["message_idx"] if qs else 0)
-        prog = {
-            "goal": "message_pool",
-            "sent": min(mi, msgs),
-            "total": msgs,
-            "remaining": max(0, msgs - mi),
-        }
-    return {
-        "counts": {r["status"]: r["n"] for r in counts},
-        "groups_count": groups_n,
-        "sent_today": sent_today,
-        "failed_today": failed_today,
-        "circuit_open": _circuit_open_count(),
-        "running": bool(qs and qs["running"]),
-        "auto_run": _auto_run_enabled(),
-        "campaign_progress": prog,
-        "items": items,
-    }
-
-
-@app.get("/api/send_log")
-async def get_send_log(
-    offset: int = 0,
-    limit: int = 50,
-    q: str = "",
-    status: str = "",
-):
-    limit = min(max(limit, 1), 200)
-    offset = max(offset, 0)
-    where = ["1=1"]
-    params: list[Any] = []
-    if status.strip():
-        where.append("sl.status = ?")
-        params.append(status.strip())
-    if q.strip():
-        where.append(
-            "(p.phone LIKE ? OR p.label LIKE ? OR g.name LIKE ? OR sl.error LIKE ? "
-            "OR CAST(sl.profile_id AS TEXT) LIKE ?)"
-        )
-        like = f"%{q.strip()}%"
-        params.extend([like, like, like, like, like])
-    where_sql = " AND ".join(where)
-    with _conn() as c:
-        total = c.execute(
-            f"""
-            SELECT COUNT(*) n
-            FROM send_log sl
-            LEFT JOIN profiles p ON p.id = sl.profile_id
-            LEFT JOIN groups g ON g.id = sl.group_id
-            WHERE {where_sql}
-            """,
-            params,
-        ).fetchone()["n"]
-        rows = c.execute(
-            f"""
-            SELECT sl.*, p.phone, p.label, g.name AS group_name
-            FROM send_log sl
-            LEFT JOIN profiles p ON p.id = sl.profile_id
-            LEFT JOIN groups g ON g.id = sl.group_id
-            WHERE {where_sql}
-            ORDER BY sl.id DESC
-            LIMIT ? OFFSET ?
-            """,
-            [*params, limit, offset],
-        ).fetchall()
-    return {
-        "items": [dict(r) for r in rows],
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "q": q,
-        "status": status,
-    }
-
-
 try:
-    from server.app.register import register_server
+    from app.register import register_server
 
     register_server(app)
 except ImportError:
@@ -4942,10 +3992,9 @@ if __name__ == "__main__":
     init_db()
 
     def _handle_signal(signum, _frame):
-        global _shutting_down
-        if _shutting_down:
+        if REGISTRY.app.shutting_down:
             return
-        _shutting_down = True
+        REGISTRY.app.shutting_down = True
         append_log(f"Сигнал {signum}: шифрование сессий и выход…")
         _encrypt_all_sessions()
         sys.exit(0)

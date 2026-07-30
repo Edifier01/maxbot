@@ -1,0 +1,82 @@
+"""Auth rate limit: Redis INCR when REDIS_URL set, else in-memory (single replica)."""
+
+from __future__ import annotations
+
+import os
+import time
+from collections import defaultdict
+
+_redis_client = None
+_redis_failed = False
+
+
+def auth_rate_limit_config() -> tuple[int, float]:
+    try:
+        limit = int(os.environ.get("AUTH_RATE_LIMIT", "10") or "10")
+    except ValueError:
+        limit = 10
+    try:
+        window = float(os.environ.get("AUTH_RATE_WINDOW_SEC", "900") or "900")
+    except ValueError:
+        window = 900.0
+    return max(1, limit), max(60.0, window)
+
+
+def _get_redis():
+    global _redis_client, _redis_failed
+    if _redis_failed:
+        return None
+    url = os.environ.get("REDIS_URL", "").strip()
+    if not url:
+        return None
+    if _redis_client is not None:
+        return _redis_client
+    try:
+        import redis
+
+        _redis_client = redis.from_url(url, decode_responses=True)
+        _redis_client.ping()
+        return _redis_client
+    except Exception:
+        _redis_failed = True
+        _redis_client = None
+        return None
+
+
+def check_auth_rate_limit(key: str, limit: int, window: float) -> bool:
+    """Return True if request allowed, False if over cap."""
+    r = _get_redis()
+    if r is not None:
+        try:
+            count = r.incr(key)
+            if count == 1:
+                r.expire(key, int(window))
+            return count <= limit
+        except Exception:
+            pass
+    return _memory_check(key, limit, window)
+
+
+_memory: dict[str, list[float]] = defaultdict(list)
+
+
+def _memory_check(key: str, limit: int, window: float) -> bool:
+    now = time.monotonic()
+    bucket = [t for t in _memory[key] if now - t < window]
+    if len(bucket) >= limit:
+        _memory[key] = bucket
+        return False
+    bucket.append(now)
+    _memory[key] = bucket
+    return True
+
+
+def reset_memory_limits() -> None:
+    _memory.clear()
+
+
+def reset_for_tests() -> None:
+    global _redis_client, _redis_failed
+    _redis_client = None
+    _redis_failed = False
+    _memory.clear()

@@ -1,4 +1,4 @@
-"""Admin API: пользователи, подписки, impersonation, proxy."""
+﻿"""Admin API: пользователи, подписки, impersonation, proxy."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from server.app import auth, db_pg
-from server.app.tenant import get_user_id, is_admin
+from app import auth, db_pg
+from app.tenant import get_user_id, is_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -31,6 +31,27 @@ def _require_admin() -> int:
     if uid is None:
         raise HTTPException(401, "Требуется вход")
     return uid
+
+
+@router.get("/subscriptions/expiring")
+async def list_expiring(days: int = 7):
+    _require_admin()
+    days = max(1, min(days, 90))
+    items = []
+    for row in db_pg.list_expiring_subscriptions(within_days=days):
+        exp = row["expires_at"]
+        items.append(
+            {
+                "tenant_id": row["tenant_id"],
+                "institution_name": row["institution_name"],
+                "email": row["email"],
+                "expires_at": exp.isoformat()
+                if hasattr(exp, "isoformat")
+                else str(exp),
+                "days_left": int(row["days_left"] or 0),
+            }
+        )
+    return {"items": items, "within_days": days}
 
 
 @router.get("/users")
@@ -110,7 +131,7 @@ async def impersonate(tenant_id: int):
 
     import main as app_main
 
-    from server.app.tenant_init import init_tenant_db
+    from app.tenant_init import init_tenant_db
 
     init_tenant_db(app_main, tenant_id)
 
@@ -137,13 +158,9 @@ async def impersonate(tenant_id: int):
 @router.put("/tenants/{tenant_id}/groups/{group_id}/proxy")
 async def set_group_proxy(tenant_id: int, group_id: int, body: ProxyIn):
     _require_admin()
-    import main as app_main
-    from server.app.tenant import set_context
+    from app.tenant_sqlite import tenant_conn
 
-    set_context(tenant_id=tenant_id, role="admin", use_global_data=False)
-    app_main._refresh_data_paths()
-    app_main._reset_db_conn()
-    with app_main._conn() as c:
+    with tenant_conn(tenant_id, use_global_data=False) as c:
         row = c.execute("SELECT id FROM groups WHERE id=?", (group_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Группа не найдена")
@@ -154,13 +171,9 @@ async def set_group_proxy(tenant_id: int, group_id: int, body: ProxyIn):
 @router.get("/tenants/{tenant_id}/stats")
 async def tenant_stats(tenant_id: int):
     _require_admin()
-    import main as app_main
-    from server.app.tenant import set_context
+    from app.tenant_sqlite import tenant_conn
 
-    set_context(tenant_id=tenant_id, role="admin")
-    app_main._refresh_data_paths()
-    app_main._reset_db_conn()
-    with app_main._conn() as c:
+    with tenant_conn(tenant_id) as c:
         profiles = c.execute("SELECT COUNT(*) AS n FROM profiles").fetchone()["n"]
         groups = c.execute("SELECT COUNT(*) AS n FROM groups").fetchone()["n"]
         sent = c.execute(

@@ -1,12 +1,12 @@
-"""Auth API: регистрация, вход, профиль."""
+﻿"""Auth API: регистрация, вход, профиль."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 
-from server.app import auth, db_pg
-from server.app.config import is_server_mode
+from app import auth, db_pg
+from app.config import is_server_mode
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -56,12 +56,19 @@ async def register(body: RegisterIn):
 
     import main as app_main
 
-    from server.app.tenant_init import init_tenant_db
+    from app.tenant_init import init_tenant_db, rollback_tenant_registration
 
-    init_tenant_db(app_main, info["tenant_id"])
+    try:
+        init_tenant_db(app_main, info["tenant_id"])
+    except Exception:
+        rollback_tenant_registration(info["tenant_id"], app_main.ROOT)
+        raise HTTPException(
+            500, "Не удалось инициализировать кабинет. Попробуйте позже."
+        ) from None
 
     user = db_pg.get_user_by_id(info["user_id"])
-    assert user
+    if not user:
+        raise HTTPException(500, "Не удалось создать пользователя")
     return _token_response(user)
 
 
@@ -76,18 +83,42 @@ async def login(body: LoginIn):
     if user.get("tenant_id"):
         import main as app_main
 
-        from server.app.tenant_init import init_tenant_db
+        from app.tenant_init import init_tenant_db
 
         init_tenant_db(app_main, user["tenant_id"])
 
     return _token_response(user)
 
 
+def _bearer_token(request: Request) -> str:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:]
+    return request.cookies.get("max_token", "")
+
+
+@router.post("/logout")
+async def logout(request: Request):
+    if not is_server_mode():
+        return {"ok": True}
+    token = _bearer_token(request)
+    if not token:
+        raise HTTPException(401, "Требуется вход")
+    try:
+        payload = auth.decode_token(token)
+    except Exception as e:
+        raise HTTPException(401, "Сессия истекла") from e
+    jti = payload.get("jti")
+    if jti:
+        db_pg.revoke_token(jti, auth.token_expires_at(payload))
+    return {"ok": True}
+
+
 @router.get("/me")
 async def me(request: Request):
     if not is_server_mode():
         return {"server_mode": False, "role": "local"}
-    from server.app.tenant import (
+    from app.tenant import (
         get_tenant_id,
         get_user_id,
         get_user_role,

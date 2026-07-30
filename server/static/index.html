@@ -414,6 +414,7 @@
     </div>
     <div class="header-meta">
       <button type="button" id="btnLogout" class="small" style="display:none" onclick="logoutUser()">Выход</button>
+      <span id="subscriptionBadge" class="badge ok" style="display:none" title="Дата окончания подписки"></span>
       <span id="runBadge" class="badge stop header-user-hide">остановлено</span>
       <span id="vaultBadge" class="badge warn header-user-hide">хранилище…</span>
       <span id="liveBadge" class="badge poll header-user-hide" title="Канал статуса">опрос</span>
@@ -637,12 +638,17 @@
           </div></div>
           <div class="settings-row"><label>Окна будни</label><div class="controls"><input id="windowsWeekday" placeholder="9-13,16-21" style="max-width:280px"></div></div>
           <div class="settings-row"><label>Окна выходные</label><div class="controls"><input id="windowsWeekend" placeholder="11-14,17-20" style="max-width:280px"></div></div>
-          <div class="settings-row"><label>Пропуск дня (%)</label><div class="controls"><input id="daySkipPct" type="number" min="0" max="100" step="1" style="max-width:100px"></div></div>
+          <div class="settings-row"><label>Пропуск / active / quiet (%)</label><div class="controls">
+            <input id="daySkipPct" type="number" min="0" max="100" step="1" style="max-width:70px" title="skip">
+            <input id="roleActivePct" type="number" min="0" max="100" step="1" style="max-width:70px" title="active">
+            <input id="roleQuietPct" type="number" min="0" max="100" step="1" style="max-width:70px" title="quiet">
+          </div></div>
+          <p class="hint" style="margin:.25rem 0 0 1rem">Роли дня: skip / active (полный лимит) / quiet (лимит ниже). Рекомендуется 40/30/30.</p>
           <div class="settings-row"><label>Роли дня</label><div class="controls">
             <label style="width:auto;max-width:none"><input type="checkbox" id="rolePlanOn" style="width:auto;max-width:none"> вкл</label>
           </div></div>
-          <div class="settings-row"><label>Активных мин/макс</label><div class="controls">
-            <input id="roleActiveMin" type="number" min="0" style="max-width:70px">
+          <div class="settings-row"><label>Legacy active мин/макс</label><div class="controls">
+            <input id="roleActiveMin" type="number" min="0" style="max-width:70px" title="если active % = 0">
             <span class="hint" style="margin:0">–</span>
             <input id="roleActiveMax" type="number" min="0" style="max-width:70px">
           </div></div>
@@ -850,6 +856,13 @@
     }
 
     function logoutUser() {
+      const token = getAuthToken();
+      if (token) {
+        fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token },
+        }).catch(() => {});
+      }
       setAuthToken('');
       sessionStorage.removeItem('maxImpersonating');
       location.href = '/auth.html';
@@ -858,11 +871,47 @@
     let _serverMode = false;
     let _userRole = 'local';
     let _subscriptionActive = true;
+    let _subscriptionExpiresAt = null;
     let _adminGlobalMode = false;
     let _lastStatus = null;
 
     function isUserRole() {
       return _serverMode && _userRole === 'user';
+    }
+
+    function formatSubscriptionDate(iso) {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+      return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    }
+
+    function subscriptionDaysLeft(iso) {
+      if (!iso) return null;
+      const exp = new Date(iso);
+      if (Number.isNaN(exp.getTime())) return null;
+      const now = new Date();
+      return Math.ceil((exp.getTime() - now.getTime()) / 86400000);
+    }
+
+    function applySubscriptionBadge() {
+      const el = document.getElementById('subscriptionBadge');
+      if (!el) return;
+      if (!isUserRole()) {
+        el.style.display = 'none';
+        return;
+      }
+      el.style.display = '';
+      if (!_subscriptionActive || !_subscriptionExpiresAt) {
+        el.textContent = 'подписка не активна';
+        el.className = 'badge stop';
+        return;
+      }
+      const label = formatSubscriptionDate(_subscriptionExpiresAt);
+      const days = subscriptionDaysLeft(_subscriptionExpiresAt);
+      el.textContent = 'подписка до ' + label;
+      if (days !== null && days <= 7) el.className = 'badge warn';
+      else el.className = 'badge ok';
     }
 
     function applyCampaignButtonState(s) {
@@ -982,14 +1031,22 @@
           } else if (isUser && !_subscriptionActive) {
             banner.className = 'hint';
             banner.style.color = 'var(--danger)';
-            banner.textContent = 'Подписка не активна. Обратитесь к администратору для доступа к рассылке.';
+            const expiredLabel = _subscriptionExpiresAt
+              ? ' (истекла ' + formatSubscriptionDate(_subscriptionExpiresAt) + ')'
+              : '';
+            banner.textContent = 'Подписка не активна' + expiredLabel + '. Обратитесь к администратору для доступа к рассылке.';
           } else if (isUser) {
-            banner.textContent = 'Личный кабинет — группы, аккаунты, рассылка, сводка';
+            banner.style.color = '';
+            const subHint = _subscriptionExpiresAt
+              ? ' · подписка до ' + formatSubscriptionDate(_subscriptionExpiresAt)
+              : '';
+            banner.textContent = 'Личный кабинет — группы, аккаунты, рассылка, сводка' + subHint;
           } else {
             banner.style.display = 'none';
           }
         }
       }
+      applySubscriptionBadge();
       applyCampaignButtonState(_lastStatus);
     }
 
@@ -1003,6 +1060,9 @@
         const me = await api('/auth/me');
         _userRole = me.role;
         _subscriptionActive = !!(me.subscription && me.subscription.active);
+        _subscriptionExpiresAt = me.subscription && me.subscription.expires_at
+          ? me.subscription.expires_at
+          : null;
         _adminGlobalMode = me.role === 'admin' && !me.impersonating
           && /^#(settings|messages)/.test(location.hash);
         if (me.role === 'admin' && !me.impersonating && !_adminGlobalMode) {
@@ -1415,8 +1475,18 @@
         return;
       }
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const pin = getApiPin();
-      const q = pin ? ('?pin=' + encodeURIComponent(pin)) : '';
+      let q = '';
+      if (_serverMode) {
+        const token = getAuthToken();
+        if (!token) {
+          startStatusPoll();
+          return;
+        }
+        q = '?token=' + encodeURIComponent(token);
+      } else {
+        const pin = getApiPin();
+        q = pin ? ('?pin=' + encodeURIComponent(pin)) : '';
+      }
       let ws;
       try {
         ws = new WebSocket(`${proto}//${location.host}/ws/status${q}`);
@@ -1990,7 +2060,7 @@
             ${open ? `
             <div class="group-body" onclick="event.stopPropagation()">
               ${!isUserRole() ? `<div class="row" style="margin-bottom:.75rem">
-                <textarea id="groupProxy-${g.id}" rows="2" placeholder="Прокси: один URL или несколько (с новой строки / ;)" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
+                <textarea id="groupProxy-${g.id}" rows="2" placeholder="1 прокси на группу (~30 acc). Несколько URL — ротация по аккаунту" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
                 <button class="small" onclick="saveGroupProxy(${g.id})">Сохранить прокси</button>
               </div>` : ''}
               <table>
@@ -2053,21 +2123,23 @@
       document.getElementById('tzOffset').value = s.timezone_offset_hours ?? '3';
       document.getElementById('windowsWeekday').value = s.send_windows_weekday || '9-13,16-21';
       document.getElementById('windowsWeekend').value = s.send_windows_weekend || '11-14,17-20';
-      document.getElementById('daySkipPct').value = s.day_skip_percent || '20';
+      document.getElementById('daySkipPct').value = s.day_skip_percent || '40';
+      document.getElementById('roleActivePct').value = s.role_active_percent || '30';
+      document.getElementById('roleQuietPct').value = s.role_quiet_percent || '30';
       document.getElementById('rolePlanOn').checked = String(s.role_plan_enabled || '1') === '1';
       document.getElementById('roleActiveMin').value = s.role_active_min || '5';
       document.getElementById('roleActiveMax').value = s.role_active_max || '10';
       document.getElementById('roleQuietLimit').value = s.role_quiet_limit || '1';
       document.getElementById('pausesOn').checked = String(s.human_pauses_enabled || '1') === '1';
-      document.getElementById('shortPauseChance').value = s.short_pause_chance || '15';
+      document.getElementById('shortPauseChance').value = s.short_pause_chance || '8';
       document.getElementById('shortPauseMin').value = s.short_pause_min_sec || '30';
       document.getElementById('shortPauseMax').value = s.short_pause_max_sec || '50';
-      document.getElementById('longPauseChance').value = s.long_pause_chance || '10';
-      document.getElementById('longPauseMin').value = s.long_pause_min_sec || '300';
-      document.getElementById('longPauseMax').value = s.long_pause_max_sec || '900';
-      document.getElementById('breakAfterN').value = s.break_after_n || '4';
-      document.getElementById('breakMin').value = s.break_min_sec || '1200';
-      document.getElementById('breakMax').value = s.break_max_sec || '2400';
+      document.getElementById('longPauseChance').value = s.long_pause_chance || '3';
+      document.getElementById('longPauseMin').value = s.long_pause_min_sec || '120';
+      document.getElementById('longPauseMax').value = s.long_pause_max_sec || '300';
+      document.getElementById('breakAfterN').value = s.break_after_n || '8';
+      document.getElementById('breakMin').value = s.break_min_sec || '600';
+      document.getElementById('breakMax').value = s.break_max_sec || '1200';
       document.getElementById('jitterMorning').value = s.jitter_morning_percent || '55';
       document.getElementById('jitterEvening').value = s.jitter_evening_percent || '35';
       document.getElementById('presenceOn').checked = String(s.human_presence_enabled || '1') === '1';
@@ -2133,6 +2205,8 @@
         send_windows_weekend: document.getElementById('windowsWeekend').value.trim(),
         day_skip_percent: +document.getElementById('daySkipPct').value,
         role_plan_enabled: document.getElementById('rolePlanOn').checked ? 1 : 0,
+        role_active_percent: +document.getElementById('roleActivePct').value,
+        role_quiet_percent: +document.getElementById('roleQuietPct').value,
         role_active_min: +document.getElementById('roleActiveMin').value,
         role_active_max: +document.getElementById('roleActiveMax').value,
         role_quiet_limit: +document.getElementById('roleQuietLimit').value,
