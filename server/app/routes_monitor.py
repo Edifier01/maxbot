@@ -85,6 +85,7 @@ async def health(request: Request):
         return {
             "ok": db_ok and (vs["unlocked"] or vs["needs_setup"] or vs["legacy"]),
             "db_ok": db_ok,
+            "server_mode": m._is_server_mode(),
         }
 
     started = getattr(m, "_app_started_at", None)
