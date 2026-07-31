@@ -1,5 +1,16 @@
 # Handoff
 
+## Completed (2026-07-31) — Admin impersonation: campaign UI + /me email
+
+- **index.html:** режим `isAdminImpersonating()` / `isSimpleCampaignView()` — в кабинете tenant у админа только Старт/Стоп; скрыты пауза, сброс, тест, расписание, **живой лог**, **история кампаний**, **история отправок**; подсветка активной кнопки как у user
+- **routes_auth.py:** `/auth/me` при impersonation — `email` = пользователь tenant, `actor_email` = админ
+- **tests/test_admin_impersonation_campaign.py** — me email, status/log, campaigns, send_log, stop/start API (e2e, skip без PG)
+
+### Validation
+```
+pytest → 78 passed, 5 skipped
+```
+
 ## Completed (2026-07-31) — Mobile UI + Admin bulk groups
 
 - **Mobile:** responsive CSS `@media (max-width: 720px)` для `index.html`, `auth.html`, `admin.html`

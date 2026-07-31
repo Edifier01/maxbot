@@ -140,13 +140,23 @@ async def me(request: Request):
         raise HTTPException(401, "Пользователь не найден")
     tenant_id = get_tenant_id()
     tenant = db_pg.get_tenant(tenant_id) if tenant_id else None
-    return {
+    email = user["email"]
+    actor_email = None
+    if is_impersonating() and tenant_id is not None:
+        tenant_user = db_pg.get_tenant_user(tenant_id)
+        if tenant_user:
+            actor_email = email
+            email = tenant_user["email"]
+    payload = {
         "server_mode": True,
         "user_id": user_id,
-        "email": user["email"],
+        "email": email,
         "role": get_user_role(),
         "tenant_id": tenant_id,
         "institution_name": tenant["institution_name"] if tenant else None,
         "subscription": db_pg.subscription_info(tenant_id),
         "impersonating": is_impersonating(),
     }
+    if actor_email is not None:
+        payload["actor_email"] = actor_email
+    return payload

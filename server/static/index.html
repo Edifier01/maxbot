@@ -887,10 +887,20 @@
     let _subscriptionActive = true;
     let _subscriptionExpiresAt = null;
     let _adminGlobalMode = false;
+    let _adminImpersonating = false;
     let _lastStatus = null;
 
     function isUserRole() {
       return _serverMode && _userRole === 'user';
+    }
+
+    function isAdminImpersonating() {
+      return _serverMode && _userRole === 'admin' && _adminImpersonating;
+    }
+
+    /** User cabinet campaign UX: start/stop only + active-state highlight */
+    function isSimpleCampaignView() {
+      return isUserRole() || isAdminImpersonating();
     }
 
     function formatSubscriptionDate(iso) {
@@ -929,13 +939,12 @@
     }
 
     function applyCampaignButtonState(s) {
-      const isUser = isUserRole();
       const start = document.getElementById('btnStart');
       const stop = document.getElementById('btnStop');
       if (!start || !stop) return;
       start.classList.remove('campaign-btn-active', 'campaign-btn-idle');
       stop.classList.remove('campaign-btn-active', 'campaign-btn-idle');
-      if (!isUser) return;
+      if (!isSimpleCampaignView()) return;
       const on = !!(s && (s.running || s.auto_run));
       if (on) {
         start.classList.add('campaign-btn-active');
@@ -1025,11 +1034,12 @@
 
     function applyServerRoleUI() {
       const isUser = isUserRole();
+      const simpleCampaign = isSimpleCampaignView();
       document.querySelectorAll('nav button[data-tab="messages"], nav button[data-tab="settings"]').forEach(el => {
         el.style.display = isUser ? 'none' : '';
       });
       document.querySelectorAll('.campaign-admin-only').forEach(el => {
-        el.style.display = isUser ? 'none' : '';
+        el.style.display = simpleCampaign ? 'none' : '';
       });
       document.querySelectorAll('.header-user-hide').forEach(el => {
         el.style.display = isUser ? 'none' : '';
@@ -1038,8 +1048,8 @@
       if (logoutBtn) logoutBtn.style.display = isUser ? '' : 'none';
       const userHint = document.getElementById('campaignUserHint');
       const adminHint = document.getElementById('campaignAdminHint');
-      if (userHint) userHint.style.display = isUser ? '' : 'none';
-      if (adminHint) adminHint.style.display = isUser ? 'none' : '';
+      if (userHint) userHint.style.display = simpleCampaign ? '' : 'none';
+      if (adminHint) adminHint.style.display = simpleCampaign ? 'none' : '';
       const banner = document.getElementById('serverBanner');
       if (banner) {
         if (!_serverMode) {
@@ -1082,6 +1092,7 @@
       try {
         const me = await api('/auth/me');
         _userRole = me.role;
+        _adminImpersonating = !!me.impersonating;
         _subscriptionActive = !!(me.subscription && me.subscription.active);
         _subscriptionExpiresAt = me.subscription && me.subscription.expires_at
           ? me.subscription.expires_at
@@ -1534,7 +1545,7 @@
 
     async function startCampaign() {
       try {
-        if (!isUserRole()) {
+        if (!isSimpleCampaignView()) {
           const s = await api('/status');
           const prog = s.campaign_progress || {};
           const activeCount = (s.profiles && s.profiles.active) || 0;
@@ -2268,16 +2279,18 @@
       loadMessages();
       loadGroups();
       loadSettings();
-      loadSendLog();
-      loadCampaigns();
-      loadScheduleHint();
+      if (!isSimpleCampaignView()) {
+        loadSendLog();
+        loadCampaigns();
+        loadScheduleHint();
+      }
       refreshStatus();
       connectStatusWs();
     })();
     setInterval(() => {
       if (_adminGlobalMode) return;
       if (document.getElementById('groups').classList.contains('active') && !authModalOpen) loadGroups();
-      if (document.getElementById('campaign').classList.contains('active')) {
+      if (document.getElementById('campaign').classList.contains('active') && !isSimpleCampaignView()) {
         loadSendLog(sendLogOffset);
         loadCampaigns();
         loadScheduleHint();
