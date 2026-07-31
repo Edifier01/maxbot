@@ -1,4 +1,4 @@
-﻿"""MAX local sender — ponytail MVP: one file for logic, minimal deps."""
+"""MAX local sender — ponytail MVP: one file for logic, minimal deps."""
 
 from __future__ import annotations
 

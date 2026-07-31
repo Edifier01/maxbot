@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd server
-          pip install -r requirements.txt -r requirements-scale.txt
+          pip install -r requirements.txt -r requirements-server.txt
           pip install pytest httpx
       - name: Server tests
         env:
@@ -65,6 +65,7 @@ jobs:
           ADMIN_EMAIL: admin@ci.example.com
           ADMIN_PASSWORD: ci-admin-password
           POSTGRES_PASSWORD: ci-postgres-password
+          REDIS_PASSWORD: ci-redis-password
           INTERNAL_SERVICE_TOKEN: ci-internal-service-token
         run: docker compose config -q
 
@@ -92,7 +93,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd server
-          pip install -r requirements.txt -r requirements-scale.txt
+          pip install -r requirements.txt -r requirements-server.txt
           pip install pytest httpx
       - name: E2E auth/admin/tenant
         env:

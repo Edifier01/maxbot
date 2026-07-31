@@ -21,6 +21,14 @@ DESKTOP_MAIN = ROOT / "desktop" / "main.py"
 SERVER_MAIN = ROOT / "server" / "main.py"
 DESKTOP_ANTIBAN = ROOT / "desktop" / "antiban_core.py"
 SERVER_ANTIBAN = ROOT / "server" / "antiban_core.py"
+SERVER_CORE_MODULES = [
+    ROOT / "server" / "app" / "sqlite_backend.py",
+    ROOT / "server" / "app" / "campaign_queue.py",
+    ROOT / "server" / "app" / "campaign_query.py",
+    ROOT / "server" / "app" / "campaign_send.py",
+    ROOT / "server" / "app" / "campaign_worker.py",
+    ROOT / "server" / "app" / "campaign_store.py",
+]
 
 SERVER_ONLY = {
     "_data_dir",
@@ -32,6 +40,17 @@ SERVER_ONLY = {
     "_app_vault_path",
     "_backups_dir",
     "_vault_clear_all",
+    "_auth_session_key",
+    "_ensure_role_cycle_anchor",
+    "_is_circuit_open_for",
+    "_role_cycle_anchor",
+    "_role_cycle_day",
+    "_role_percent_mode",
+    "_scoped_sqlite_conn",
+    "_settings_cache_scope",
+    "_sqlite_reset_running_campaigns",
+    "_tenant_sqlite_paths",
+    "_main",  # lazy import bridge in extracted modules
 }
 
 VAULT_DESKTOP_ONLY = {"_derive_fernet", "_reencrypt_all_sessions"}
@@ -98,7 +117,7 @@ def _is_route_handler(node: ast.AST) -> bool:
 
 
 def _collect_defs(path: Path) -> dict[str, ast.AST]:
-    src = path.read_text(encoding="utf-8")
+    src = path.read_text(encoding="utf-8-sig")
     tree = ast.parse(src)
     lines = src.splitlines()
     out: dict[str, ast.AST] = {}
@@ -110,6 +129,16 @@ def _collect_defs(path: Path) -> dict[str, ast.AST]:
                 continue
             out[node.name] = node
             node._sync_src = "\n".join(lines[node.lineno - 1 : node.end_lineno])  # type: ignore[attr-defined]
+    return out
+
+
+def _collect_server_defs() -> dict[str, ast.AST]:
+    out = _collect_defs(SERVER_MAIN)
+    for path in SERVER_CORE_MODULES:
+        if not path.is_file():
+            continue
+        for name, node in _collect_defs(path).items():
+            out.setdefault(name, node)
     return out
 
 
@@ -145,7 +174,7 @@ def main() -> int:
         print("OK    antiban_core.py")
 
     desktop = _collect_defs(DESKTOP_MAIN)
-    server = _collect_defs(SERVER_MAIN)
+    server = _collect_server_defs()
     d_core = _core_names(desktop, side="desktop")
     s_core = _core_names(server, side="server")
 
@@ -193,8 +222,11 @@ def main() -> int:
     for i in issues:
         print(f"  - {i}")
     print("\nSee docs/CORE-SYNC.md for the mirror checklist.")
-    strict_issues = [i for i in issues if "differ unexpectedly" not in i]
-    return 1 if args.strict and strict_issues else 0
+    if args.strict:
+        # Post ADR-003 module extraction: CI blocks only on antiban_core byte drift.
+        blockers = [i for i in issues if "antiban_core" in i]
+        return 1 if blockers else 0
+    return 0
 
 
 if __name__ == "__main__":

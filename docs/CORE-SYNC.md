@@ -19,7 +19,7 @@
    ```bash
    cd maxserverapp
    python scripts/check_core_sync.py
-   python scripts/check_core_sync.py --strict   # CI / перед merge
+   python scripts/check_core_sync.py --strict   # CI: fails only on antiban_core drift
    ```
 
 4. Прогони оба smoke:

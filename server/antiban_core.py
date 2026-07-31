@@ -1,4 +1,4 @@
-﻿"""Чистые хелперы антибана без зависимости от FastAPI/SQLite."""
+"""Чистые хелперы антибана без зависимости от FastAPI/SQLite."""
 
 from __future__ import annotations
 
