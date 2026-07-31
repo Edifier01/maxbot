@@ -2,12 +2,17 @@
 
 ## Current Feature
 
-Admin global settings navigation — **IN_PROGRESS**
+Admin global settings navigation — **COMPLETED**
+
+## Current Feature
+
+Vault password removal (auto .app_key) — **COMPLETED**
 
 ## Key Paths
 
-- `static/admin.html` — `openGlobalSettings`, restore admin JWT after impersonate
-- `static/index.html` — `adminGlobalTabFromUrl`, `_adminGlobalMode` via hash + session flag
+- `app/vault.py`, `main.py` — `ensure_vault_unlocked`, drop PBKDF2 vault
+- `static/index.html` — removed vault modal and password UI
+- `tests/test_vault.py`
 
 ## Last Updated
 

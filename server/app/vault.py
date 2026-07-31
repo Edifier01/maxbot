@@ -46,35 +46,47 @@ def clear_cache() -> None:
 
 
 def status(data_dir: Path) -> dict[str, Any]:
-    salt_path = paths.app_salt_path(data_dir)
+    ensure_vault_unlocked(data_dir)
     key_path = paths.app_key_path(data_dir)
-    has_salt = salt_path.exists()
-    has_legacy = key_path.exists() and not has_salt
     fernet, unlocked = get_state(data_dir)
     return {
         "unlocked": bool(unlocked and fernet is not None),
-        "protected": has_salt,
-        "legacy": has_legacy,
-        "needs_setup": not has_salt and not has_legacy,
+        "protected": False,
+        "legacy": key_path.exists(),
+        "needs_setup": False,
     }
 
 
-def try_legacy_unlock(data_dir: Path, log: LogFn | None = None) -> None:
-    """Обратная совместимость: plaintext .app_key без соли."""
+def _drop_password_vault_files(data_dir: Path) -> None:
+    # ponytail: PBKDF2 vault removed; encrypted sessions need MAX re-login
+    paths.app_salt_path(data_dir).unlink(missing_ok=True)
+    paths.app_vault_path(data_dir).unlink(missing_ok=True)
+
+
+def ensure_vault_unlocked(data_dir: Path, log: LogFn | None = None) -> None:
+    """Auto-unlock via machine-local .app_key (no user password)."""
     _, unlocked = get_state(data_dir)
     if unlocked:
         return
+    data_dir.mkdir(parents=True, exist_ok=True)
+    paths.sessions_root(data_dir).mkdir(parents=True, exist_ok=True)
     salt_path = paths.app_salt_path(data_dir)
     key_path = paths.app_key_path(data_dir)
-    if salt_path.exists() or not key_path.exists():
-        return
+    if salt_path.exists():
+        _drop_password_vault_files(data_dir)
+        if log:
+            log("Хранилище: режим с паролем отключён, используется .app_key")
+    if not key_path.exists():
+        key_path.write_bytes(Fernet.generate_key())
     try:
         set_state(data_dir, Fernet(key_path.read_bytes()), True)
-        if log:
-            log("Хранилище: старый ключ (.app_key). Рекомендуется защитить паролем.")
     except Exception as e:
         if log:
-            log(f"Хранилище: не удалось загрузить старый ключ: {e}")
+            log(f"Хранилище: не удалось загрузить .app_key: {e}")
+
+
+def try_legacy_unlock(data_dir: Path, log: LogFn | None = None) -> None:
+    ensure_vault_unlocked(data_dir, log)
 
 
 def get_fernet(data_dir: Path) -> Fernet:
@@ -178,7 +190,7 @@ def lock(
 
 def ready_for_send(data_dir: Path) -> bool:
     st = status(data_dir)
-    return not st["needs_setup"] and bool(st["unlocked"])
+    return bool(st["unlocked"])
 
 
 def session_dir(data_dir: Path, profile_id: int) -> Path:

@@ -684,29 +684,38 @@ def _derive_fernet(password: str, salt: bytes) -> Fernet:
 
 
 def vault_status() -> dict[str, Any]:
-    has_salt = _APP_SALT_PATH.exists()
-    has_legacy = _APP_KEY_PATH.exists() and not has_salt
+    _ensure_vault_unlocked()
+    has_legacy = _APP_KEY_PATH.exists()
     return {
         "unlocked": bool(_vault_unlocked and _fernet is not None),
-        "protected": has_salt,
+        "protected": False,
         "legacy": has_legacy,
-        "needs_setup": not has_salt and not has_legacy,
+        "needs_setup": False,
     }
 
 
-def _try_legacy_unlock() -> None:
-    """Обратная совместимость: plaintext .app_key без соли."""
+def _ensure_vault_unlocked() -> None:
+    """Auto-unlock via .app_key; no user password in server/desktop panel."""
     global _fernet, _vault_unlocked
+    if _vault_unlocked and _fernet is not None:
+        return
+    DATA.mkdir(parents=True, exist_ok=True)
+    SESSIONS.mkdir(parents=True, exist_ok=True)
     if _APP_SALT_PATH.exists():
-        return
+        _APP_SALT_PATH.unlink(missing_ok=True)
+        _APP_VAULT_PATH.unlink(missing_ok=True)
+        append_log("Хранилище: режим с паролем отключён, используется .app_key")
     if not _APP_KEY_PATH.exists():
-        return
+        _APP_KEY_PATH.write_bytes(Fernet.generate_key())
     try:
         _fernet = Fernet(_APP_KEY_PATH.read_bytes())
         _vault_unlocked = True
-        append_log("Хранилище: старый ключ (.app_key). Рекомендуется защитить паролем.")
     except Exception as e:
-        append_log(f"Хранилище: не удалось загрузить старый ключ: {e}")
+        append_log(f"Хранилище: не удалось загрузить .app_key: {e}")
+
+
+def _try_legacy_unlock() -> None:
+    _ensure_vault_unlocked()
 
 
 def _get_fernet() -> Fernet:
@@ -801,14 +810,9 @@ def lock_vault() -> None:
 
 
 def _require_vault_unlocked() -> None:
-    st = vault_status()
-    if st["needs_setup"]:
-        raise HTTPException(
-            423,
-            "Задайте пароль хранилища сессий (Настройки → Хранилище)",
-        )
-    if not st["unlocked"]:
-        raise HTTPException(423, "Разблокируйте хранилище сессий")
+    _ensure_vault_unlocked()
+    if not (_vault_unlocked and _fernet is not None):
+        raise HTTPException(423, "Хранилище сессий недоступно")
 
 
 def _vault_ready_for_send() -> bool:

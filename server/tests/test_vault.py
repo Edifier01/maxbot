@@ -15,40 +15,36 @@ def test_derive_fernet_roundtrip():
     assert f2.decrypt(token) == b"payload"
 
 
-def test_setup_unlock_lock_cycle(tmp_path):
+def test_auto_unlock_fresh_dir(tmp_path):
     data_dir = tmp_path / "tenant"
     vault.clear_cache()
 
     st = vault.status(data_dir)
-    assert st["needs_setup"] is True
-
-    vault.setup(data_dir, "secure123")
-    st = vault.status(data_dir)
-    assert st["protected"] is True
     assert st["unlocked"] is True
-    assert paths.app_salt_path(data_dir).exists()
-    assert paths.app_vault_path(data_dir).exists()
-
-    vault.lock(data_dir)
-    assert vault.status(data_dir)["unlocked"] is False
-
-    vault.unlock(data_dir, "secure123")
-    assert vault.status(data_dir)["unlocked"] is True
+    assert st["needs_setup"] is False
+    assert paths.app_key_path(data_dir).exists()
 
 
-def test_unlock_wrong_password(tmp_path):
+def test_auto_unlock_drops_password_vault(tmp_path):
     data_dir = tmp_path / "tenant"
     vault.clear_cache()
-    vault.setup(data_dir, "correct-pass")
+    vault.setup(data_dir, "secure123")
     vault.lock(data_dir)
+    assert vault.get_state(data_dir)[1] is False
 
-    try:
-        vault.unlock(data_dir, "wrong-pass")
-        raised = False
-    except ValueError as e:
-        raised = True
-        assert "Неверный пароль" in str(e)
-    assert raised
+    st = vault.status(data_dir)
+    assert st["unlocked"] is True
+    assert not paths.app_salt_path(data_dir).exists()
+    assert paths.app_key_path(data_dir).exists()
+
+
+def test_setup_api_before_status(tmp_path):
+    """Legacy setup API still works if called before status()."""
+    data_dir = tmp_path / "tenant"
+    vault.clear_cache()
+    vault.setup(data_dir, "secure123")
+    assert paths.app_salt_path(data_dir).exists()
+    assert vault.get_state(data_dir)[1] is True
 
 
 def test_per_tenant_state_isolation(tmp_path):

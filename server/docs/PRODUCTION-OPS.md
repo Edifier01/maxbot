@@ -92,7 +92,7 @@ Unit-тесты: `tests/test_celery_worker.py`.
 
 **Критично:** `max_server_data` — ключ шифрования сессий. Без него сессии не расшифровать.
 
-**Vault в server mode:** новые tenant получают legacy `.app_key` (ключ лежит на диске рядом с данными). Это слабее PIN-vault (PBKDF2). Пользователь должен задать пароль vault в UI; до этого `/api/vault/status` вернёт `"protected": false` — панель показывает предупреждение.
+**Vault в server mode:** сессии шифруются автоматически ключом `.app_key` в data-dir tenant/global. Пароль vault в UI не используется — admin и пользователи работают без разблокировки.
 
 ### PostgreSQL migrations
 

@@ -600,25 +600,6 @@
         <h2>Настройки</h2>
         <span class="hint" style="margin:0">Антибан, доступ и интеграции</span>
       </div>
-      <div class="vault-box">
-        <h3>Хранилище сессий</h3>
-        <p class="hint" id="vaultHint" style="margin-top:0">Загрузка…</p>
-        <div class="row" id="vaultSetupRow" style="display:none">
-          <input id="vaultPass1" type="password" placeholder="Новый пароль (≥6)">
-          <input id="vaultPass2" type="password" placeholder="Повтор пароля">
-          <button class="primary" onclick="withLoading(this, setupVault)">Защитить паролем</button>
-        </div>
-        <div class="row" id="vaultUnlockRow" style="display:none">
-          <input id="vaultUnlockPass" type="password" placeholder="Пароль хранилища">
-          <button class="primary" onclick="withLoading(this, unlockVault)">Разблокировать</button>
-          <button class="small" onclick="withLoading(this, lockVault)">Заблокировать</button>
-        </div>
-        <div class="row" id="vaultLegacyRow" style="display:none">
-          <input id="vaultMigratePass1" type="password" placeholder="Новый пароль (≥6)">
-          <input id="vaultMigratePass2" type="password" placeholder="Повтор">
-          <button class="primary" onclick="withLoading(this, setupVault)">Мигрировать со старого ключа</button>
-        </div>
-      </div>
 
       <details class="settings-panel" open>
         <summary>Рассылка и лимиты</summary>
@@ -785,18 +766,6 @@
       </details>
     </section>
   </main>
-
-  <div id="vaultModal" class="modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true">
-      <h3 id="vaultModalTitle">Хранилище</h3>
-      <p id="vaultModalMsg"></p>
-      <input id="vaultModalPass" type="password" autocomplete="current-password">
-      <input id="vaultModalPass2" type="password" placeholder="Повтор пароля" style="display:none" autocomplete="new-password">
-      <div class="modal-actions">
-        <button class="primary" id="vaultModalOk">Готово</button>
-      </div>
-    </div>
-  </div>
 
   <div id="authModal" class="modal-overlay">
     <div class="modal" role="dialog" aria-modal="true">
@@ -1118,148 +1087,14 @@
 
     function applyVaultBadge(vs) {
       const el = document.getElementById('vaultBadge');
-      if (!vs) { el.textContent = 'хранилище?'; el.className = 'badge warn'; return; }
-      if (vs.needs_setup) { el.textContent = 'нужен пароль'; el.className = 'badge lock'; }
-      else if (vs.legacy) { el.textContent = 'старый ключ'; el.className = 'badge warn'; }
-      else if (vs.unlocked) { el.textContent = 'хранилище ОК'; el.className = 'badge run'; }
-      else { el.textContent = 'заблокировано'; el.className = 'badge lock'; }
-    }
-
-    function renderVaultControls(vs) {
-      const hint = document.getElementById('vaultHint');
-      document.getElementById('vaultSetupRow').style.display = 'none';
-      document.getElementById('vaultUnlockRow').style.display = 'none';
-      document.getElementById('vaultLegacyRow').style.display = 'none';
-      if (!vs) { hint.textContent = 'Статус недоступен'; return; }
-      if (vs.needs_setup) {
-        hint.textContent = 'Задайте пароль для шифрования сессий MAX (PBKDF2). Без него вход в аккаунты недоступен.';
-        document.getElementById('vaultSetupRow').style.display = 'flex';
-      } else if (vs.legacy) {
-        hint.textContent = 'Используется старый ключ .app_key. Рекомендуется мигрировать на пароль.';
-        document.getElementById('vaultLegacyRow').style.display = 'flex';
-      } else if (vs.protected) {
-        hint.textContent = vs.unlocked
-          ? 'Хранилище разблокировано. Сессии шифруются паролем.'
-          : 'Хранилище заблокировано — введите пароль для работы с аккаунтами.';
-        document.getElementById('vaultUnlockRow').style.display = 'flex';
-      } else {
-        hint.textContent = 'Внимание: сессии не защищены паролем (legacy .app_key). Задайте PIN vault для безопасного шифрования.';
-        document.getElementById('vaultLegacyRow').style.display = 'flex';
-      }
-    }
-
-    async function setupVault() {
-      let p1, p2;
-      const modalOpen = document.getElementById('vaultModal').style.display === 'flex';
-      // Модалка имеет приоритет: иначе читаются пустые поля вкладки «Настройки»
-      if (modalOpen) {
-        p1 = document.getElementById('vaultModalPass').value;
-        p2 = document.getElementById('vaultModalPass2').value;
-      } else if (document.getElementById('vaultSetupRow').style.display !== 'none') {
-        p1 = document.getElementById('vaultPass1').value;
-        p2 = document.getElementById('vaultPass2').value;
-      } else if (document.getElementById('vaultLegacyRow').style.display !== 'none') {
-        p1 = document.getElementById('vaultMigratePass1').value;
-        p2 = document.getElementById('vaultMigratePass2').value;
-      } else {
-        p1 = document.getElementById('vaultModalPass').value;
-        p2 = document.getElementById('vaultModalPass2').value;
-      }
-      if (!p1 || p1.length < 6) return toast('Пароль не короче 6 символов', 'error');
-      if (p1 !== p2) return toast('Пароли не совпадают', 'error');
-      try {
-        const r = await api('/vault/setup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: p1 }),
-        });
-        toast('Хранилище защищено' + (r.migrated_sessions ? ` (сессий: ${r.migrated_sessions})` : ''), 'success');
-        document.getElementById('vaultModal').style.display = 'none';
-        ['vaultPass1','vaultPass2','vaultMigratePass1','vaultMigratePass2','vaultModalPass','vaultModalPass2'].forEach(id => {
-          const el = document.getElementById(id); if (el) el.value = '';
-        });
-        await ensureVault();
-        loadSettings();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    }
-
-    async function unlockVault() {
-      const modalOpen = document.getElementById('vaultModal').style.display === 'flex';
-      const pass = modalOpen
-        ? document.getElementById('vaultModalPass').value
-        : (document.getElementById('vaultUnlockPass').value
-          || document.getElementById('vaultModalPass').value);
-      if (!pass) return toast('Введите пароль', 'error');
-      try {
-        await api('/vault/unlock', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: pass }),
-        });
-        toast('Хранилище разблокировано', 'success');
-        document.getElementById('vaultModal').style.display = 'none';
-        document.getElementById('vaultUnlockPass').value = '';
-        document.getElementById('vaultModalPass').value = '';
-        await ensureVault();
-        loadSettings();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    }
-
-    async function lockVault() {
-      try {
-        await api('/vault/lock', { method: 'POST' });
-        toast('Хранилище заблокировано', 'success');
-        await ensureVault();
-        loadSettings();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    }
-
-    function showVaultModal(vs) {
-      const overlay = document.getElementById('vaultModal');
-      const pass2 = document.getElementById('vaultModalPass2');
-      const title = document.getElementById('vaultModalTitle');
-      const msg = document.getElementById('vaultModalMsg');
-      const ok = document.getElementById('vaultModalOk');
-      if (vs.needs_setup || vs.legacy) {
-        title.textContent = vs.legacy ? 'Защитить хранилище' : 'Создать пароль хранилища';
-        msg.textContent = 'Пароль шифрует сессии MAX (PBKDF2). Запомните его — восстановить нельзя.';
-        pass2.style.display = 'block';
-        ok.onclick = () => setupVault();
-      } else {
-        title.textContent = 'Разблокировать хранилище';
-        msg.textContent = 'Введите пароль для расшифровки сессий.';
-        pass2.style.display = 'none';
-        ok.onclick = () => unlockVault();
-      }
-      overlay.style.display = 'flex';
-      document.getElementById('vaultModalPass').focus();
-    }
-
-    async function ensureVault() {
-      const vs = await api('/vault/status');
-      applyVaultBadge(vs);
-      renderVaultControls(vs);
-      if (vs.needs_setup || (!vs.unlocked && vs.protected)) {
-        showVaultModal(vs);
-      } else if (vs.legacy) {
-        applyVaultBadge(vs);
-      }
-      return vs;
+      if (!vs || !vs.unlocked) { el.textContent = 'хранилище'; el.className = 'badge warn'; return; }
+      el.textContent = 'хранилище ОК';
+      el.className = 'badge run';
     }
 
     async function initVaultUI() {
       const vs = await api('/vault/status');
       applyVaultBadge(vs);
-      renderVaultControls(vs);
-      if (vs.needs_setup || (!vs.unlocked && vs.protected)) {
-        showVaultModal(vs);
-      }
       return vs;
     }
 
@@ -2216,7 +2051,6 @@
       document.getElementById('backupHours').value = s.backup_interval_hours || '24';
       document.getElementById('workerPool').value = s.worker_pool_size || '1';
       document.getElementById('notifyDone').checked = localStorage.getItem('maxNotifyDone') === '1';
-      renderVaultControls(s.vault || await api('/vault/status'));
       loadScheduleHint();
       loadBackupHint();
       try {
@@ -2350,13 +2184,6 @@
       } catch (err) {
         toast(err.message, 'error');
       }
-    });
-
-    document.getElementById('vaultModalPass').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') document.getElementById('vaultModalOk').click();
-    });
-    document.getElementById('vaultModalPass2').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') document.getElementById('vaultModalOk').click();
     });
 
     (async () => {
