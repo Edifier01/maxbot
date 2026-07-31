@@ -66,7 +66,7 @@ def e2e_client(tmp_path, monkeypatch):
 
     from starlette.testclient import TestClient
 
-    with TestClient(m.app, lifespan="on") as client:
+    with TestClient(m.app) as client:
         yield client, m, uid
 
     db_pg.close()
