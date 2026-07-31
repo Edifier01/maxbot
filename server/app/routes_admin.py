@@ -130,11 +130,12 @@ async def grant_subscription_month(tenant_id: int):
 
 
 def _drop_tenant_sqlite(tenant_id: int) -> None:
+    from app import sqlite_backend
 
     data_dir = app_main.ROOT / "data" / "tenants" / str(tenant_id)
     key = str(data_dir)
-    with app_main._db_lock:
-        conn = app_main._tenant_db_conns.pop(key, None)
+    with sqlite_backend._db_lock:
+        conn = sqlite_backend._tenant_db_conns.pop(key, None)
         if conn is not None:
             with contextlib.suppress(Exception):
                 conn.close()
