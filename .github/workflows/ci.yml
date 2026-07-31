@@ -101,7 +101,7 @@ jobs:
           MAX_SERVER_MODE: "1"
           MAX_TEST: "1"
           JWT_SECRET: ci-e2e-jwt-secret-min-32-characters-long
-          ADMIN_EMAIL: admin@ci.test
+          ADMIN_EMAIL: admin@example.com
           ADMIN_PASSWORD: CiAdminPass123!
           INTERNAL_SERVICE_TOKEN: ci-internal-token
         run: cd server && python -m pytest tests/test_e2e_server.py -q

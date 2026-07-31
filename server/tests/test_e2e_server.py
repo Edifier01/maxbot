@@ -40,7 +40,7 @@ def e2e_client(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
     monkeypatch.setenv("JWT_SECRET", "e2e-jwt-secret-min-32-characters-long")
-    monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@e2e.test")
+    monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")
     monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
 
@@ -85,7 +85,7 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
         "/api/auth/register",
         json={
             "institution_name": f"School A {uid}",
-            "email": f"user-a-{uid}@e2e.test",
+            "email": f"user-a-{uid}@example.com",
             "password": "UserPass123!",
             "password_confirm": "UserPass123!",
         },
@@ -99,7 +99,7 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
         "/api/auth/register",
         json={
             "institution_name": f"School B {uid}",
-            "email": f"user-b-{uid}@e2e.test",
+            "email": f"user-b-{uid}@example.com",
             "password": "UserPass123!",
             "password_confirm": "UserPass123!",
         },
@@ -129,8 +129,8 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
     users = client.get("/api/admin/users", headers=_bearer(admin_token))
     assert users.status_code == 200
     emails = {row["email"] for row in users.json()["items"]}
-    assert f"user-a-{uid}@e2e.test" in emails
-    assert f"user-b-{uid}@e2e.test" in emails
+    assert f"user-a-{uid}@example.com" in emails
+    assert f"user-b-{uid}@example.com" in emails
 
     profiles_as_admin = client.get("/api/profiles", headers=_bearer(admin_token))
     assert profiles_as_admin.status_code == 403
