@@ -1710,13 +1710,7 @@
       if (!skipConfirm && !confirm('Заменить текущие сообщения?')) return;
       const fd = new FormData();
       fd.append('file', file);
-      const headers = {};
-      const pin = getApiPin();
-      if (pin) headers['Authorization'] = 'Bearer ' + pin;
-      await fetch('/api/messages/upload', { method: 'POST', body: fd, headers }).then(r => {
-        if (!r.ok) return r.json().then(j => { throw new Error(j.detail); });
-        return r.json();
-      });
+      await api('/messages/upload', { method: 'POST', body: fd });
       toast('Сообщения загружены', 'success');
       loadMessages();
     }
