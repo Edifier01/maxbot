@@ -1238,10 +1238,25 @@
             continue;
           }
 
-          if (p.auth_step === 'waiting_cloud_password') {
-            toast('Аккаунт MAX требует облачный пароль — вход не поддерживается', 'error');
-            await api(`/profiles/${profileId}/login/reset`, { method: 'POST' });
-            break;
+          if (p.auth_step === 'waiting_cloud_password' && !authModalOpen) {
+            const hint = p.auth_hint ? `\nПодсказка: ${p.auth_hint}` : '';
+            const pwd = await showAuthModal(
+              'Облачный пароль MAX',
+              `Введите облачный пароль для ${p.phone}${hint}`,
+              true
+            );
+            if (pwd === null) {
+              await api(`/profiles/${profileId}/login/reset`, { method: 'POST' });
+              break;
+            }
+            await api(`/profiles/${profileId}/password`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ code: pwd }),
+            });
+            loadGroups(true);
+            await sleep(300);
+            continue;
           }
 
           if (p.status === 'active' && p.auth_step === 'idle') {
@@ -1256,7 +1271,7 @@
             break;
           }
 
-          if (['connecting', 'waiting_sms', 'verifying_sms'].includes(p.auth_step)) {
+          if (['connecting', 'waiting_sms', 'verifying_sms', 'waiting_cloud_password', 'verifying_password'].includes(p.auth_step)) {
             idlePolls = 0;
             await sleep(400);
             continue;
@@ -1744,7 +1759,8 @@
         connecting: 'Подключение…',
         waiting_sms: '→ введите SMS-код',
         verifying_sms: 'Проверка SMS…',
-        waiting_cloud_password: '→ облачный пароль не поддерживается',
+        waiting_cloud_password: '→ введите облачный пароль',
+        verifying_password: 'Проверка пароля…',
         error: 'Ошибка входа',
         idle: '',
       };
@@ -1778,7 +1794,7 @@
         badges.push(['Пауза', 'warn', until ? `до ${until}` : 'временная пауза']);
       }
       if (p.auth_step === 'waiting_sms') badges.push(['Код SMS', 'warn', 'Ожидает код']);
-      if (p.auth_step === 'waiting_cloud_password') badges.push(['Не поддерж.', 'danger', 'Нужен облачный пароль MAX']);
+      if (p.auth_step === 'waiting_cloud_password') badges.push(['Пароль MAX', 'warn', p.auth_hint || 'Нужен облачный пароль']);
       if (p.auth_step === 'error' && p.status === 'active') {
         badges.push(['Ошибка входа', 'danger', err || 'Ошибка авторизации']);
       }
@@ -1795,7 +1811,7 @@
     }
 
     function profileActions(p, groupId) {
-      const busy = ['connecting', 'waiting_sms', 'verifying_sms'].includes(p.auth_step);
+      const busy = ['connecting', 'waiting_sms', 'verifying_sms', 'waiting_cloud_password', 'verifying_password'].includes(p.auth_step);
       const loginFresh = isUserRole();
       return `
         <button onclick="withLoading(this, () => loginProfile(${p.id}, ${loginFresh}, ${groupId}))" ${busy ? 'disabled' : ''}>Войти</button>
@@ -2014,8 +2030,8 @@
       for (const g of groups) {
         if (openGroupId === g.id && openProfiles[g.id]) {
           for (const p of openProfiles[g.id].items) {
-            if (p.auth_step === 'waiting_sms') {
-              startLoginWatch(p.id);
+            if (p.auth_step === 'waiting_sms' || p.auth_step === 'waiting_cloud_password') {
+              startLoginWatch(p.id, p.auth_step);
             }
           }
         }

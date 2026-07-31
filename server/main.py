@@ -1037,12 +1037,14 @@ class _AppSmsAuthFlow:
             f"облачный пароль={'да' if has_pwd else 'нет'})"
         )
 
-        if result.password_challenge:
-            raise RuntimeError(
-                "Аккаунт MAX требует облачный пароль — вход через панель не поддерживается"
-            )
-        elif result.login_token:
+        if result.login_token:
             token = result.login_token
+        elif result.password_challenge:
+            token = await self._authenticate_with_password(
+                app,
+                result.password_challenge.track_id,
+                result.password_challenge.hint,
+            )
         elif result.register_token:
             if not app.config.registration_config:
                 raise RuntimeError("Для регистрации нового аккаунта не хватает настроек регистрации")
