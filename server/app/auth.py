@@ -35,10 +35,12 @@ def create_token(
     impersonator_id: int | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
+    tv = db_pg.get_tenant_token_version(tenant_id) if tenant_id is not None else 0
     payload = {
         "sub": str(user_id),
         "jti": secrets.token_urlsafe(16),
         "tenant_id": tenant_id,
+        "tv": tv,
         "role": role,
         "imp": impersonating,
         "imp_by": impersonator_id,
@@ -46,6 +48,24 @@ def create_token(
         "exp": now + timedelta(hours=JWT_EXPIRE_HOURS),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def validate_token_session(payload: dict[str, Any]) -> str | None:
+    """Return error detail if session invalid, else None."""
+    jti = payload.get("jti")
+    if jti and db_pg.is_token_revoked(jti):
+        return "Сессия отозвана"
+    user_id = int(payload["sub"])
+    if not db_pg.get_user_by_id(user_id):
+        return "Пользователь не найден"
+    tenant_id = payload.get("tenant_id")
+    if tenant_id is not None:
+        tenant = db_pg.get_tenant(tenant_id)
+        if not tenant:
+            return "Учреждение не найдено"
+        if int(payload.get("tv") or 0) != int(tenant.get("token_version") or 0):
+            return "Сессия отозвана"
+    return None
 
 
 def decode_token(token: str) -> dict[str, Any]:

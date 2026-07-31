@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from app.runtime import main as m
 
 router = APIRouter(tags=["campaign"])
 
@@ -16,7 +17,6 @@ class ScheduleIn(BaseModel):
 
 @router.post("/api/campaign/start")
 async def campaign_start():
-    import main as m
 
     m._require_vault_unlocked()
     messages = m.load_message_pool()
@@ -38,7 +38,6 @@ async def campaign_start():
 
 @router.post("/api/campaign/stop")
 async def campaign_stop():
-    import main as m
 
     m.set_setting("auto_run", "0")
     await m._stop_worker(finish_status="stopped", reason="Остановлено пользователем")
@@ -47,7 +46,6 @@ async def campaign_stop():
 
 @router.post("/api/campaign/pause")
 async def campaign_pause():
-    import main as m
 
     await m._stop_worker(finish_status="paused", reason="Пауза")
     m.append_log("Рассылка на паузе")
@@ -56,7 +54,6 @@ async def campaign_pause():
 
 @router.post("/api/campaign/reset")
 async def campaign_reset():
-    import main as m
 
     if m.RUNTIME.worker_busy():
         raise HTTPException(400, "Остановите рассылку перед сбросом прогресса")
@@ -67,7 +64,6 @@ async def campaign_reset():
 
 @router.post("/api/campaign/schedule")
 async def campaign_schedule(body: ScheduleIn):
-    import main as m
 
     try:
         start_at = m._parse_iso_datetime(body.start_at)
@@ -88,7 +84,6 @@ async def campaign_schedule(body: ScheduleIn):
 
 @router.delete("/api/campaign/schedule")
 async def campaign_schedule_cancel():
-    import main as m
 
     with m._conn() as c:
         c.execute("UPDATE campaign_schedule SET enabled=0, start_at=NULL WHERE id=1")
@@ -98,7 +93,6 @@ async def campaign_schedule_cancel():
 
 @router.get("/api/campaign/schedule")
 async def campaign_schedule_get():
-    import main as m
 
     with m._conn() as c:
         row = c.execute("SELECT * FROM campaign_schedule WHERE id=1").fetchone()
@@ -107,7 +101,6 @@ async def campaign_schedule_get():
 
 @router.post("/api/campaign/retry_failed")
 async def campaign_retry_failed():
-    import main as m
 
     m._require_vault_unlocked()
     if m.RUNTIME.worker_busy():
@@ -141,7 +134,6 @@ async def campaign_retry_failed():
 
 @router.post("/api/campaign/test")
 async def campaign_test():
-    import main as m
 
     m._require_vault_unlocked()
     messages = m.load_message_pool()
@@ -180,7 +172,6 @@ async def campaign_test():
 
 @router.get("/api/campaigns")
 async def list_campaigns(limit: int = 50):
-    import main as m
 
     limit = min(max(limit, 1), 200)
     with m._conn() as c:

@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from app.runtime import main as m
 
 router = APIRouter(tags=["messages"])
 
 
 @router.get("/api/messages")
 async def get_messages():
-    import main as m
 
     msgs = m.load_message_pool()
     meta = {}
@@ -28,7 +26,6 @@ async def get_messages():
 
 @router.post("/api/messages/upload")
 async def upload_messages(file: UploadFile = File(...)):
-    import main as m
 
     content = await file.read(m.MAX_UPLOAD_BYTES + 1)
     if len(content) > m.MAX_UPLOAD_BYTES:

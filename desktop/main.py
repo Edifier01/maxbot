@@ -1490,6 +1490,13 @@ async def _with_client(
     pwd = _QueuePasswordProvider(sess["pwd_q"], profile_id)
     if proxy is None and group_id is not None:
         proxy = _group_proxy(group_id, profile_id)
+    if group_id is not None:
+        with _conn() as c:
+            grow = c.execute("SELECT * FROM groups WHERE id=?", (group_id,)).fetchone()
+        if grow and _group_has_proxy_configured(grow):
+            ok, err = _validate_proxy_for_group(grow, profile_id)
+            if not ok:
+                raise RuntimeError(f"Прокси группы недоступен: {err}")
     extra_kwargs: dict[str, Any] = {"reconnect": False, "log_level": "WARNING"}
     if proxy:
         extra_kwargs["proxy"] = proxy
@@ -2499,6 +2506,80 @@ def _group_proxy(group_id: int, profile_id: int | None = None) -> str | None:
     return antiban_core.pick_proxy_from_pool(raw, profile_id)
 
 
+_PROXY_RECHECK_SEC = 300.0
+_proxy_bad_until: dict[str, tuple[float, str]] = {}
+_tg_notify_at: dict[str, float] = {}
+_TG_DEDUPE_SEC = 300.0
+
+
+def _group_proxy_raw(group_id: int) -> str:
+    with _conn() as c:
+        row = c.execute("SELECT proxy FROM groups WHERE id=?", (group_id,)).fetchone()
+    if not row:
+        return ""
+    try:
+        return (row["proxy"] or "").strip()
+    except (KeyError, IndexError):
+        return ""
+
+
+def _group_has_proxy_configured(group: sqlite3.Row | dict[str, Any]) -> bool:
+    raw = ""
+    try:
+        raw = (group["proxy"] or "").strip()
+    except (KeyError, IndexError, TypeError):
+        raw = _group_proxy_raw(int(group["id"]))
+    return bool(antiban_core.parse_proxy_list(raw))
+
+
+def _proxy_host_label(proxy_url: str) -> str:
+    return proxy_url.split("@")[-1] if proxy_url else ""
+
+
+def _validate_proxy_for_group(
+    group: sqlite3.Row | dict[str, Any],
+    profile_id: int | None,
+) -> tuple[bool, str]:
+    """True = можно работать (прокси не задан или доступен)."""
+    gid = int(group["id"])
+    raw = _group_proxy_raw(gid)
+    if not antiban_core.parse_proxy_list(raw):
+        return True, ""
+    if profile_id is not None:
+        urls = [u for u in [_group_proxy(gid, profile_id)] if u]
+    else:
+        urls = antiban_core.parse_proxy_list(raw)
+    last_err = ""
+    gname = str(group["name"])
+    for proxy_url in urls:
+        key = f"{gid}:{_proxy_host_label(proxy_url)}"
+        now = time.time()
+        bad = _proxy_bad_until.get(key)
+        if bad and now < bad[0]:
+            last_err = bad[1]
+            continue
+        ok, err = antiban_core.check_proxy(proxy_url)
+        if ok:
+            _proxy_bad_until.pop(key, None)
+            return True, ""
+        _proxy_bad_until[key] = (now + _PROXY_RECHECK_SEC, err)
+        last_err = err
+        append_log(
+            f"Прокси недоступен: группа «{gname}» "
+            f"({_proxy_host_label(proxy_url)}): {err}"
+        )
+        _schedule_telegram(
+            "Прокси недоступен",
+            [
+                f"Группа: {gname} (#{gid})",
+                f"Прокси: {_proxy_host_label(proxy_url)}",
+                f"Ошибка: {err}",
+            ],
+            dedupe_key=f"proxy:{key}",
+        )
+    return False, last_err or "прокси недоступен"
+
+
 def _dedupe_window_for_group(group_id: int) -> int:
     """Минимум из настройки; растёт с числом аккаунтов в группе (×2)."""
     configured = max(1, _setting_int("text_dedupe_window", 6))
@@ -2617,6 +2698,12 @@ def _worker_shutdown(reason: str) -> None:
     append_log("Воркер остановлен")
     status = "completed" if reason.startswith("Готово") else "stopped"
     _finish_campaign(status, reason)
+    if not reason.startswith("Готово"):
+        _schedule_telegram(
+            "Рассылка остановлена",
+            [f"Причина: {reason}"],
+            dedupe_key=f"critical:{hash(reason) & 0xFFFF}",
+        )
     # уведомления в фоне
     try:
         loop = asyncio.get_running_loop()
@@ -2717,6 +2804,83 @@ def _http_post_json(url: str, payload: dict[str, Any], timeout: float = 15) -> N
         resp.read()
 
 
+def _telegram_credentials() -> tuple[str, str]:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if token and chat:
+        return token, chat
+    if not _is_server_mode():
+        return (
+            get_setting("telegram_bot_token").strip(),
+            get_setting("telegram_chat_id").strip(),
+        )
+    return "", ""
+
+
+def _alert_institution_label() -> str:
+    if _is_server_mode():
+        try:
+            from server.app import db_pg
+            from server.app.tenant import get_tenant_id
+
+            tid = get_tenant_id()
+            if tid:
+                tenant = db_pg.get_tenant(tid)
+                if tenant:
+                    return f"{tenant['institution_name']} (#{tid})"
+        except Exception:
+            pass
+    return "локально"
+
+
+def _schedule_telegram(
+    title: str,
+    lines: list[str],
+    *,
+    dedupe_key: str | None = None,
+) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_telegram_notify(title, lines, dedupe_key=dedupe_key))
+    except RuntimeError:
+        pass
+
+
+async def _telegram_notify(
+    title: str,
+    lines: list[str],
+    *,
+    dedupe_key: str | None = None,
+) -> None:
+    token, chat_id = _telegram_credentials()
+    if not token or not chat_id:
+        return
+    if dedupe_key:
+        now = time.time()
+        if now - _tg_notify_at.get(dedupe_key, 0.0) < _TG_DEDUPE_SEC:
+            return
+        _tg_notify_at[dedupe_key] = now
+    text = (
+        f"MAX Sender · {title}\n"
+        f"Учреждение: {_alert_institution_label()}\n"
+        + "\n".join(lines)
+    )
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        await asyncio.to_thread(
+            _http_post_json, url, {"chat_id": chat_id, "text": text[:4000]}
+        )
+    except Exception as e:
+        append_log(f"Telegram ошибка: {e}")
+
+
+def _preflight_group_proxies() -> None:
+    for group in _active_groups():
+        if not _group_has_proxy_configured(group):
+            continue
+        _validate_proxy_for_group(group, profile_id=None)
+
+
 async def _notify_campaign_end(status: str, reason: str) -> None:
     payload = {
         "event": "campaign_finished",
@@ -2740,30 +2904,25 @@ async def _notify_campaign_end(status: str, reason: str) -> None:
         except Exception as e:
             append_log(f"Ошибка вебхука: {e}")
 
-    token = get_setting("telegram_bot_token").strip()
-    chat_id = get_setting("telegram_chat_id").strip()
-    if token and chat_id:
-        _status_ru = {
-            "completed": "завершена",
-            "stopped": "остановлена",
-            "paused": "на паузе",
-            "running": "идёт",
-            "failed": "с ошибкой",
-        }.get(str(status), str(status))
-        text = (
-            f"MAX Sender: кампания {_status_ru}\n"
-            f"{reason}\n"
-            f"отправлено={payload.get('campaign', {}).get('messages_sent', '?')} "
-            f"ошибок={payload.get('campaign', {}).get('messages_failed', '?')}"
-        )
-        try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            await asyncio.to_thread(
-                _http_post_json, url, {"chat_id": chat_id, "text": text}
-            )
-            append_log("Telegram: уведомление отправлено")
-        except Exception as e:
-            append_log(f"Telegram ошибка: {e}")
+    _status_ru = {
+        "completed": "завершена",
+        "stopped": "остановлена",
+        "paused": "на паузе",
+        "running": "идёт",
+        "failed": "с ошибкой",
+    }.get(str(status), str(status))
+    camp = payload.get("campaign") or {}
+    await _telegram_notify(
+        f"Кампания {_status_ru}",
+        [
+            f"Причина: {reason}",
+            f"Отправлено: {camp.get('messages_sent', '?')}",
+            f"Ошибок: {camp.get('messages_failed', '?')}",
+        ],
+        dedupe_key=f"campaign_end:{camp.get('id', status)}",
+    )
+    if _telegram_credentials()[0]:
+        append_log("Telegram: уведомление отправлено")
 
 
 def backup_database() -> Path | None:
@@ -3084,6 +3243,16 @@ def _claim_next_job() -> dict[str, Any] | str | None:
                 )
                 return None
 
+            if not _validate_proxy_for_group(group, profile["id"])[0]:
+                append_log(
+                    f"Группа «{group['name']}»: прокси недоступен — пропуск"
+                )
+                c.execute(
+                    "UPDATE queue_state SET group_idx=? WHERE id=1",
+                    (next_index(gi, len(groups)),),
+                )
+                return None
+
             picked = _pick_next_message(c, messages, mi)
             if picked is None:
                 if not _pool_done_announced:
@@ -3255,6 +3424,17 @@ async def _worker_loop() -> None:
                 continue
             if not _can_send_in_group(profile, group["id"]):
                 continue
+            if not _validate_proxy_for_group(group, profile["id"])[0]:
+                append_log(
+                    f"Группа «{group['name']}»: прокси недоступен — пропуск"
+                )
+                with _conn() as c:
+                    c.execute(
+                        "UPDATE queue_state SET group_idx=? WHERE id=1",
+                        (next_index(gi, len(groups)),),
+                    )
+                sent = False
+                break
 
             with _conn() as c:
                 picked = _pick_next_message(c, messages, mi)
@@ -3414,6 +3594,7 @@ async def _start_worker(
             return
         _touch_worker_activity()
         _pool_done_announced = False
+        _preflight_group_proxies()
         with _conn() as c:
             c.execute("UPDATE queue_state SET running=1 WHERE id=1")
             # колода на старте, если ещё не собрана

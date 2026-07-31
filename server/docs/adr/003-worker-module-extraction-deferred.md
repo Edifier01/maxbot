@@ -29,11 +29,18 @@ Mechanical tooling: `scripts/extract_worker.py`, `scripts/patch_main_worker.py`.
 
 - Positive: ~780 lines removed from `main.py`; worker domain has a named module; pytest baseline unchanged (44 passed).
 - Negative: circular dependency via lazy `_m()` bridge; send/pacing still in `main.py`.
-- Phase 2 (future `/start-feature`): move `_send_with_retry` and pacing helpers; replace lazy bridge with explicit deps.
+**Phase 2 (implemented 2026-07-31):** `app/campaign_send.py` holds `send_with_retry`, `sleep_send_delay`, pacing; `app/campaign_facade.py` replaces lazy `_m()` with explicit `main` proxy; `campaign_worker.py` has zero `_m()` calls.
+
+**Phase 3 (implemented 2026-07-31):** Mechanical extraction to:
+- `app/sqlite_backend.py` — `_conn`, `init_db`, schema migrations
+- `app/campaign_queue.py` — message bag + `_pick_next_message`
+- `app/campaign_query.py` — `_active_groups`, `_active_profiles_for_group`, `_ensure_group_role_plan`
+
+`main.py` re-exports all symbols; callers via `app.runtime.main` unchanged.
 
 ## Validation
 
 ```
 MAX_TEST=1 MAX_SERVER_MODE=1 JWT_SECRET=test-secret-min-32-chars-long python -m pytest tests/ -q
-→ 44 passed, 4 skipped
+→ 64 passed, 4 skipped (phase 3)
 ```

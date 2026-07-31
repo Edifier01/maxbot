@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 
 from app import auth, db_pg
 from app.config import is_server_mode
+from app.runtime import main as app_main
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -47,8 +50,6 @@ def _token_response(user: dict) -> dict:
 async def register(body: RegisterIn):
     if not is_server_mode():
         raise HTTPException(400, "Регистрация доступна только на сервере")
-    import os
-
     if os.environ.get("REGISTRATION_OPEN", "1").strip().lower() not in (
         "1",
         "true",
@@ -63,8 +64,6 @@ async def register(body: RegisterIn):
         info = auth.register_user(body.institution_name, body.email, body.password)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-
-    import main as app_main
 
     from app.tenant_init import init_tenant_db, rollback_tenant_registration
 
@@ -91,8 +90,6 @@ async def login(body: LoginIn):
         raise HTTPException(401, "Неверный email или пароль")
 
     if user.get("tenant_id"):
-        import main as app_main
-
         from app.tenant_init import init_tenant_db
 
         init_tenant_db(app_main, user["tenant_id"])
@@ -133,28 +130,11 @@ async def me(request: Request):
         get_user_id,
         get_user_role,
         is_impersonating,
-        set_context,
     )
 
     user_id = get_user_id()
     if user_id is None:
-        token = ""
-        header = request.headers.get("Authorization", "")
-        if header.startswith("Bearer "):
-            token = header[7:]
-        if not token:
-            raise HTTPException(401, "Требуется вход")
-        try:
-            payload = auth.decode_token(token)
-        except Exception as e:
-            raise HTTPException(401, "Сессия истекла") from e
-        user_id = int(payload["sub"])
-        set_context(
-            user_id=user_id,
-            tenant_id=payload.get("tenant_id"),
-            role=payload.get("role", "user"),
-            impersonating=bool(payload.get("imp")),
-        )
+        raise HTTPException(401, "Требуется вход")
     user = db_pg.get_user_by_id(user_id)
     if not user:
         raise HTTPException(401, "Пользователь не найден")

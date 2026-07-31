@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-from datetime import datetime
-from typing import Any
-
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException
 
 from app.routes_models import BulkProfilesIn, GroupIn, GroupPatchIn, ProfileIn
+from app.runtime import main as m
 
 router = APIRouter(tags=["groups"])
 
 
 @router.get("/api/groups")
 async def list_groups():
-    import main as m
 
     with m._conn() as c:
         rows = c.execute(
@@ -37,7 +32,6 @@ async def list_groups():
 
 @router.get("/api/groups/{group_id}/profiles")
 async def list_group_profiles(group_id: int, offset: int = 0, limit: int = 20):
-    import main as m
 
     with m._conn() as c:
         if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
@@ -62,7 +56,6 @@ async def list_group_profiles(group_id: int, offset: int = 0, limit: int = 20):
 
 @router.post("/api/groups")
 async def add_group(body: GroupIn):
-    import main as m
 
     invite = (body.invite_link or "").strip()
     if not invite:
@@ -84,7 +77,6 @@ async def add_group(body: GroupIn):
 
 @router.patch("/api/groups/{group_id}")
 async def patch_group(group_id: int, body: GroupPatchIn):
-    import main as m
 
     data = body.model_dump(exclude_unset=True)
     if not data:
@@ -123,7 +115,6 @@ async def patch_group(group_id: int, body: GroupPatchIn):
 
 @router.post("/api/groups/{group_id}/profiles")
 async def add_group_profile(group_id: int, body: ProfileIn):
-    import main as m
 
     phone = m._normalize_phone(body.phone)
     with m._conn() as c:
@@ -173,7 +164,6 @@ async def add_group_profile(group_id: int, body: ProfileIn):
 
 @router.post("/api/groups/{group_id}/profiles/bulk")
 async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
-    import main as m
 
     """Импорт phone,label. Пропускает уже существующие в группе."""
     if not body.profiles:
@@ -250,7 +240,6 @@ async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
 
 @router.delete("/api/groups/{group_id}")
 async def delete_group(group_id: int):
-    import main as m
 
     with m._conn() as c:
         if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
@@ -271,7 +260,6 @@ async def delete_group(group_id: int):
 
 @router.delete("/api/groups/{group_id}/profiles/{profile_id}")
 async def remove_group_profile(group_id: int, profile_id: int):
-    import main as m
 
     with m._conn() as c:
         row = c.execute(

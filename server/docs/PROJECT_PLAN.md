@@ -61,7 +61,7 @@ Multi-tenant SaaS для controlled массовой рассылки в мес�
 - [x] Monitoring/alerting beyond health + metrics
 - [x] Automated subscription lifecycle (manual billing)
 - [x] User UI: subscription expiry date
-- [x] Reduce `main.py` monolith (worker extraction phase 1 — ADR 003)
+- [x] Reduce `main.py` monolith (worker extraction phase 1–2 — ADR 003)
 - ~~Core sync with desktop~~ — out of scope this epic
 
 ## Release Gates

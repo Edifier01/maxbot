@@ -29,7 +29,7 @@ def _authed_request(token: str = "jwt-token") -> MagicMock:
 
 
 def test_rejects_missing_user(auth_mw):
-    payload = {"sub": "99", "role": "user", "tenant_id": 1, "jti": "x"}
+    payload = {"sub": "99", "role": "user", "tenant_id": 1, "jti": "x", "tv": 0}
 
     async def run():
         with patch("app.middleware.decode_token", return_value=payload), patch(
@@ -43,7 +43,7 @@ def test_rejects_missing_user(auth_mw):
 
 
 def test_rejects_missing_tenant(auth_mw):
-    payload = {"sub": "1", "role": "user", "tenant_id": 5, "jti": "x"}
+    payload = {"sub": "1", "role": "user", "tenant_id": 5, "jti": "x", "tv": 0}
     user = {"id": 1, "role": "user", "tenant_id": 5}
 
     async def run():

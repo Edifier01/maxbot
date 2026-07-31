@@ -92,6 +92,12 @@ Unit-тесты: `tests/test_celery_worker.py`.
 
 **Критично:** `max_server_data` — ключ шифрования сессий. Без него сессии не расшифровать.
 
+**Vault в server mode:** новые tenant получают legacy `.app_key` (ключ лежит на диске рядом с данными). Это слабее PIN-vault (PBKDF2). Пользователь должен задать пароль vault в UI; до этого `/api/vault/status` вернёт `"protected": false` — панель показывает предупреждение.
+
+### PostgreSQL migrations
+
+Fresh install: `initdb.d` монтирует только `schema_pg.sql` (таблица `schema_migrations`). Все SQL из `migrations/*.sql` применяет Python runner (`db_pg._apply_pending_migrations`) при старте приложения. Новые миграции добавляйте только в `migrations/` — **не** в `docker-entrypoint-initdb.d`.
+
 ### Создание бэкапа
 
 ```bash
@@ -140,7 +146,7 @@ docker compose up -d
 ```bash
 docker compose logs -f app
 curl -s https://$DOMAIN/api/health | python3 -m json.tool
-curl -s https://$DOMAIN/metrics | head
+curl -s -H "Authorization: Bearer $INTERNAL_SERVICE_TOKEN" https://$DOMAIN/metrics | head
 ```
 
 Алерты: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` в `.env` (если настроены в приложении).
@@ -163,6 +169,12 @@ curl -s https://$DOMAIN/metrics | head
 ### Metrics
 
 `GET /metrics` — gauges: `max_sender_pg_up`, `max_sender_redis_up`, `max_sender_subscriptions_expiring_7d`, `max_sender_uptime_seconds`.
+
+**Auth:** только `Authorization: Bearer <INTERNAL_SERVICE_TOKEN>`. User JWT не принимается. Prometheus/scrape — передать service token в заголовке.
+
+### WebSocket status
+
+`WS /ws/status` — auth первым сообщением после connect: `{"type":"auth","token":"<JWT>"}` (server) или `{"type":"auth","pin":"..."}` (desktop). Query `?token=` больше не используется.
 
 ### Telegram ops (server mode)
 

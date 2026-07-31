@@ -1,0 +1,10 @@
+tools/
+docs/archive/
+.cursor/
+.git/
+venv/
+data/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/

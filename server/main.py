@@ -249,9 +249,6 @@ _log: list[str] = []
 _log_lock = threading.Lock()
 _auth_sessions: dict[Any, dict[str, Any]] = {}
 _login_tasks: dict[Any, asyncio.Task] = {}
-_db_conn: sqlite3.Connection | None = None
-_tenant_db_conns: dict[str, sqlite3.Connection] = {}
-_db_lock = threading.Lock()
 _settings_cache: dict = {}
 _settings_cache_lock = threading.Lock()
 _rate_counters: dict[str, list[float]] = defaultdict(list)
@@ -261,16 +258,10 @@ _vault_unlocked = False
 
 def reset_test_runtime() -> None:
     """Сброс in-memory состояния между pytest-тестами (MAX_TEST=1)."""
-    global _db_conn, _fernet, _vault_unlocked
-    with _db_lock:
-        for conn in list(_tenant_db_conns.values()):
-            with contextlib.suppress(Exception):
-                conn.close()
-        _tenant_db_conns.clear()
-        if _db_conn is not None:
-            with contextlib.suppress(Exception):
-                _db_conn.close()
-            _db_conn = None
+    global _fernet, _vault_unlocked
+    from app import sqlite_backend
+
+    sqlite_backend.reset_connections()
     _fernet = None
     _vault_unlocked = False
     REGISTRY.reset_test()
@@ -296,69 +287,6 @@ def reset_test_runtime() -> None:
 # --- DB (stdlib sqlite3; PostgreSQL schema — см. schema_pg.sql / Docker) ------
 
 
-def _reset_db_conn() -> None:
-    global _db_conn
-    if not _is_server_mode():
-        with _db_lock:
-            if _db_conn is not None:
-                with contextlib.suppress(Exception):
-                    _db_conn.close()
-                _db_conn = None
-        return
-    key = str(_resolve_data_dir())
-    with _db_lock:
-        conn = _tenant_db_conns.pop(key, None)
-        if conn is not None:
-            with contextlib.suppress(Exception):
-                conn.close()
-        if _db_conn is not None:
-            with contextlib.suppress(Exception):
-                _db_conn.close()
-            _db_conn = None
-
-
-def _sqlite_connect(db_path: Path) -> sqlite3.Connection:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
-
-
-def _global_db_path() -> Path:
-    return ROOT / "data" / "global" / "app.db"
-
-
-def _global_conn() -> sqlite3.Connection:
-    path = str(_global_db_path())
-    with _db_lock:
-        if path not in _tenant_db_conns:
-            _tenant_db_conns[path] = _sqlite_connect(_global_db_path())
-        return _tenant_db_conns[path]
-
-
-def _conn() -> sqlite3.Connection:
-    global _db_conn
-    if DB_BACKEND == "postgres":
-        raise RuntimeError(
-            "DATABASE_URL указывает на PostgreSQL, но runtime SQLite. "
-            "Уберите DATABASE_URL или не задайте MAX_USE_DATABASE_URL=1."
-        )
-    if _is_server_mode():
-        key = str(_resolve_data_dir())
-        with _db_lock:
-            if key not in _tenant_db_conns:
-                _tenant_db_conns[key] = _sqlite_connect(_db_path())
-            return _tenant_db_conns[key]
-    with _db_lock:
-        if _db_conn is None:
-            DATA.mkdir(parents=True, exist_ok=True)
-            _db_conn = _sqlite_connect(_db_path())
-        return _db_conn
-
-
 def _metric_inc(name: str, value: float = 1) -> None:
     _metrics[name] = _metrics.get(name, 0) + value
 
@@ -373,252 +301,6 @@ def _pool_size() -> int:
         except ValueError:
             n = 1
     return max(1, min(n, 32))
-
-
-def init_db() -> None:
-    DATA.mkdir(parents=True, exist_ok=True)
-    SESSIONS.mkdir(parents=True, exist_ok=True)
-    MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with _conn() as c:
-        c.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS profiles (
-                id INTEGER PRIMARY KEY,
-                phone TEXT NOT NULL UNIQUE,
-                label TEXT DEFAULT '',
-                status TEXT DEFAULT 'pending',
-                messages_sent_today INTEGER DEFAULT 0,
-                sent_day TEXT,
-                last_error TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS groups (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                max_chat_id TEXT,
-                invite_link TEXT DEFAULT '',
-                is_active INTEGER DEFAULT 1,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS group_profiles (
-                group_id INTEGER NOT NULL,
-                profile_id INTEGER NOT NULL,
-                order_index INTEGER DEFAULT 0,
-                is_enabled INTEGER DEFAULT 1,
-                PRIMARY KEY (group_id, profile_id)
-            );
-            CREATE TABLE IF NOT EXISTS message_pool (
-                id INTEGER PRIMARY KEY,
-                text TEXT NOT NULL,
-                order_index INTEGER NOT NULL,
-                loaded_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS queue_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                running INTEGER DEFAULT 0,
-                profile_idx INTEGER DEFAULT 0,
-                message_idx INTEGER DEFAULT 0,
-                group_idx INTEGER DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS send_log (
-                id INTEGER PRIMARY KEY,
-                profile_id INTEGER,
-                group_id INTEGER,
-                message_idx INTEGER,
-                status TEXT,
-                error TEXT DEFAULT '',
-                sent_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS app_log (
-                id INTEGER PRIMARY KEY,
-                ts TEXT DEFAULT (datetime('now')),
-                msg TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS settings_audit (
-                id INTEGER PRIMARY KEY,
-                key TEXT NOT NULL,
-                old_value TEXT,
-                new_value TEXT,
-                changed_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS campaigns (
-                id INTEGER PRIMARY KEY,
-                started_at TEXT,
-                finished_at TEXT,
-                status TEXT NOT NULL DEFAULT 'running',
-                messages_total INTEGER DEFAULT 0,
-                messages_sent INTEGER DEFAULT 0,
-                messages_failed INTEGER DEFAULT 0,
-                reason TEXT DEFAULT '',
-                scheduled_for TEXT,
-                config_json TEXT DEFAULT '{}'
-            );
-            CREATE TABLE IF NOT EXISTS campaign_schedule (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                start_at TEXT,
-                enabled INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS antiban_state (
-                profile_id INTEGER PRIMARY KEY,
-                burst_count INTEGER DEFAULT 0,
-                break_until TEXT,
-                consecutive_errors INTEGER DEFAULT 0,
-                circuit_opened_at REAL
-            );
-            INSERT OR IGNORE INTO queue_state (id) VALUES (1);
-            INSERT OR IGNORE INTO campaign_schedule (id) VALUES (1);
-            """
-        )
-        _migrate_schema(c)
-        for k, v in DEFAULTS.items():
-            c.execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v)
-            )
-        _migrate_antiban_defaults(c)
-    BACKUPS.mkdir(parents=True, exist_ok=True)
-
-
-def _table_columns(c: sqlite3.Connection, table: str) -> set[str]:
-    return {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
-
-
-def _migrate_schema(c: sqlite3.Connection) -> None:
-    cols_p = _table_columns(c, "profiles")
-    if "daily_limit" not in cols_p:
-        c.execute("ALTER TABLE profiles ADD COLUMN daily_limit INTEGER")
-    if "daily_limit_day" not in cols_p:
-        c.execute("ALTER TABLE profiles ADD COLUMN daily_limit_day TEXT")
-    if "cooldown_until" not in cols_p:
-        c.execute("ALTER TABLE profiles ADD COLUMN cooldown_until TEXT")
-    if "proxy" not in cols_p:
-        c.execute("ALTER TABLE profiles ADD COLUMN proxy TEXT DEFAULT ''")
-    if "fail_count" not in cols_p:
-        c.execute("ALTER TABLE profiles ADD COLUMN fail_count INTEGER DEFAULT 0")
-    cols_g = _table_columns(c, "groups")
-    if "proxy" not in cols_g:
-        c.execute("ALTER TABLE groups ADD COLUMN proxy TEXT DEFAULT ''")
-        # миграция: взять прокси с первого профиля группы, у которого он задан
-        groups = c.execute("SELECT id FROM groups").fetchall()
-        for g in groups:
-            row = c.execute(
-                """
-                SELECT p.proxy FROM profiles p
-                JOIN group_profiles gp ON gp.profile_id = p.id
-                WHERE gp.group_id=? AND gp.is_enabled=1
-                  AND p.proxy IS NOT NULL AND TRIM(p.proxy) != ''
-                ORDER BY gp.order_index, p.id LIMIT 1
-                """,
-                (g["id"],),
-            ).fetchone()
-            if row and row["proxy"]:
-                c.execute(
-                    "UPDATE groups SET proxy=? WHERE id=?",
-                    (row["proxy"].strip(), g["id"]),
-                )
-    cols_q = _table_columns(c, "queue_state")
-    if "message_bag" not in cols_q:
-        c.execute("ALTER TABLE queue_state ADD COLUMN message_bag TEXT DEFAULT '[]'")
-    cols_gp = _table_columns(c, "group_profiles")
-    if "role_day" not in cols_gp:
-        c.execute("ALTER TABLE group_profiles ADD COLUMN role_day TEXT")
-    if "day_role" not in cols_gp:
-        c.execute("ALTER TABLE group_profiles ADD COLUMN day_role TEXT")
-    if "day_order" not in cols_gp:
-        c.execute("ALTER TABLE group_profiles ADD COLUMN day_order INTEGER")
-    cols_sl = _table_columns(c, "send_log")
-    if "sent_text" not in cols_sl:
-        c.execute("ALTER TABLE send_log ADD COLUMN sent_text TEXT DEFAULT ''")
-    c.execute(
-        "CREATE INDEX IF NOT EXISTS idx_send_log_status_sent "
-        "ON send_log(status, sent_at)"
-    )
-    c.execute(
-        "CREATE INDEX IF NOT EXISTS idx_send_log_profile_group "
-        "ON send_log(profile_id, group_id, status)"
-    )
-
-
-def _migrate_antiban_defaults(c: sqlite3.Connection) -> None:
-    """Мягкие миграции дефолтов антибана."""
-    # v16: старые MVP → широкие паузы
-    flag = c.execute(
-        "SELECT value FROM settings WHERE key='antiban_defaults_v16'"
-    ).fetchone()
-    if not flag:
-        mapping = {
-            "delay_min_sec": ("60", "180"),
-            "delay_max_sec": ("180", "600"),
-            "jitter_percent": ("25", "40"),
-            "max_msgs_per_profile_day": ("15", "12"),
-        }
-        for key, (old, new) in mapping.items():
-            row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-            if row and row["value"] == old:
-                c.execute("UPDATE settings SET value=? WHERE key=?", (new, key))
-        c.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('antiban_defaults_v16', '1')"
-        )
-    # v17: 180/600 → 60/180 (запрос пользователя)
-    flag17 = c.execute(
-        "SELECT value FROM settings WHERE key='antiban_delays_v17'"
-    ).fetchone()
-    if not flag17:
-        row_lo = c.execute(
-            "SELECT value FROM settings WHERE key='delay_min_sec'"
-        ).fetchone()
-        row_hi = c.execute(
-            "SELECT value FROM settings WHERE key='delay_max_sec'"
-        ).fetchone()
-        if row_lo and row_lo["value"] == "180":
-            c.execute("UPDATE settings SET value=? WHERE key=?", ("60", "delay_min_sec"))
-        if row_hi and row_hi["value"] == "600":
-            c.execute("UPDATE settings SET value=? WHERE key=?", ("180", "delay_max_sec"))
-        c.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('antiban_delays_v17', '1')"
-        )
-    # v18: scale profile — короткие паузы, роли %, ослабленные human_pauses
-    flag18 = c.execute(
-        "SELECT value FROM settings WHERE key='campaign_scale_v18'"
-    ).fetchone()
-    if not flag18:
-        v18_map = {
-            "delay_min_sec": ("60", "5"),
-            "delay_max_sec": ("180", "15"),
-            "daily_limit_max": ("12", "10"),
-            "max_msgs_per_profile_day": ("12", "10"),
-            "day_skip_percent": ("20", "40"),
-            "short_pause_chance": ("15", "8"),
-            "long_pause_chance": ("10", "3"),
-            "long_pause_min_sec": ("300", "120"),
-            "long_pause_max_sec": ("900", "300"),
-            "break_after_n": ("4", "8"),
-            "break_min_sec": ("1200", "600"),
-            "break_max_sec": ("2400", "1200"),
-        }
-        for key, (old, new) in v18_map.items():
-            row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-            if row and row["value"] == old:
-                c.execute("UPDATE settings SET value=? WHERE key=?", (new, key))
-        for key, val in (
-            ("role_active_percent", "30"),
-            ("role_quiet_percent", "30"),
-        ):
-            row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-            if not row:
-                c.execute(
-                    "INSERT INTO settings (key, value) VALUES (?, ?)", (key, val)
-                )
-            elif str(row["value"]).strip() in ("", "0"):
-                c.execute("UPDATE settings SET value=? WHERE key=?", (val, key))
-        c.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('campaign_scale_v18', '1')"
-        )
-    _settings_cache.clear()
 
 
 def _local_now() -> datetime:
@@ -850,9 +532,6 @@ def _backups_dir() -> Path:
     return _resolve_data_dir() / "backups"
 
 
-def _db_path() -> Path:
-    return _resolve_data_dir() / "app.db"
-
 
 def _messages_file() -> Path:
     if _is_server_mode():
@@ -944,118 +623,6 @@ def _campaign_goal() -> str:
     return g
 
 
-def _get_message_bag(c: sqlite3.Connection) -> list[int]:
-    row = c.execute("SELECT message_bag FROM queue_state WHERE id=1").fetchone()
-    raw = (row["message_bag"] if row else None) or "[]"
-    try:
-        data = json.loads(raw)
-        if isinstance(data, list):
-            return [int(x) for x in data]
-    except (TypeError, ValueError, json.JSONDecodeError):
-        pass
-    return []
-
-
-def _set_message_bag(c: sqlite3.Connection, bag: list[int]) -> None:
-    c.execute(
-        "UPDATE queue_state SET message_bag=? WHERE id=1",
-        (json.dumps(bag),),
-    )
-
-
-def _rebuild_message_bag(n: int | None = None) -> list[int]:
-    """Перемешать индексы 0..n-1. Для random_norepeat; иначе очистить bag."""
-    if n is None:
-        n = len(load_message_pool())
-    with _conn() as c:
-        if _message_pick_mode() != "random_norepeat" or n <= 0:
-            _set_message_bag(c, [])
-            return []
-        bag = list(range(n))
-        random.shuffle(bag)
-        _set_message_bag(c, bag)
-        return bag
-
-
-def _return_to_message_bag(pool_idx: int) -> None:
-    """Вернуть индекс в колоду после неудачной отправки (random_norepeat)."""
-    if _message_pick_mode() != "random_norepeat":
-        return
-    with _conn() as c:
-        bag = _get_message_bag(c)
-        if pool_idx in bag:
-            return
-        bag.append(pool_idx)
-        random.shuffle(bag)
-        _set_message_bag(c, bag)
-        qs = c.execute("SELECT message_idx FROM queue_state WHERE id=1").fetchone()
-        mi = max(0, int(qs["message_idx"] if qs else 0) - 1)
-        c.execute("UPDATE queue_state SET message_idx=? WHERE id=1", (mi,))
-
-
-def _ensure_message_bag(c: sqlite3.Connection, n: int) -> list[int]:
-    """Колода оставшихся индексов. При daily_limits — при опустошении перемешиваем снова."""
-    if _message_pick_mode() != "random_norepeat":
-        return []
-    if n <= 0:
-        return []
-    bag = _get_message_bag(c)
-    if bag:
-        return bag
-    goal = _campaign_goal()
-    qs = c.execute("SELECT message_idx FROM queue_state WHERE id=1").fetchone()
-    mi = int(qs["message_idx"] if qs else 0)
-    if goal == "message_pool":
-        # один проход по пулу
-        if mi >= n:
-            return []
-        if mi == 0:
-            bag = list(range(n))
-        else:
-            bag = list(range(mi, n))
-    else:
-        # цель — лимиты аккаунтов: колода бесконечно обновляется
-        bag = list(range(n))
-    random.shuffle(bag)
-    _set_message_bag(c, bag)
-    if goal == "daily_limits" and mi > 0:
-        append_log(f"Колода сообщений перемешана заново ({n} шт.)")
-    return bag
-
-
-def _pick_next_message(
-    c: sqlite3.Connection, messages: list[str], mi: int
-) -> tuple[str, int, int, bool] | None:
-    """Выбрать текст.
-
-    Returns:
-      (text, pool_index, progress_next, bag_mode) или None если останавливаемся по пулу.
-      progress_next — счётчик отправок кампании (message_idx).
-    """
-    n = len(messages)
-    if n == 0:
-        return None
-    qs = c.execute("SELECT message_idx FROM queue_state WHERE id=1").fetchone()
-    cur = int(qs["message_idx"] if qs else mi)
-    if _message_pick_mode() == "random_norepeat":
-        bag = _ensure_message_bag(c, n)
-        if not bag:
-            return None
-        pos = random.randrange(len(bag))
-        pool_idx = bag.pop(pos)
-        _set_message_bag(c, bag)
-        progress_next = cur + 1
-        c.execute(
-            "UPDATE queue_state SET message_idx=? WHERE id=1",
-            (progress_next,),
-        )
-        return messages[pool_idx], pool_idx, progress_next, True
-    # round_robin
-    if _campaign_goal() == "message_pool" and mi >= n:
-        return None
-    pool_idx = mi % n
-    progress_next = cur + 1
-    return messages[pool_idx], pool_idx, progress_next, False
 
 
 def _self_check_round_robin() -> None:
@@ -1735,6 +1302,50 @@ def _role_plan_enabled() -> bool:
     return _human_rhythm_enabled() and _setting_truthy("role_plan_enabled", "1")
 
 
+def _ensure_role_cycle_anchor() -> None:
+    """Первый запуск кампании — якорь 3-дневной ротации ролей (без сброса)."""
+    if get_setting("role_cycle_anchor"):
+        return
+    set_setting("role_cycle_anchor", _local_today().isoformat())
+
+
+def _role_cycle_anchor() -> date | None:
+    raw = get_setting("role_cycle_anchor")
+    if raw:
+        try:
+            return date.fromisoformat(str(raw).strip()[:10])
+        except ValueError:
+            pass
+    with _conn() as c:
+        row = c.execute(
+            "SELECT MIN(started_at) AS t FROM campaigns WHERE started_at IS NOT NULL"
+        ).fetchone()
+    if not row or not row["t"]:
+        return None
+    val = str(row["t"]).strip()
+    try:
+        if "T" in val or "+" in val or val.endswith("Z"):
+            dt = _parse_iso_datetime(val)
+        else:
+            dt = datetime.strptime(val[:19], "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        offset = float(get_setting("timezone_offset_hours") or DEFAULTS["timezone_offset_hours"])
+        return dt.astimezone(timezone(timedelta(hours=offset))).date()
+    except (ValueError, TypeError):
+        try:
+            return date.fromisoformat(val[:10])
+        except ValueError:
+            return None
+
+
+def _role_cycle_day() -> int:
+    anchor = _role_cycle_anchor()
+    if anchor is None:
+        return 0
+    return (_local_today() - anchor).days % 3
+
+
 def _role_percent_mode() -> bool:
     return _setting_float("role_active_percent", 0.0) > 0.0
 
@@ -1845,304 +1456,6 @@ async def _wait_if_outside_send_window() -> bool:
     return True
 
 
-def _ensure_group_role_plan(group_id: int) -> None:
-    """Раз в день: shuffle + active/quiet/skip для группы."""
-    if not _role_plan_enabled():
-        return
-    today = _local_today().isoformat()
-    with _conn() as c:
-        rows = c.execute(
-            """
-            SELECT gp.profile_id, gp.role_day, gp.is_enabled, p.status
-            FROM group_profiles gp
-            JOIN profiles p ON p.id = gp.profile_id
-            WHERE gp.group_id=? AND gp.is_enabled=1 AND p.status=?
-            ORDER BY gp.order_index, p.id
-            """,
-            (group_id, ProfileStatus.ACTIVE),
-        ).fetchall()
-        if not rows:
-            return
-        if all(r["role_day"] == today for r in rows):
-            return
-
-        ids = [int(r["profile_id"]) for r in rows]
-        random.shuffle(ids)
-        n = len(ids)
-        skip_pct = _day_skip_percent()
-        if _role_percent_mode():
-            active_pct = max(0.0, min(100.0, _setting_float("role_active_percent", 30.0)))
-            quiet_pct = max(0.0, min(100.0, _setting_float("role_quiet_percent", 30.0)))
-            skip_n, active_n, quiet_n = antiban_core.split_role_counts(
-                n,
-                skip_percent=skip_pct,
-                active_percent=active_pct,
-                quiet_percent=quiet_pct,
-            )
-            skip_ids = set(ids[:skip_n])
-            remaining = ids[skip_n:]
-            active_ids = set(remaining[:active_n])
-            quiet_ids = set(remaining[active_n:])
-        else:
-            skip_n = int(round(n * skip_pct / 100.0)) if skip_pct > 0 else 0
-            skip_n = max(0, min(n, skip_n))
-            # не скипать всех: хотя бы один может писать
-            if skip_n >= n and n > 0:
-                skip_n = n - 1
-            skip_ids = set(ids[:skip_n])
-            remaining = [i for i in ids if i not in skip_ids]
-
-            try:
-                a_min = max(0, int(get_setting("role_active_min") or "5"))
-            except ValueError:
-                a_min = 5
-            try:
-                a_max = max(0, int(get_setting("role_active_max") or "10"))
-            except ValueError:
-                a_max = 10
-            if a_min > a_max:
-                a_min, a_max = a_max, a_min
-            if not remaining:
-                active_n = 0
-            else:
-                lo = min(a_min, len(remaining))
-                hi = min(a_max, len(remaining))
-                if lo > hi:
-                    lo, hi = hi, lo
-                active_n = random.randint(lo, hi) if hi >= lo else len(remaining)
-
-            active_ids = set(remaining[:active_n])
-            quiet_ids = set(remaining[active_n:])
-
-        # порядок отправки: только active+quiet, shuffle
-        send_order = list(active_ids | quiet_ids)
-        random.shuffle(send_order)
-        order_map = {pid: idx for idx, pid in enumerate(send_order)}
-        # skip в конец, стабильный порядок
-        for i, pid in enumerate(sorted(skip_ids)):
-            order_map[pid] = len(send_order) + i
-
-        for pid in ids:
-            if pid in skip_ids:
-                role = "skip"
-            elif pid in active_ids:
-                role = "active"
-            else:
-                role = "quiet"
-            c.execute(
-                "UPDATE group_profiles SET role_day=?, day_role=?, day_order=? "
-                "WHERE group_id=? AND profile_id=?",
-                (today, role, order_map.get(pid, 0), group_id, pid),
-            )
-
-        g = c.execute("SELECT name FROM groups WHERE id=?", (group_id,)).fetchone()
-        gname = g["name"] if g else str(group_id)
-    append_log(
-        f"Роли дня «{gname}»: активных={len(active_ids)} тихих={len(quiet_ids)} "
-        f"пропуск={len(skip_ids)} (перемешано)"
-    )
-
-
-def _group_sends_today(profile_id: int, group_id: int) -> int:
-    today = _local_today().isoformat()
-    with _conn() as c:
-        row = c.execute(
-            """
-            SELECT COUNT(*) n FROM send_log
-            WHERE profile_id=? AND group_id=? AND status='sent'
-              AND date(sent_at)=?
-            """,
-            (profile_id, group_id, today),
-        ).fetchone()
-    return int(row["n"] if row else 0)
-
-
-def _profile_day_role(profile: sqlite3.Row | dict[str, Any]) -> str | None:
-    try:
-        role = profile["day_role"]
-    except (KeyError, IndexError, TypeError):
-        return None
-    if role is None:
-        return None
-    s = str(role).strip().lower()
-    return s or None
-
-
-def _quiet_limit() -> int:
-    try:
-        return max(0, int(get_setting("role_quiet_limit") or "1"))
-    except ValueError:
-        return 1
-
-
-def _can_send_in_group(profile: sqlite3.Row, group_id: int) -> bool:
-    if _is_in_human_break(int(profile["id"])):
-        return False
-    if not _can_send(profile):
-        return False
-    role = _profile_day_role(profile)
-    if role == "skip":
-        return False
-    if role == "quiet":
-        return _group_sends_today(int(profile["id"]), group_id) < _quiet_limit()
-    return True
-
-
-def _human_pauses_enabled() -> bool:
-    return _setting_truthy("human_pauses_enabled", "1")
-
-
-def _setting_float(key: str, default: float) -> float:
-    try:
-        return float(get_setting(key) or str(default))
-    except ValueError:
-        return default
-
-
-def _setting_int(key: str, default: int) -> int:
-    try:
-        return int(float(get_setting(key) or str(default)))
-    except ValueError:
-        return default
-
-
-def _clamp_range(lo: float, hi: float) -> tuple[float, float]:
-    return antiban_core.clamp_range(lo, hi)
-
-
-def _jitter_percent_now(now: datetime | None = None) -> float:
-    """Jitter % с учётом утра/вечера при human_pauses."""
-    base = _setting_float("jitter_percent", 40.0)
-    if not _human_pauses_enabled():
-        return max(0.0, min(100.0, base))
-    now = now or _local_now()
-    hour = now.hour
-    # утро: до 13; вечер: с 16; иначе базовый
-    if hour < 13:
-        j = _setting_float("jitter_morning_percent", 55.0)
-    elif hour >= 16:
-        j = _setting_float("jitter_evening_percent", 35.0)
-    else:
-        j = base
-    return max(0.0, min(100.0, j))
-
-
-def _compute_send_delay_sec(*, pool_scale: bool = False) -> tuple[float, str]:
-    """Пауза после успешной отправки. Returns (seconds, kind).
-
-    Логнормальное распределение (не uniform) — меньше bot-сигнатуры.
-    pool_scale больше не укорачивает паузу (антибан важнее throughput).
-    """
-    lo = float(_setting_int("delay_min_sec", 60))
-    hi = float(_setting_int("delay_max_sec", 180))
-    lo, hi = _clamp_range(lo, hi)
-    kind = "normal"
-    if _human_pauses_enabled():
-        short_ch = max(0.0, min(100.0, _setting_float("short_pause_chance", 15.0)))
-        long_ch = max(0.0, min(100.0, _setting_float("long_pause_chance", 10.0)))
-        # long и short не пересекаются: сначала long, иначе short, иначе normal
-        roll = random.random() * 100.0
-        if long_ch > 0 and roll < long_ch:
-            slo = float(_setting_int("long_pause_min_sec", 300))
-            shi = float(_setting_int("long_pause_max_sec", 900))
-            lo, hi = _clamp_range(slo, shi)
-            kind = "long"
-        elif short_ch > 0 and roll < long_ch + short_ch:
-            slo = float(_setting_int("short_pause_min_sec", 30))
-            shi = float(_setting_int("short_pause_max_sec", 50))
-            lo, hi = _clamp_range(slo, shi)
-            kind = "short"
-    delay = antiban_core.lognormal_delay_sec(
-        lo, hi, jitter_percent=_jitter_percent_now()
-    )
-    # pool_scale оставлен в сигнатуре для совместимости; намеренно не ускоряет
-    _ = pool_scale
-    return delay, kind
-
-
-async def _sleep_send_delay(*, pool_scale: bool = False) -> None:
-    delay, kind = _compute_send_delay_sec(pool_scale=pool_scale)
-    if kind == "long":
-        append_log(f"Длинная пауза («отвлёкся»): ~{int(delay // 60)} мин")
-    elif kind == "short":
-        append_log(f"Короткая пауза: {int(delay)} с")
-    end_at = time.monotonic() + delay
-    while time.monotonic() < end_at:
-        _touch_worker_activity()
-        left = end_at - time.monotonic()
-        if left <= 0:
-            break
-        await asyncio.sleep(min(30.0, left))
-
-
-def _is_in_human_break(profile_id: int) -> bool:
-    until = RUNTIME.human_break_until.get(profile_id)
-    if not until:
-        return False
-    if _local_now() >= until:
-        _human_break_until.pop(profile_id, None)
-        _persist_antiban_profile(profile_id)
-        return False
-    return True
-
-
-def _note_human_burst(profile_id: int) -> None:
-    """После N отправок — перерыв 20–40 мин у аккаунта (не блокирует воркер)."""
-    if not _human_pauses_enabled():
-        return
-    n = _setting_int("break_after_n", 4)
-    if n <= 0:
-        return
-    burst = RUNTIME.human_burst_count.get(profile_id, 0) + 1
-    if burst < n:
-        _human_burst_count[profile_id] = burst
-        _persist_antiban_profile(profile_id)
-        return
-    _human_burst_count[profile_id] = 0
-    blo = float(_setting_int("break_min_sec", 1200))
-    bhi = float(_setting_int("break_max_sec", 2400))
-    blo, bhi = _clamp_range(blo, bhi)
-    secs = random.uniform(blo, bhi)
-    until = _local_now() + timedelta(seconds=secs)
-    _human_break_until[profile_id] = until
-    _persist_antiban_profile(profile_id)
-    append_log(
-        f"Перерыв аккаунта #{profile_id} после {n} сообщений: "
-        f"~{int(secs // 60)} мин (до {until.strftime('%H:%M')})"
-    )
-
-
-def _active_profiles_for_group(group_id: int) -> list[sqlite3.Row]:
-    if _role_plan_enabled():
-        _ensure_group_role_plan(group_id)
-    with _conn() as c:
-        if _role_plan_enabled():
-            return c.execute(
-                """
-                SELECT p.*, gp.day_role, gp.day_order FROM profiles p
-                JOIN group_profiles gp ON gp.profile_id = p.id
-                WHERE gp.group_id=? AND gp.is_enabled=1 AND p.status=?
-                  AND COALESCE(gp.day_role, '') != 'skip'
-                ORDER BY COALESCE(gp.day_order, gp.order_index), p.id
-                """,
-                (group_id, ProfileStatus.ACTIVE),
-            ).fetchall()
-        return c.execute(
-            """
-            SELECT p.* FROM profiles p
-            JOIN group_profiles gp ON gp.profile_id = p.id
-            WHERE gp.group_id=? AND gp.is_enabled=1 AND p.status=?
-            ORDER BY gp.order_index, p.id
-            """,
-            (group_id, ProfileStatus.ACTIVE),
-        ).fetchall()
-
-
-def _active_groups() -> list[sqlite3.Row]:
-    with _conn() as c:
-        return c.execute(
-            "SELECT * FROM groups WHERE is_active=1 ORDER BY id"
-        ).fetchall()
 
 
 def _reset_daily_counts(c: sqlite3.Connection) -> None:
@@ -2729,6 +2042,87 @@ def _iter_unique_active_profiles():
             yield p
 
 
+def _group_sends_today(profile_id: int, group_id: int) -> int:
+    today = _local_today().isoformat()
+    with _conn() as c:
+        row = c.execute(
+            """
+            SELECT COUNT(*) n FROM send_log
+            WHERE profile_id=? AND group_id=? AND status='sent'
+              AND date(sent_at)=?
+            """,
+            (profile_id, group_id, today),
+        ).fetchone()
+    return int(row["n"] if row else 0)
+
+
+def _profile_day_role(profile: sqlite3.Row | dict[str, Any]) -> str | None:
+    try:
+        role = profile["day_role"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if role is None:
+        return None
+    s = str(role).strip().lower()
+    return s or None
+
+
+def _quiet_limit() -> int:
+    try:
+        return max(0, int(get_setting("role_quiet_limit") or "1"))
+    except ValueError:
+        return 1
+
+
+def _can_send_in_group(profile: sqlite3.Row, group_id: int) -> bool:
+    if _is_in_human_break(int(profile["id"])):
+        return False
+    if not _can_send(profile):
+        return False
+    role = _profile_day_role(profile)
+    if role == "skip":
+        return False
+    if role == "quiet":
+        return _group_sends_today(int(profile["id"]), group_id) < _quiet_limit()
+    return True
+
+
+def _is_in_human_break(profile_id: int) -> bool:
+    until = RUNTIME.human_break_until.get(profile_id)
+    if not until:
+        return False
+    if _local_now() >= until:
+        RUNTIME.human_break_until.pop(profile_id, None)
+        _persist_antiban_profile(profile_id)
+        return False
+    return True
+
+
+def _note_human_burst(profile_id: int) -> None:
+    if not _setting_truthy("human_pauses_enabled", "1"):
+        return
+    n = max(0, _setting_int("break_after_n", 8))
+    if n <= 0:
+        return
+    burst = RUNTIME.human_burst_count.get(profile_id, 0) + 1
+    if burst < n:
+        RUNTIME.human_burst_count[profile_id] = burst
+        _persist_antiban_profile(profile_id)
+        return
+    RUNTIME.human_burst_count[profile_id] = 0
+    blo = float(_setting_int("break_min_sec", 600))
+    bhi = float(_setting_int("break_max_sec", 1200))
+    blo, bhi = antiban_core.clamp_range(blo, bhi)
+    secs = random.uniform(blo, bhi)
+    until = _local_now() + timedelta(seconds=secs)
+    RUNTIME.human_break_until[profile_id] = until
+    _persist_antiban_profile(profile_id)
+    append_log(
+        f"Перерыв аккаунта #{profile_id} после {n} сообщений: "
+        f"~{int(secs // 60)} мин (до {until.strftime('%H:%M')})"
+    )
+
+
 def _has_active_profiles() -> bool:
     return _has_enabled_active_profiles()
 
@@ -2759,7 +2153,7 @@ def _seconds_until_any_human_break_ends() -> float:
     now = _local_now()
     waits = [
         (until - now).total_seconds()
-        for until in _human_break_until.values()
+        for until in RUNTIME.human_break_until.values()
         if until > now
     ]
     return max(1.0, min(waits)) if waits else 30.0
@@ -2816,6 +2210,31 @@ def _daily_capacity_progress() -> dict[str, Any]:
         "messages_in_pool": len(load_message_pool()),
     }
 
+
+
+from app.sqlite_backend import (
+    _conn,
+    _db_path,
+    _global_conn,
+    _global_db_path,
+    _migrate_antiban_defaults,
+    _reset_db_conn,
+    _table_columns,
+    init_db,
+)
+from app.campaign_queue import (
+    _ensure_message_bag,
+    _get_message_bag,
+    _pick_next_message,
+    _rebuild_message_bag,
+    _return_to_message_bag,
+    _set_message_bag,
+)
+from app.campaign_query import (
+    _active_groups,
+    _active_profiles_for_group,
+    _ensure_group_role_plan,
+)
 
 from app.campaign_worker import (
     begin_campaign as _begin_campaign,
@@ -3022,96 +2441,18 @@ async def _send_with_retry(
     *,
     advance_queue: bool = True,
 ) -> bool:
-    """Отправка с retry. True = успех, False = окончательный провал."""
-    last_err = ""
-    for attempt in range(MAX_RETRY):
-        _touch_worker_activity()
-        try:
+    from app.campaign_send import send_with_retry
 
-            final_text = _prepare_outgoing_text(
-                text, profile, group, int(group["id"])
-            )
-
-            async def _do(c, g=group, t=final_text):
-                cid = await resolve_chat_id(c, g)
-                if not cid:
-                    raise RuntimeError("Не удалось определить chat_id")
-                chat_id = int(cid)
-                await c.get_chat(chat_id)
-                await _human_presence_before_send(c, chat_id)
-                await c.send_message(chat_id=chat_id, text=t)
-                return cid
-
-            await _with_client(
-                profile["id"],
-                profile["phone"],
-                _do,
-                group_id=int(group["id"]),
-            )
-            today = _local_today().isoformat()
-            with _conn() as c:
-                c.execute(
-                    "UPDATE profiles SET messages_sent_today=messages_sent_today+1, "
-                    "sent_day=?, last_error='', fail_count=0 WHERE id=?",
-                    (today, profile["id"]),
-                )
-                c.execute(
-                    "INSERT INTO send_log (profile_id, group_id, message_idx, status, sent_text) "
-                    "VALUES (?, ?, ?, 'sent', ?)",
-                    (profile["id"], group["id"], mi, final_text[:2000]),
-                )
-                if advance_queue:
-                    c.execute(
-                        "UPDATE queue_state SET profile_idx=?, message_idx=?, group_idx=? WHERE id=1",
-                        (pi, mi_next, gi_next),
-                    )
-                else:
-                    c.execute(
-                        "UPDATE queue_state SET profile_idx=?, group_idx=? WHERE id=1",
-                        (pi, gi_next),
-                    )
-            _on_success(profile["id"])
-            _note_human_burst(int(profile["id"]))
-            _touch_worker_activity()
-            _metric_inc("messages_sent_total")
-            append_log(
-                f"Успех #{profile['id']} → «{group['name']}»: {final_text[:50]}…"
-            )
-            return True
-        except Exception as e:
-            last_err = str(e)
-            is_auth_err = _is_auth_error(last_err)
-            if is_auth_err and attempt == 0:
-                append_log(
-                    f"Авто-реавторизация #{profile['id']}: повтор подключения "
-                    f"после ошибки сессии…"
-                )
-                await asyncio.sleep(2)
-                _touch_worker_activity()
-                continue
-            if is_auth_err or attempt == MAX_RETRY - 1:
-                if is_auth_err:
-                    last_err = (
-                        f"{last_err} — требуется повторный вход (кнопка «Войти» / «Заново»)"
-                    )
-                _mark_profile_failed(profile["id"], last_err, is_auth_err)
-                with _conn() as c:
-                    c.execute(
-                        "INSERT INTO send_log (profile_id, group_id, message_idx, status, error) "
-                        "VALUES (?, ?, ?, 'failed', ?)",
-                        (profile["id"], group["id"], mi, last_err),
-                    )
-                _metric_inc("messages_failed_total")
-                append_log(f"Ошибка #{profile['id']}: {last_err}")
-                return False
-            delay = RETRY_DELAYS[attempt]
-            append_log(
-                f"Попытка {attempt + 1}/{MAX_RETRY} для #{profile['id']}, "
-                f"повтор через {delay}с: {last_err}"
-            )
-            await asyncio.sleep(delay)
-            _touch_worker_activity()
-    return False
+    return await send_with_retry(
+        profile,
+        group,
+        text,
+        mi,
+        pi,
+        gi_next,
+        mi_next,
+        advance_queue=advance_queue,
+    )
 
 
 async def _backup_loop() -> None:

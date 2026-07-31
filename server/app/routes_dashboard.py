@@ -6,13 +6,13 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from app.runtime import main as m
 
 router = APIRouter(tags=["dashboard"])
 
 
 @router.post("/api/backup")
 async def api_backup_now():
-    import main as m
 
     path = m.backup_database()
     if not path:
@@ -22,7 +22,6 @@ async def api_backup_now():
 
 @router.get("/api/backups")
 async def api_list_backups():
-    import main as m
 
     backups = m._backups_dir()
     backups.mkdir(parents=True, exist_ok=True)
@@ -41,7 +40,6 @@ async def api_list_backups():
 
 @router.get("/api/log")
 async def get_log():
-    import main as m
 
     if m._is_server_mode():
         try:
@@ -57,7 +55,6 @@ async def get_log():
 
 @router.get("/api/dashboard")
 async def dashboard():
-    import main as m
 
     """Сводка по всем профилям и группам для вкладки Dashboard."""
     with m._conn() as c:
@@ -130,7 +127,6 @@ async def get_send_log(
     q: str = "",
     status: str = "",
 ):
-    import main as m
 
     limit = min(max(limit, 1), 200)
     offset = max(offset, 0)

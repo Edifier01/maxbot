@@ -192,6 +192,42 @@ def dedupe_window(configured: int, enabled_profiles: int) -> int:
     return max(cfg, n * 2)
 
 
+ROLE_ROTATION = ("active", "quiet", "skip")
+
+
+def split_thirds(n: int) -> tuple[int, int, int]:
+    """Три части ~33%; остаток n%3 — первым частям по порядку."""
+    if n <= 0:
+        return 0, 0, 0
+    base = n // 3
+    rem = n % 3
+    return (
+        base + (1 if rem > 0 else 0),
+        base + (1 if rem > 1 else 0),
+        base,
+    )
+
+
+def role_rotation_for_part(cycle_day: int, part_index: int) -> str:
+    """Роль части group в день цикла (0=active→quiet→skip)."""
+    return ROLE_ROTATION[(int(cycle_day) + int(part_index)) % 3]
+
+
+def assign_rotation_roles(
+    profile_ids: list[int],
+    cycle_day: int,
+) -> dict[int, str]:
+    """profile_id → day_role по порядку списка, без shuffle."""
+    roles: dict[int, str] = {}
+    idx = 0
+    for part, size in enumerate(split_thirds(len(profile_ids))):
+        role = role_rotation_for_part(cycle_day, part)
+        for _ in range(size):
+            roles[profile_ids[idx]] = role
+            idx += 1
+    return roles
+
+
 def split_role_counts(
     n: int,
     *,
@@ -227,4 +263,18 @@ def _self_check_split_role_counts() -> None:
     assert s + a + q == 10 and s >= 1
 
 
+def _self_check_role_rotation() -> None:
+    assert split_thirds(30) == (10, 10, 10)
+    assert split_thirds(31) == (11, 10, 10)
+    assert split_thirds(10) == (4, 3, 3)
+    ids = list(range(10))
+    r0 = assign_rotation_roles(ids, 0)
+    assert sum(v == "active" for v in r0.values()) == 4
+    assert sum(v == "quiet" for v in r0.values()) == 3
+    assert sum(v == "skip" for v in r0.values()) == 3
+    roles_day0 = {role_rotation_for_part(0, p) for p in range(3)}
+    assert roles_day0 == {"active", "quiet", "skip"}
+
+
 _self_check_split_role_counts()
+_self_check_role_rotation()

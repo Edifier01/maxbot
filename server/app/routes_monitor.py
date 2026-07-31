@@ -4,40 +4,49 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 
 import jwt
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
+from app.runtime import main as m
 
 router = APIRouter(tags=["monitor"])
 
+_WS_AUTH_TIMEOUT = 5.0
 
-def _authenticate_ws(ws: WebSocket) -> bool:
-    """Return True if connection may proceed. Server mode: JWT ?token=."""
-    import main as m
 
-    from app import db_pg
-    from app.auth import decode_token
+async def _authenticate_ws(ws: WebSocket) -> bool:
+    """First-message auth. Caller must accept() before this."""
+
+    from app.auth import decode_token, validate_token_session
     from app.config import is_server_mode
     from app.tenant import set_context
 
+    try:
+        raw = await asyncio.wait_for(ws.receive_text(), timeout=_WS_AUTH_TIMEOUT)
+    except (TimeoutError, asyncio.TimeoutError):
+        return False
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    if data.get("type") != "auth":
+        return False
+
     if is_server_mode():
-        token = (ws.query_params.get("token") or "").strip()
+        token = (data.get("token") or "").strip()
         if not token:
             return False
         try:
             payload = decode_token(token)
         except jwt.PyJWTError:
             return False
-        jti = payload.get("jti")
-        if jti and db_pg.is_token_revoked(jti):
+        if validate_token_session(payload):
             return False
         user_id = int(payload["sub"])
-        if not db_pg.get_user_by_id(user_id):
-            return False
         tenant_id = payload.get("tenant_id")
-        if tenant_id is not None and not db_pg.get_tenant(tenant_id):
-            return False
         set_context(
             user_id=user_id,
             tenant_id=tenant_id,
@@ -47,13 +56,12 @@ def _authenticate_ws(ws: WebSocket) -> bool:
         m._try_legacy_unlock()
         return True
 
-    pin = (ws.query_params.get("pin") or "").strip()
+    pin = (data.get("pin") or "").strip()
     return m._ws_pin_ok(pin)
 
 
 @router.get("/api/health")
 async def health(request: Request):
-    import main as m
 
     import time
 
@@ -114,7 +122,6 @@ async def health(request: Request):
 
 @router.get("/metrics")
 async def prometheus_metrics():
-    import main as m
     import time
 
     from app import auth_rate_limit, db_pg
@@ -179,23 +186,21 @@ async def prometheus_metrics():
 
 @router.get("/api/status")
 async def status():
-    import main as m
 
     return m._build_status_payload()
 
 
 @router.websocket("/ws/status")
 async def ws_status(ws: WebSocket):
-    """Пуш статуса ~1/с. Server: ?token=JWT. Local: ?pin=…"""
-    import main as m
+    """Пуш статуса ~1/с. Server: first message {type,token}. Local: {type,pin}."""
 
     from app.config import is_server_mode
     from app.tenant import clear_context
 
-    if not _authenticate_ws(ws):
+    await ws.accept()
+    if not await _authenticate_ws(ws):
         await ws.close(code=4401)
         return
-    await ws.accept()
     try:
         while not m.RUNTIME.shutting_down:
             await ws.send_json(m._build_status_payload())

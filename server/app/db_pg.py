@@ -3,27 +3,33 @@
 from __future__ import annotations
 
 import contextlib
+import threading
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from app.config import require_database_url
 
 _pool = None
+_pool_lock = threading.Lock()
 
 
 def _get_pool():
     global _pool
     if _pool is None:
-        from psycopg.rows import dict_row
-        from psycopg_pool import ConnectionPool
+        with _pool_lock:
+            if _pool is None:
+                from psycopg.rows import dict_row
+                from psycopg_pool import ConnectionPool
 
-        _pool = ConnectionPool(
-            require_database_url(),
-            kwargs={"row_factory": dict_row},
-            min_size=1,
-            max_size=10,
-            open=True,
-        )
+                _pool = ConnectionPool(
+                    require_database_url(),
+                    kwargs={"row_factory": dict_row},
+                    min_size=1,
+                    max_size=10,
+                    timeout=30.0,
+                    max_waiting=50,
+                    open=True,
+                )
     return _pool
 
 
@@ -118,7 +124,7 @@ def _apply_pending_migrations() -> None:
 def init_schema() -> None:
     bootstrap = _schema_dir() / "schema_pg.sql"
     if bootstrap.exists():
-        with _cursor() as cur:
+        with _cursor(transaction=True) as cur:
             cur.execute(bootstrap.read_text(encoding="utf-8"))
     _apply_pending_migrations()
 
@@ -176,6 +182,30 @@ def get_tenant(tenant_id: int) -> dict[str, Any] | None:
     with _cursor() as cur:
         cur.execute("SELECT * FROM tenants WHERE id = %s", (tenant_id,))
         return cur.fetchone()
+
+
+def get_tenant_token_version(tenant_id: int) -> int:
+    tenant = get_tenant(tenant_id)
+    if not tenant:
+        return 0
+    return int(tenant.get("token_version") or 0)
+
+
+def bump_tenant_token_version(tenant_id: int) -> int:
+    """Increment token_version — all outstanding JWTs for tenant become invalid."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            UPDATE tenants SET token_version = token_version + 1
+            WHERE id = %s
+            RETURNING token_version
+            """,
+            (tenant_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"tenant {tenant_id} not found")
+        return int(row["token_version"])
 
 
 def list_tenants_with_users() -> list[dict[str, Any]]:
@@ -261,6 +291,7 @@ def subscription_info(tenant_id: int | None) -> dict[str, Any]:
 
 def count_subscriptions_expiring(within_days: int = 7) -> int:
     """Tenants with active sub expiring within N days (not yet expired)."""
+    now = _now()
     with _cursor() as cur:
         cur.execute(
             """
@@ -268,7 +299,7 @@ def count_subscriptions_expiring(within_days: int = 7) -> int:
             WHERE expires_at > %s
               AND expires_at <= %s + make_interval(days => %s)
             """,
-            (_now(), _now(), within_days),
+            (now, now, within_days),
         )
         row = cur.fetchone()
     return int(row["n"] if row else 0)
@@ -276,6 +307,7 @@ def count_subscriptions_expiring(within_days: int = 7) -> int:
 
 def list_expiring_subscriptions(within_days: int = 7) -> list[dict[str, Any]]:
     """Active subscriptions expiring within N days, with tenant info."""
+    now = _now()
     with _cursor() as cur:
         cur.execute(
             """
@@ -293,13 +325,14 @@ def list_expiring_subscriptions(within_days: int = 7) -> list[dict[str, Any]]:
               )
             ORDER BY s.expires_at ASC
             """,
-            (_now(), _now(), _now(), within_days, _now()),
+            (now, now, now, within_days, now),
         )
         return list(cur.fetchall())
 
 
 def tenants_recently_expired(since_hours: int = 24) -> list[dict[str, Any]]:
     """Tenants whose latest subscription expired within the last N hours."""
+    now = _now()
     with _cursor() as cur:
         cur.execute(
             """
@@ -313,7 +346,7 @@ def tenants_recently_expired(since_hours: int = 24) -> list[dict[str, Any]]:
                AND MAX(s.expires_at) > %s - make_interval(hours => %s)
             ORDER BY expired_at DESC
             """,
-            (_now(), _now(), since_hours),
+            (now, now, since_hours),
         )
         return list(cur.fetchall())
 

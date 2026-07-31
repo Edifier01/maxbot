@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import datetime
-from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException
 
 from app.routes_models import CodeIn, ProfilePatchIn
+from app.runtime import main as m
 
 router = APIRouter(tags=["profiles"])
 
 
 @router.get("/api/profiles")
 async def list_profiles(offset: int = 0, limit: int = 50, q: str = ""):
-    import main as m
 
     """Только профили, привязанные хотя бы к одной группе."""
     base = """
@@ -45,7 +43,6 @@ async def list_profiles(offset: int = 0, limit: int = 50, q: str = ""):
 
 @router.get("/api/profiles/{profile_id}")
 async def get_profile(profile_id: int):
-    import main as m
 
     with m._conn() as c:
         p = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
@@ -56,7 +53,6 @@ async def get_profile(profile_id: int):
 
 @router.patch("/api/profiles/{profile_id}")
 async def patch_profile(profile_id: int, body: ProfilePatchIn):
-    import main as m
 
     data = body.model_dump(exclude_unset=True)
     if not data:
@@ -85,7 +81,6 @@ async def patch_profile(profile_id: int, body: ProfilePatchIn):
 
 @router.post("/api/profiles/{profile_id}/login/reset")
 async def reset_login(profile_id: int):
-    import main as m
 
     """Сброс зависшего входа и удаление сессии."""
     task = m._login_tasks.get(m._auth_session_key(profile_id))
@@ -110,7 +105,6 @@ async def reset_login(profile_id: int):
 async def login_profile(
     profile_id: int, fresh: bool = False, group_id: int | None = None
 ):
-    import main as m
 
     m._require_vault_unlocked()
     with m._conn() as c:
@@ -188,7 +182,6 @@ async def login_profile(
 
 @router.post("/api/profiles/{profile_id}/sms")
 async def submit_sms(profile_id: int, body: CodeIn):
-    import main as m
 
     sess = m._auth_sessions.get(m._auth_session_key(profile_id))
     if not sess:
@@ -203,7 +196,6 @@ async def submit_sms(profile_id: int, body: CodeIn):
 
 @router.post("/api/profiles/{profile_id}/password")
 async def submit_password(profile_id: int, body: CodeIn):
-    import main as m
 
     sess = m._auth_sessions.get(m._auth_session_key(profile_id))
     if not sess:
@@ -218,7 +210,6 @@ async def submit_password(profile_id: int, body: CodeIn):
 
 @router.patch("/api/profiles/{profile_id}/disable")
 async def disable_profile(profile_id: int):
-    import main as m
 
     with m._conn() as c:
         c.execute(

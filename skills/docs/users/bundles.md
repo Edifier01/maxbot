@@ -13,9 +13,9 @@
 1. **Install the repository or bundle plugin:**
 
    ```bash
-   npx antigravity-awesome-skills
+   npx agentic-awesome-skills
    # or clone manually
-   git clone https://github.com/sickn33/antigravity-awesome-skills.git .agent/skills
+   git clone https://github.com/sickn33/agentic-awesome-skills.git .agent/skills
    ```
 
 2. **Choose your bundle** from the list below based on your role or interests.
@@ -837,7 +837,7 @@ _For shipping clean changes in public repositories._
 
 _For creating and maintaining high-quality SKILL.md assets._
 
-**Plugin status:** Codex pending hardening · Claude pending hardening
+**Plugin status:** Codex plugin-safe · Claude plugin-safe
 
 - [`skill-creator`](../../skills/skill-creator/): Design effective new skills.
 - [`skill-developer`](../../skills/skill-developer/): Implement triggers, hooks, and skill lifecycle.
@@ -1049,7 +1049,7 @@ Keep a small list of high-frequency skills and reuse it across tasks to reduce c
 
 ## Contributing
 
-Found a skill that should be in a bundle? Or want to create a new bundle? [Open an issue](https://github.com/sickn33/antigravity-awesome-skills/issues) or submit a PR!
+Found a skill that should be in a bundle? Or want to create a new bundle? [Open an issue](https://github.com/sickn33/agentic-awesome-skills/issues) or submit a PR!
 
 ---
 
@@ -1061,4 +1061,4 @@ Found a skill that should be in a bundle? Or want to create a new bundle? [Open 
 
 ---
 
-_Last updated: June 2026 | Total Skills: 1,929+ | Total Bundles: 59_
+_Last updated: June 2026 | Total Skills: 1,943+ | Total Bundles: 59_

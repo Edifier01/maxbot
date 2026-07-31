@@ -10,10 +10,12 @@ def test_schema_and_migrations_exist():
     assert (base / "schema_pg.sql").is_file()
     assert (base / "migrations" / "001_saas_core.sql").is_file()
     assert (base / "migrations" / "002_revoked_tokens.sql").is_file()
-    assert (base / "schema_pg_legacy.sql").is_file()
+    assert (base / "migrations" / "003_tenant_token_version.sql").is_file()
+    legacy_path = base / "docs" / "archive" / "schema_pg_legacy.sql"
+    assert legacy_path.is_file()
     bootstrap = (base / "schema_pg.sql").read_text(encoding="utf-8")
     assert "schema_migrations" in bootstrap
     saas = (base / "migrations" / "001_saas_core.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS tenants" in saas
-    legacy = (base / "schema_pg_legacy.sql").read_text(encoding="utf-8")
+    legacy = legacy_path.read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS profiles" in legacy

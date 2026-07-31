@@ -7,12 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-scale.txt ./
+COPY requirements.txt requirements-server.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir -r requirements-scale.txt
+    && pip install --no-cache-dir -r requirements-server.txt
 
 COPY main.py antiban_core.py celery_worker.py ./
-COPY schema_pg.sql schema_pg_legacy.sql ./
+COPY schema_pg.sql ./
 COPY migrations ./migrations
 COPY static ./static
 COPY app ./app

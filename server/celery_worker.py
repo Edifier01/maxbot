@@ -1,7 +1,7 @@
 ﻿"""Optional Celery worker for MAX Sender (Sprint 6).
 
 Enable:
-  pip install -r requirements-scale.txt
+  pip install -r requirements-server.txt
   set REDIS_URL=redis://127.0.0.1:6379/0
   set USE_CELERY=1
   celery -A celery_worker.app worker --loglevel=info
@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import os
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+REDIS_URL = os.environ.get("REDIS_URL", "").strip()
+if not REDIS_URL:
+    raise RuntimeError(
+        "REDIS_URL не задан. Задайте переменную окружения (см. .env.example)."
+    )
 
 
 def _service_auth_header() -> dict[str, str]:
@@ -29,7 +33,7 @@ try:
     from celery import Celery
 except ImportError as e:  # pragma: no cover
     raise SystemExit(
-        "Celery не установлен. Выполните: pip install -r requirements-scale.txt"
+        "Celery не установлен. Выполните: pip install -r requirements-server.txt"
     ) from e
 
 app = Celery("max_sender", broker=REDIS_URL, backend=REDIS_URL)

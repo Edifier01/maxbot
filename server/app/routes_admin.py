@@ -13,8 +13,43 @@ from pydantic import BaseModel, Field
 
 from app import auth, db_pg
 from app.tenant import get_user_id, is_admin
+from app.tenant_sqlite import tenant_conn
+from app.runtime import main as app_main
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def _bulk_set_groups_active(active: int) -> dict:
+    """is_active для всех групп всех учреждений (admin bulk)."""
+    active_val = 1 if active else 0
+    tenants_processed = 0
+    groups_updated = 0
+    skipped: list[dict[str, object]] = []
+    for row in db_pg.list_tenants_with_users():
+        tid = int(row["tenant_id"])
+        db_path = app_main.ROOT / "data" / "tenants" / str(tid) / "app.db"
+        if not db_path.is_file():
+            skipped.append({"tenant_id": tid, "reason": "no_db"})
+            continue
+        try:
+            with tenant_conn(tid) as c:
+                cur = c.execute("UPDATE groups SET is_active=?", (active_val,))
+                groups_updated += int(cur.rowcount or 0)
+            tenants_processed += 1
+        except Exception as e:
+            skipped.append({"tenant_id": tid, "reason": str(e)[:200]})
+    verb = "включены" if active_val else "выключены"
+    app_main.append_log(
+        f"Админ: группы {verb} у {tenants_processed} учреждений "
+        f"({groups_updated} групп)"
+    )
+    return {
+        "ok": True,
+        "is_active": active_val,
+        "tenants_processed": tenants_processed,
+        "groups_updated": groups_updated,
+        "skipped": skipped,
+    }
 
 
 class SubscriptionIn(BaseModel):
@@ -95,7 +130,6 @@ async def grant_subscription_month(tenant_id: int):
 
 
 def _drop_tenant_sqlite(tenant_id: int) -> None:
-    import main as app_main
 
     data_dir = app_main.ROOT / "data" / "tenants" / str(tenant_id)
     key = str(data_dir)
@@ -130,6 +164,8 @@ async def delete_user(tenant_id: int):
                 tenant_id=tenant_id,
             )
 
+    db_pg.bump_tenant_token_version(tenant_id)
+
     if not db_pg.delete_tenant(tenant_id):
         raise HTTPException(404, "Учреждение не найдено")
     _drop_tenant_sqlite(tenant_id)
@@ -144,7 +180,6 @@ async def impersonate(tenant_id: int):
         raise HTTPException(404, "Учреждение не найдено")
     db_pg.log_impersonation(admin_id, tenant_id)
 
-    import main as app_main
 
     from app.tenant_init import init_tenant_db
 
@@ -205,3 +240,15 @@ async def tenant_stats(tenant_id: int):
         "failed": failed,
         "subscription": db_pg.subscription_info(tenant_id),
     }
+
+
+@router.post("/groups/activate-all")
+async def activate_all_groups():
+    _require_admin()
+    return await asyncio.to_thread(_bulk_set_groups_active, 1)
+
+
+@router.post("/groups/deactivate-all")
+async def deactivate_all_groups():
+    _require_admin()
+    return await asyncio.to_thread(_bulk_set_groups_active, 0)

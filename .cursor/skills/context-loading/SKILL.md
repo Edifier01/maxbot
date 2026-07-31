@@ -1,57 +1,28 @@
 ---
 name: context-loading
-description: Load MAX Sender project context before any agent work. Read project-management files and relevant docs.
+description: Loads MAX Sender project context before planning or implementation. Use when starting work, resuming a task, or deciding whether a change affects desktop, server, or both.
+disable-model-invocation: true
 ---
 
-# Context Loading — MAX Sender
+# Context Loading
 
-Load project context **before** planning or implementing any feature.
+## Project Root
 
-## Required Reads (always)
+Canonical project root is `maxserverapp/`.
 
-1. `.cursor/project-management/CURRENT_CONTEXT.md` — active focus, architecture
-2. `.cursor/project-management/PROJECT_STATUS.md` — what's done / in progress
-3. `.cursor/project-management/TASKS.md` — backlog priorities
+If the workspace root is the parent folder (`MaxServer/MaxServer`), prefix project paths with `maxserverapp/`. If the workspace root is `maxserverapp/`, use paths as written below.
 
-## Conditional Reads
+1. Read `README.md` and `AGENTS.md` from the canonical project root.
+2. Read `.cursor/project-management/CURRENT_CONTEXT.md`, `PROJECT_STATUS.md`, `TASKS.md`, `DECISIONS.md`, and `HANDOFF.md`.
+3. Read `desktop/README.md`, `server/README.md`, or both depending on the task.
+4. Identify the work zone: `desktop`, `server`, or `both`.
+5. Load rules: `max-sender-workspace`, `ai-skills-system`, plus zone rule (`server-workspace` or `desktop-workspace`).
+6. Load domain skills for the zone:
 
-| If working on… | Also read |
-|----------------|-----------|
-| Backend / API | `AUDIT.md` (API section), `README.md` |
-| Server / deploy | `server/README.md`, `server/AGENTS.md` |
-| UI | `static/index.html`, `AUDIT.md` (UI section) |
-| Security | `AUDIT.md` (security), `README.md` (security table) |
-| Database | `AUDIT.md` (schema), `schema_pg.sql` |
-| Architecture decision | `.cursor/project-management/DECISIONS.md` |
+| Zone | Skills to read |
+|------|----------------|
+| `desktop` | `maxserver-static-ui`, `maxserver-campaign`, `maxserver-testing` as relevant |
+| `server` | `maxserver-fastapi-backend`, `maxserver-server-deploy`, `maxserver-postgresql`, `maxserver-auth-security`, `maxserver-testing` |
+| `both` | all relevant desktop + server skills, then verify desktop/server independence |
 
-## Session Handoff
-
-If continuing previous work, read:
-- `.cursor/project-management/HANDOFF.md`
-
-## Agent Index
-
-- `.cursor/agents/README.md` — which agent to use
-
-## Do Not Load
-
-- Entire `server/skills/` library (~1900 skills)
-- Full `main.py` unless backend task (read relevant sections only)
-- `venv/`, `dist/`, `data/` session contents
-
-## Quick Architecture Reminder
-
-```
-Local:  run.bat → main.py → 127.0.0.1:8765 → static/index.html
-Server: docker compose → server/app/main.py → Caddy HTTPS → same UI
-Data:   data/app.db (SQLite) + data/sessions/ (encrypted)
-```
-
-## After Loading
-
-State internally:
-- What mode (local / server / both)?
-- What entities are affected?
-- Security implications?
-
-Then proceed with assigned task or Feature Plan.
+7. Load agent docs from `.cursor/agents/README.md` for assigned specialists only.

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from app.config import is_server_mode
+from app.runtime import main as app_main
+
 
 def before_start() -> None:
-    from app.config import is_server_mode
-
     if not is_server_mode():
         return
 
@@ -15,8 +16,6 @@ def before_start() -> None:
 
     require_jwt_secret()
     db_pg.init_schema()
-
-    import main as app_main
 
     init_global_db(app_main)
 

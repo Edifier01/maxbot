@@ -15,7 +15,7 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt -r requirements-scale.txt
+          pip install -r requirements.txt -r requirements-server.txt
           pip install pytest httpx
       - name: Server tests
         env:
@@ -62,7 +62,7 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt -r requirements-scale.txt
+          pip install -r requirements.txt -r requirements-server.txt
           pip install pytest httpx
       - name: E2E auth/admin/tenant
         env:

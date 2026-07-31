@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from app import auth
 
 
-def test_create_token_has_jti():
+def test_create_token_has_jti(monkeypatch):
+    monkeypatch.setattr("app.auth.db_pg.get_tenant_token_version", lambda tid: 0)
     token = auth.create_token(1, tenant_id=2, role="user")
     payload = auth.decode_token(token)
     assert payload.get("jti")

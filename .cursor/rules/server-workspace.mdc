@@ -1,19 +1,14 @@
 ---
-description: MAX Sender server deployment, Docker, domain, FastAPI, and admin UI
-globs: server/**,static/index.html
+description: Rules for MAX Sender server version
+globs: "{server/**,maxserverapp/server/**}"
 alwaysApply: false
 ---
 
-# Server workspace (MAX Sender)
+# Server Version
 
-When working under `server/` or changing the admin UI for server deployment:
-
-1. Load project skill `.cursor/skills/context-loading/SKILL.md`, then read `server/AGENTS.md` and `server/skills-curated/SKILL.md`.
-2. Pick skills only from `server/skills-curated/manifest.json` — do **not** scan all of `server/skills/` (~1900 items).
-3. Server-specific logic belongs in `server/app/`; keep local `run.bat` / exe flow working.
-4. Stack: Docker Compose + Caddy (HTTPS) + FastAPI + Redis; UI is `static/index.html` (vanilla CSS).
-5. Public deploy requires API PIN; never commit `server/.env` or `data/.app_key`.
-6. New server features: `/start-feature` → assign `@devops-engineer` / `@security-engineer` as needed → `@verifier`.
-
-Skill paths are relative to repo root, e.g. `server/skills/docker-expert/SKILL.md`.
-Agent workflow: `docs/MASTER-AI-WORKFLOW.md`.
+- `server/` must build from Docker context `.` and must not depend on `../desktop`.
+- Server extensions belong in `server/app/`; core FastAPI currently lives in `server/main.py`.
+- **Load skills**: `maxserver-fastapi-backend`, `maxserver-server-deploy`, `maxserver-postgresql`, `maxserver-auth-security` (see `ai-skills-system.mdc`).
+- Run `docker compose config` after Docker, compose, Caddy, or env changes.
+- Do not expose the app port publicly without Caddy and auth controls.
+- Treat auth, tenant, JWT, admin, secrets, and data isolation changes as security-sensitive.

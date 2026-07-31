@@ -211,7 +211,7 @@ def encrypt_session_file(data_dir: Path, profile_id: int, log: LogFn | None = No
         return
     try:
         enc.write_bytes(get_fernet(data_dir).encrypt(db.read_bytes()))
-        db.unlink()
+        db.unlink(missing_ok=True)
     except RuntimeError:
         # ponytail: shutdown без unlock — не трогаем plaintext
         pass

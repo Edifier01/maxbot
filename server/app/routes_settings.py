@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-from datetime import datetime
-from typing import Any
-
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter
 
 from app.routes_models import SettingsIn
+from app.runtime import main as m
 
 router = APIRouter(tags=["settings"])
 
 
 @router.get("/api/settings")
 async def get_settings():
-    import main as m
 
     hide = {"api_pin", "telegram_bot_token"}
     out = {k: m.get_setting(k) for k in m.DEFAULTS if k not in hide}
@@ -31,7 +26,6 @@ async def get_settings():
 
 @router.put("/api/settings")
 async def update_settings(body: SettingsIn):
-    import main as m
 
     data = body.model_dump(exclude_unset=True)
     if "api_pin" in data:
@@ -64,7 +58,6 @@ async def update_settings(body: SettingsIn):
 
 @router.get("/api/settings/audit")
 async def settings_audit(limit: int = 50):
-    import main as m
 
     limit = min(max(limit, 1), 200)
     with m._conn() as c:

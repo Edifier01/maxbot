@@ -1,26 +1,17 @@
-## Last Session
-**Date:** 2026-07-28
-**Feature:** Серверная SaaS — мультитенантность, auth, admin, CI/CD
-**Agents used:** parent (implementation), verifier
+# Handoff
 
-## What Was Done
-- ADR-007 accepted: hybrid PG + per-tenant SQLite
-- Full server/app auth stack (JWT, bcrypt, middleware, admin API)
-- UI: auth.html, admin.html, user role restrictions in index.html
-- docker-compose: Postgres default, MAX_SERVER_MODE=1
-- GitHub Actions: ci.yml (pytest), deploy.yml (SSH)
+## How Future Agents Should Start
+1. Determine workspace root. Canonical project root is `maxserverapp/`; prefix paths if opened from the parent folder.
+2. Read `README.md` and `AGENTS.md`.
+3. Read `.cursor/project-management/CURRENT_CONTEXT.md`, `PROJECT_STATUS.md`, `TASKS.md`, `DECISIONS.md` and `HANDOFF.md`.
+4. Identify whether the work targets `desktop/`, `server/`, or both.
+5. Load matching project skills from `.cursor/skills/`.
+6. Use `/start-feature ...` for non-trivial changes.
+7. Update these project-management files after meaningful work.
 
-## Files Touched
-- server/app/*.py, server/docker-compose.yml, server/.env.example, server/app/hooks.py
-- main.py (tenant _conn, global settings/pool)
-- schema_pg.sql, static/auth.html, static/admin.html, static/index.html
-- .github/workflows/, requirements-scale.txt, DECISIONS.md
+## Important Rule
+Specialist agents must not edit project-management state independently. The parent agent owns integration and handoff updates.
 
-## Verification
-- Verifier: **PASS WITH NOTES** — WS auth + integration tests needed before production
+## Skills Library
 
-## Next Steps
-- Set GitHub deploy secrets and `.env` on VPS
-- `cd server && docker compose up --build -d`
-- Test: register → admin grant subscription → user campaign start
-- Fix WebSocket auth for server mode
+Do not load `skills/` wholesale. It is a vendored reference library; active distilled skills are in `.cursor/skills/`.

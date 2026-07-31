@@ -63,6 +63,7 @@ def check_auth_rate_limit(key: str, limit: int, window: float) -> bool:
                 r.expire(key, int(window))
             return count <= limit
         except Exception:
+            global _redis_failed, _last_redis_retry, _redis_client
             _redis_failed = True
             _last_redis_retry = time.time()
             _redis_client = None

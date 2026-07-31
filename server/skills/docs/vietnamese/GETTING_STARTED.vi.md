@@ -1,4 +1,4 @@
-# Hướng dẫn Bắt đầu với Antigravity Awesome Skills (V13.2.0)
+# Hướng dẫn Bắt đầu với Agentic Awesome Skills (V14.0.0)
 
 **Bạn mới đến đây? Hướng dẫn này sẽ giúp bạn tăng cường sức mạnh cho trợ lý trợ lý AI của mình chỉ trong 5 phút.**
 
@@ -15,7 +15,7 @@ Các trợ lý AI (như **Claude Code**, **Codex CLI**, **Gemini CLI**, **Cursor
 
 ## ⚡️ Khởi động nhanh: Các "Gói khởi đầu" (Starter Packs)
 
-Đừng lo lắng về con số hơn 1,684 kỹ năng. Bạn không cần dùng tất cả chúng cùng một lúc.
+Đừng lo lắng về con số hơn 1,936 kỹ năng. Bạn không cần dùng tất cả chúng cùng một lúc.
 Chúng tôi đã tuyển chọn các **Gói khởi đầu** để bạn có thể bắt đầu sử dụng ngay lập tức.
 
 ### 1. Cài đặt Repository
@@ -23,7 +23,7 @@ Chúng tôi đã tuyển chọn các **Gói khởi đầu** để bạn có th�
 Khuyến nghị dùng installer CLI. Mặc định, lệnh này cài vào `~/.agents/skills` cho Antigravity global:
 
 ```bash
-npx antigravity-awesome-skills
+npx agentic-awesome-skills
 ```
 
 Bạn cũng có thể dùng cờ theo công cụ, ví dụ `--claude`, `--gemini`, `--codex`, `--cursor`, `--kiro`, `--antigravity`, `--agy`, hoặc `--path <dir>` để chọn thư mục đích.
@@ -98,7 +98,7 @@ _Kiểm tra [Danh mục Skill (Skill Catalog)](../../CATALOG.md) để xem danh 
 
 ## ❓ FAQ
 
-**H: Tôi có cần cài đặt tất cả 1,684+ kỹ năng không?**
+**H: Tôi có cần cài đặt tất cả 1,936+ kỹ năng không?**
 Đ: Bạn tải toàn bộ repo về, nhưng AI của bạn chỉ _đọc_ những kỹ năng bạn yêu cầu (hoặc những kỹ năng có liên quan). Nó rất nhẹ!
 
 **H: Tôi có thể tự tạo kỹ năng cho riêng mình không?**  

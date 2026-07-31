@@ -31,14 +31,13 @@ def ensure_global_data(root: Path) -> Path:
 
 def init_tenant_db(main_module, tenant_id: int) -> None:
     """Инициализировать SQLite для tenant (если ещё не создан)."""
-    from app.tenant import set_context
+    from app.tenant import tenant_scope
 
     ensure_tenant_data(main_module.ROOT, tenant_id)
-    set_context(tenant_id=tenant_id, role="user")
-    db_path = main_module._db_path()
-    if not db_path.exists():
-        main_module.init_db()
-    main_module._try_legacy_unlock()
+    with tenant_scope(tenant_id=tenant_id, role="user"):
+        if not main_module._db_path().exists():
+            main_module.init_db()
+        main_module._try_legacy_unlock()
 
 
 def rollback_tenant_registration(tenant_id: int, root: Path) -> None:
@@ -54,11 +53,10 @@ def rollback_tenant_registration(tenant_id: int, root: Path) -> None:
 
 
 def init_global_db(main_module) -> None:
-    from app.tenant import set_context
+    from app.tenant import tenant_scope
 
     ensure_global_data(main_module.ROOT)
-    set_context(use_global_data=True, role="admin")
-    db_path = main_module._db_path()
-    if not db_path.exists():
-        main_module.init_db()
-    main_module._try_legacy_unlock()
+    with tenant_scope(use_global_data=True, role="admin"):
+        if not main_module._db_path().exists():
+            main_module.init_db()
+        main_module._try_legacy_unlock()

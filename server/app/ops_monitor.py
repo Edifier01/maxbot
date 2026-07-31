@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from app.runtime import main as m
 
 _DEDUPE_SEC = 900.0
 _last_alert: dict[str, float] = {}
@@ -12,7 +13,6 @@ _CHECK_INTERVAL_SEC = 120.0
 
 
 def _main():
-    import main as m
 
     return m
 
@@ -69,7 +69,7 @@ async def _tick(circuit_threshold: int) -> None:
             )
 
     open_n = m._circuit_open_count()
-    if open_n >= circuit_threshold and _should_alert(f"circuit:{open_n // threshold}"):
+    if open_n >= circuit_threshold and _should_alert(f"circuit:{open_n // circuit_threshold}"):
         m._schedule_telegram(
             "Ops: много профилей в circuit breaker",
             [f"Открытых circuit: {open_n} (порог {circuit_threshold})."],

@@ -80,7 +80,7 @@ docker compose logs -f app
 ## Локальная разработка
 
 ```bash
-pip install -r requirements.txt -r requirements-scale.txt
+pip install -r requirements.txt -r requirements-server.txt
 pip install pytest httpx
 MAX_TEST=1 MAX_SERVER_MODE=1 python -m pytest tests/ -q
 ```

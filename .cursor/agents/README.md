@@ -1,52 +1,26 @@
-# MAX Sender — AI Agents
+# MAX Sender Agents
 
-Project-specific agents for coordinated development. **Do not create agents blindly** — add new ones only when the product proves the need.
+Use the smallest useful agent set. The orchestrator plans, specialists perform scoped work (following their skill), and the verifier checks before completion.
 
-## Core Agents (always)
+Routing: `.cursor/rules/ai-skills-system.mdc`
 
-| Agent | File | Mode | Role |
-|-------|------|------|------|
-| **Project Orchestrator** | `project-orchestrator.md` | Readonly | Plans features, assigns specialists, outputs Feature Plans |
-| **Verifier** | `verifier.md` | Readonly | Skeptical validation before marking work done |
+## Core Agents
+- `project-orchestrator.md`: planning, routing, Feature Plans. Readonly by default.
+- `verifier.md`: skeptical validation. Readonly by default.
 
-## Domain Agents
+## Specialist Agents
 
-| Agent | File | When to use |
-|-------|------|-------------|
-| **Backend Engineer** | `backend-engineer.md` | FastAPI, worker, PyMax auth, API endpoints, `main.py`, `antiban_core.py` |
-| **Frontend Engineer** | `frontend-engineer.md` | `static/index.html`, admin UI, UX, responsive layout |
-| **Database Engineer** | `database-engineer.md` | SQLite schema, `schema_pg.sql`, migrations, indexes |
-| **DevOps Engineer** | `devops-engineer.md` | Docker, Caddy, domain, deploy scripts, CI/CD |
-| **QA Engineer** | `qa-engineer.md` | Test plans, smoke tests, regression, E2E scenarios |
-| **Security Engineer** | `security-engineer.md` | PIN auth, session encryption, secrets, OWASP, public exposure |
-| **Campaign Specialist** | `campaign-specialist.md` | Messaging campaigns, antiban, worker pool, send logic |
+| Agent | Skill | Scope |
+|-------|-------|-------|
+| `backend-engineer.md` | `maxserver-fastapi-backend` | FastAPI, worker, API, shared core |
+| `frontend-engineer.md` | `maxserver-static-ui` | static HTML/CSS/JS UI |
+| `database-engineer.md` | `maxserver-postgresql` | SQLite/PostgreSQL schema, isolation |
+| `qa-engineer.md` | `maxserver-testing` + deploy checklist | smoke, regression, deploy verify |
+| `devops-engineer.md` | `maxserver-server-deploy` | Docker, Caddy, CI/CD, deployment |
+| `security-engineer.md` | `maxserver-auth-security` | vault, JWT, PIN, secrets, tenant |
+| `campaign-specialist.md` | `maxserver-campaign` | MAX sending, pacing, session safety |
 
-## Model Routing
-
-| Model | Use for |
-|-------|---------|
-| GPT-5.5 | Planning, orchestration, research, documentation |
-| Composer 2.5 | Implementation, tests, migrations, routine verification |
-| Opus | Architecture ADRs, security-critical design, hard tradeoffs |
-
-**Do not use Opus** for routine CRUD, simple UI, or boilerplate.
-
-## How to Start a Feature
-
-```text
-/start-feature [describe the business feature]
-```
-
-Or invoke `@project-orchestrator` with the feature description. Wait for **Feature Plan approval** before implementation.
-
-## Coordination Rules
-
-1. Read `.cursor/project-management/CURRENT_CONTEXT.md` before work
-2. Specialists work within assigned scope only
-3. Only the **parent agent** updates project-management files
-4. Verifier must run before marking tasks complete
-5. For server infra tasks, also read `server/AGENTS.md` and curated skills
-
-## External Skills Library
-
-For server/deployment tasks, curated community skills live in `server/skills-curated/`. See `server/SKILLS.md`. This is **separate** from project skills in `.cursor/skills/`.
+## Orchestration Skills
+- `context-loading` — every session start
+- `start-feature` — Feature Plans
+- `subagent-orchestrator` — multi-domain work

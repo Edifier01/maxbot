@@ -15,7 +15,7 @@ services:
       WORKER_POOL_SIZE: "${WORKER_POOL_SIZE:-4}"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?задайте REDIS_PASSWORD в .env}@redis:6379/0"
       USE_CELERY: "${USE_CELERY:-0}"
-      DATABASE_URL: "postgresql://maxsender:${POSTGRES_PASSWORD:-maxsender}@postgres:5432/maxsender"
+      DATABASE_URL: "postgresql://maxsender:${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}@postgres:5432/maxsender"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
       JWT_SECRET: "${JWT_SECRET:?задайте JWT_SECRET в .env}"
@@ -87,7 +87,7 @@ services:
       MAX_PORT: "8765"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?задайте REDIS_PASSWORD в .env}@redis:6379/0"
       USE_CELERY: "1"
-      DATABASE_URL: "postgresql://maxsender:${POSTGRES_PASSWORD:-maxsender}@postgres:5432/maxsender"
+      DATABASE_URL: "postgresql://maxsender:${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}@postgres:5432/maxsender"
       INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?задайте INTERNAL_SERVICE_TOKEN в .env}"
     volumes:
       - max_server_data:/app/data
@@ -106,13 +106,11 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: maxsender
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-maxsender}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}"
       POSTGRES_DB: maxsender
     volumes:
       - max_server_pg:/var/lib/postgresql/data
       - ./schema_pg.sql:/docker-entrypoint-initdb.d/01_bootstrap.sql:ro
-      - ./migrations/001_saas_core.sql:/docker-entrypoint-initdb.d/02_001_saas_core.sql:ro
-      - ./migrations/002_revoked_tokens.sql:/docker-entrypoint-initdb.d/03_002_revoked_tokens.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U maxsender -d maxsender"]
       interval: 5s

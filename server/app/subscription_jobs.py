@@ -7,16 +7,17 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Any
+from app.runtime import main as m
 
 _WARN_DAYS = (7, 1)
 _CHECK_INTERVAL_SEC = 3600.0
 _last_warn_day: dict[tuple[int, int], str] = {}
+# Tenants whose worker was stopped on expiry; restart is via /api/campaign/start, not this loop.
 _stopped_expired: set[int] = set()
 _last_revoke_cleanup_day: str = ""
 
 
 def _main():
-    import main as m
 
     return m
 

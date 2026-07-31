@@ -46,6 +46,21 @@
     .badge.no { background: #3d1a1a; color: var(--danger); }
     .badge.warn { background: #3d351a; color: #e6b84d; }
     .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+    .global-groups-panel .row { gap: .65rem; }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.25rem; padding: 0 .25rem; }
+    .users-table { min-width: 640px; }
+    @media (max-width: 720px) {
+      header { padding: .85rem 1rem; }
+      main { padding: .85rem 1rem 2rem; }
+      h1 { font-size: 1.05rem; }
+      header .row { width: 100%; margin-left: 0 !important; justify-content: flex-start; }
+      .panel { padding: .85rem; }
+      .global-groups-panel .btn { flex: 1 1 100%; min-height: 44px; }
+      .days-group { flex-wrap: wrap; }
+      td .row { flex-direction: column; align-items: stretch; }
+      td .row .btn, td .days-group { width: 100%; }
+      td .row .btn.primary { order: -1; }
+    }
   </style>
 </head>
 <body>
@@ -57,6 +72,15 @@
     </span>
   </header>
   <main>
+    <div class="panel global-groups-panel">
+      <strong>Группы всех учреждений</strong>
+      <p class="hint" style="margin:.35rem 0 .75rem">Включить или выключить участие всех групп в рассылке (поле <code>is_active</code>).</p>
+      <div class="row">
+        <button class="btn primary" id="btnGroupsOn" onclick="bulkGroups(1)">Включить все группы</button>
+        <button class="btn danger" id="btnGroupsOff" onclick="bulkGroups(0)">Выключить все группы</button>
+      </div>
+      <p class="hint" id="bulkGroupsHint" style="margin:.65rem 0 0">—</p>
+    </div>
     <div class="panel">
       <div class="row" style="justify-content:space-between">
         <strong>Подписки, истекающие в ближайшие 7 дней</strong>
@@ -78,7 +102,8 @@
           <a href="/#messages" onclick="openGlobalSettings('#messages'); return false;">Сообщения (пул)</a>
         </span>
       </div>
-      <table>
+      <div class="table-scroll">
+      <table class="users-table">
         <thead>
           <tr>
             <th>Учреждение</th>
@@ -90,6 +115,7 @@
         </thead>
         <tbody id="usersBody"></tbody>
       </table>
+      </div>
     </div>
   </main>
   <script>
@@ -240,6 +266,31 @@
         await loadUsers();
       } catch (e) {
         alert(e.message || 'Не удалось удалить');
+      }
+    }
+    async function bulkGroups(active) {
+      const on = active === 1;
+      const msg = on
+        ? 'Включить все группы у всех учреждений?\n\nОни снова будут участвовать в рассылке.'
+        : 'Выключить все группы у всех учреждений?\n\nРассылка по ним не пойдёт, пока группы не включат снова.';
+      if (!confirm(msg)) return;
+      const hint = document.getElementById('bulkGroupsHint');
+      const btnOn = document.getElementById('btnGroupsOn');
+      const btnOff = document.getElementById('btnGroupsOff');
+      btnOn.disabled = true;
+      btnOff.disabled = true;
+      hint.textContent = 'Выполняется…';
+      try {
+        const path = on ? '/admin/groups/activate-all' : '/admin/groups/deactivate-all';
+        const r = await api(path, { method: 'POST' });
+        hint.textContent = (on ? 'Включено' : 'Выключено') + ': '
+          + r.groups_updated + ' групп у ' + r.tenants_processed + ' учреждений'
+          + (r.skipped && r.skipped.length ? ' · пропущено ' + r.skipped.length : '');
+      } catch (e) {
+        hint.textContent = 'Ошибка: ' + e.message;
+      } finally {
+        btnOn.disabled = false;
+        btnOff.disabled = false;
       }
     }
     (async () => {

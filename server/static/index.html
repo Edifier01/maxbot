@@ -396,12 +396,41 @@
     }
     @media (max-width: 720px) {
       header, nav, main { padding-left: 1rem; padding-right: 1rem; }
-      main { padding-top: 1rem; }
-      input, select, textarea { max-width: 100%; }
+      main { padding-top: 1rem; padding-bottom: 5rem; }
+      header { flex-direction: column; align-items: stretch; gap: .65rem; }
+      .brand { justify-content: flex-start; }
+      .header-meta {
+        width: 100%; flex-direction: column; align-items: stretch; gap: .5rem;
+      }
+      #btnLogout { margin-left: 0; align-self: flex-start; }
+      #progressWrap { max-width: 100%; width: 100%; order: 10; }
+      nav { padding-bottom: .65rem; gap: .25rem; }
+      nav button { padding: .5rem .75rem; min-height: 40px; }
+      input, select, textarea { max-width: 100%; font-size: 16px; }
       .settings-row { grid-template-columns: 1fr; gap: .35rem; }
-      .group-head { flex-wrap: wrap; }
-      #progressWrap { max-width: 100%; width: 100%; }
+      .settings-row .controls { width: 100%; }
+      .group-head { flex-wrap: wrap; align-items: flex-start; }
+      .group-head .meta { width: 100%; margin-top: .15rem; font-size: .8rem; word-break: break-word; }
+      .group-body .row { flex-direction: column; align-items: stretch; }
+      .group-body input, .group-body textarea, .group-body button { max-width: none; width: 100%; }
+      .group-actions { flex-direction: column; width: 100%; }
+      .group-actions button { width: 100%; min-height: 40px; }
+      .toolbar { flex-direction: column; align-items: stretch; }
+      .toolbar button, .toolbar .primary, .toolbar .danger, .toolbar .small {
+        width: 100%; justify-content: center; min-height: 44px;
+      }
+      .section-head { flex-direction: column; align-items: flex-start; gap: .35rem; }
       .dash-cards { grid-template-columns: 1fr; }
+      .table-wrap { max-height: 50vh; }
+      .data-table { font-size: .82rem; min-width: 520px; }
+      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      #toast-container {
+        left: 1rem; right: 1rem; bottom: 1rem; align-items: stretch;
+      }
+      .toast { max-width: none; width: 100%; }
+      .modal { width: min(380px, 94vw); margin: 1rem; }
+      .phone-cell { flex-direction: column; align-items: flex-start; }
+      button.small { min-height: 36px; }
     }
   </style>
 </head>
@@ -643,7 +672,7 @@
             <input id="roleActivePct" type="number" min="0" max="100" step="1" style="max-width:70px" title="active">
             <input id="roleQuietPct" type="number" min="0" max="100" step="1" style="max-width:70px" title="quiet">
           </div></div>
-          <p class="hint" style="margin:.25rem 0 0 1rem">Роли дня: skip / active (полный лимит) / quiet (лимит ниже). Рекомендуется 40/30/30.</p>
+          <p class="hint" style="margin:.25rem 0 0 1rem">Роли дня: 3-дневная ротация active → quiet → skip по порядку профилей (~33% каждая часть). Legacy % ниже не используются при включённых ролях.</p>
           <div class="settings-row"><label>Роли дня</label><div class="controls">
             <label style="width:auto;max-width:none"><input type="checkbox" id="rolePlanOn" style="width:auto;max-width:none"> вкл</label>
           </div></div>
@@ -1103,6 +1132,9 @@
           ? 'Хранилище разблокировано. Сессии шифруются паролем.'
           : 'Хранилище заблокировано — введите пароль для работы с аккаунтами.';
         document.getElementById('vaultUnlockRow').style.display = 'flex';
+      } else {
+        hint.textContent = 'Внимание: сессии не защищены паролем (legacy .app_key). Задайте PIN vault для безопасного шифрования.';
+        document.getElementById('vaultLegacyRow').style.display = 'flex';
       }
     }
 
@@ -1475,27 +1507,29 @@
         return;
       }
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      let q = '';
-      if (_serverMode) {
-        const token = getAuthToken();
-        if (!token) {
-          startStatusPoll();
-          return;
-        }
-        q = '?token=' + encodeURIComponent(token);
-      } else {
-        const pin = getApiPin();
-        q = pin ? ('?pin=' + encodeURIComponent(pin)) : '';
+      if (_serverMode && !getAuthToken()) {
+        startStatusPoll();
+        return;
       }
       let ws;
       try {
-        ws = new WebSocket(`${proto}//${location.host}/ws/status${q}`);
+        ws = new WebSocket(`${proto}//${location.host}/ws/status`);
       } catch (_) {
         startStatusPoll();
         return;
       }
       _statusWs = ws;
       ws.onopen = () => {
+        try {
+          if (_serverMode) {
+            ws.send(JSON.stringify({ type: 'auth', token: getAuthToken() }));
+          } else {
+            ws.send(JSON.stringify({ type: 'auth', pin: getApiPin() || '' }));
+          }
+        } catch (_) {
+          ws.close();
+          return;
+        }
         _statusWsRetry = 0;
         stopStatusPoll();
         setLiveBadge('live');

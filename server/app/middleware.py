@@ -11,8 +11,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app import auth_rate_limit, db_pg
-from app.auth import decode_token
+from app.auth import decode_token, validate_token_session
 from app.config import INTERNAL_SERVICE_TOKEN, is_server_mode
+from app.runtime import main as app_main
 from app.tenant import clear_context, set_context
 
 
@@ -87,9 +88,10 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
             internal = INTERNAL_SERVICE_TOKEN
             if internal and token == internal:
                 return await call_next(request)
-            if not token:
-                return JSONResponse(status_code=401, content={"detail": "Требуется вход"})
-            # fall through to JWT validation below
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Требуется service token"},
+            )
 
         if path in self.PUBLIC_EXACT or any(
             path.startswith(p) for p in self.PUBLIC_PREFIXES
@@ -120,8 +122,6 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
             else:
                 set_context(role="admin", use_global_data=True)
             try:
-                import main as app_main
-
                 app_main._try_legacy_unlock()
                 return await call_next(request)
             finally:
@@ -139,16 +139,14 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         if jti and db_pg.is_token_revoked(jti):
             return JSONResponse(status_code=401, content={"detail": "Сессия отозвана"})
 
-        user_id = int(payload["sub"])
-        if not db_pg.get_user_by_id(user_id):
-            return JSONResponse(status_code=401, content={"detail": "Пользователь не найден"})
+        session_err = validate_token_session(payload)
+        if session_err:
+            return JSONResponse(status_code=401, content={"detail": session_err})
 
+        user_id = int(payload["sub"])
         role = payload.get("role", "user")
         tenant_id = payload.get("tenant_id")
         impersonating = bool(payload.get("imp"))
-
-        if tenant_id is not None and not db_pg.get_tenant(tenant_id):
-            return JSONResponse(status_code=401, content={"detail": "Учреждение не найдено"})
 
         if path.startswith("/api/admin"):
             if role != "admin":
@@ -205,8 +203,6 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
                 )
 
         try:
-            import main as app_main
-
             app_main._try_legacy_unlock()
 
             if role == "user" and request.method != "GET":

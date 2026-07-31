@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from app.runtime import main as m
 
 
 class VaultPasswordIn(BaseModel):
@@ -15,14 +16,12 @@ router = APIRouter(tags=["vault"])
 
 @router.get("/api/vault/status")
 async def api_vault_status():
-    import main as m
 
     return m.vault_status()
 
 
 @router.post("/api/vault/setup")
 async def api_vault_setup(body: VaultPasswordIn):
-    import main as m
 
     try:
         return m.setup_vault(body.password)
@@ -32,7 +31,6 @@ async def api_vault_setup(body: VaultPasswordIn):
 
 @router.post("/api/vault/unlock")
 async def api_vault_unlock(body: VaultPasswordIn):
-    import main as m
 
     try:
         m.unlock_vault(body.password)
@@ -43,7 +41,6 @@ async def api_vault_unlock(body: VaultPasswordIn):
 
 @router.post("/api/vault/lock")
 async def api_vault_lock():
-    import main as m
 
     st = m.vault_status()
     if st["legacy"]:

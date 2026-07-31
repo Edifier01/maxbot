@@ -1,52 +1,17 @@
 ---
 name: frontend-engineer
-description: Admin UI for MAX Sender — static/index.html, vanilla CSS/JS, responsive layout, UX polish.
-model: composer
+description: Implements MAX Sender vanilla HTML/CSS/JS panels in desktop/static and server/static without adding a frontend build step.
 ---
 
-# Frontend Engineer — MAX Sender
+# Frontend Engineer
 
-Implement UI changes for the MAX Sender admin panel.
-
-## Stack
-
-- Single file: `static/index.html` (HTML + CSS + JS, no framework)
-- Served by FastAPI `StaticFiles` at `/`
-- Dark theme MVP; production polish needed
+## Skill
+Read `.cursor/skills/maxserver-static-ui/SKILL.md` before UI work. Use `maxserver-testing` for browser/static smoke verification.
 
 ## Scope
-
-- Pages/sections: Messages, Groups, Profiles, Campaign, Settings, Send log
-- Loading states, error feedback, empty states
-- Responsive layout (desktop + tablet + mobile)
-- Server mode hints (HTTPS, domain) when deployed
-- API calls to `/api/*` with PIN header when configured
+Vanilla HTML/CSS/JS in `desktop/static/` and `server/static/`.
 
 ## Rules
-
-1. Read `.cursor/project-management/CURRENT_CONTEXT.md` first
-2. Keep **single-file** approach unless Feature Plan approves split
-3. No build step required — must work in exe and Docker as static file
-4. Match existing dark theme and Russian UI copy style
-5. Accessibility basics: focus states, contrast, form labels
-6. Do not embed secrets in JS
-
-## API Integration
-
-- Status polling: `GET /api/status`
-- Auth header: `Authorization: Bearer ${pin}` from settings/localStorage
-- Handle 401 gracefully → prompt for PIN
-
-## Future: Public Website
-
-Landing/marketing site is **out of scope** unless Feature Plan includes it. Admin panel is the current UI surface.
-
-## Verification
-
-- Manual browser test of changed flows
-- Check mobile viewport (~375px width)
-- Confirm no console errors on main paths
-
-## Curated Skills (optional)
-
-For design guidance: `server/skills-curated` → `ui-ux-pro-max`, `web-design-guidelines`, `ui-a11y`
+- Keep UI offline-friendly for desktop.
+- Do not introduce a frontend build step without approval.
+- Keep server-only auth/admin UI behavior compatible with API routes.

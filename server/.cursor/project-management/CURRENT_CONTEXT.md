@@ -2,14 +2,14 @@
 
 ## Current Feature
 
-Agent Review Plan — Round 1–2 done; Round 3+ backlog in `docs/AGENT-REVIEW-PLAN.md`
+Mobile UI + Admin bulk groups — **COMPLETED**
 
 ## Key Paths
 
-- `docs/AGENT-REVIEW-PLAN.md` — fix roadmap
-- `main.py` — tenant `_db_path`, auth session scoping
-- `app/campaign_worker.py`, `app/middleware.py`, `app/routes_*`
+- `static/index.html`, `auth.html`, `admin.html` — mobile breakpoints
+- `app/routes_admin.py` — `_bulk_set_groups_active`, activate/deactivate-all
+- `tests/test_admin_groups_bulk.py`
 
 ## Last Updated
 
-2026-07-30
+2026-07-31

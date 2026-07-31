@@ -8,6 +8,7 @@ from typing import Iterator
 import sqlite3
 
 from app.tenant import tenant_scope
+from app.runtime import main as app_main
 
 
 @contextmanager
@@ -18,7 +19,6 @@ def tenant_conn(
 ) -> Iterator[sqlite3.Connection]:
     """Переключить tenant, вернуть conn; восстановить контекст middleware."""
     with tenant_scope(tenant_id=tenant_id, role="admin", use_global_data=use_global_data):
-        import main as app_main
 
         with app_main._conn() as conn:
             yield conn
