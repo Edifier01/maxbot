@@ -907,6 +907,17 @@ def _clear_session(profile_id: int) -> None:
             p.unlink()
 
 
+def _normalize_phone(phone: str) -> str:
+    phone = phone.strip().replace(" ", "")
+    if phone.startswith("8") and len(phone) == 11:
+        phone = "+7" + phone[1:]
+    elif phone.startswith("7") and len(phone) == 11:
+        phone = "+" + phone
+    elif not phone.startswith("+"):
+        phone = "+" + phone.lstrip("+")
+    return phone
+
+
 def _auth_session_key(profile_id: int) -> Any:
     if _is_server_mode():
         from app.tenant import get_tenant_id

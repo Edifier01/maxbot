@@ -827,6 +827,8 @@
       btn.textContent = '…';
       try {
         await asyncFn();
+      } catch (e) {
+        toast(e.message || 'Ошибка', 'error');
       } finally {
         btn.disabled = false;
         btn.textContent = orig;
@@ -1149,8 +1151,10 @@
     }
 
     function normalizePhone(phone) {
-      phone = phone.trim();
-      if (!phone.startsWith('+')) phone = '+' + phone.replace(/^\+/, '');
+      phone = phone.trim().replace(/\s/g, '');
+      if (phone.startsWith('8') && phone.length === 11) phone = '+7' + phone.slice(1);
+      else if (phone.startsWith('7') && phone.length === 11) phone = '+' + phone;
+      else if (!phone.startsWith('+')) phone = '+' + phone.replace(/^\+/, '');
       return phone;
     }
 
@@ -1201,14 +1205,19 @@
       }
     }
 
-    async function startLoginWatch(profileId) {
+    async function startLoginWatch(profileId, initialStep = 'connecting') {
       if (authWatchers.has(profileId)) return;
       authWatchers.add(profileId);
+      let idlePolls = 0;
+      const maxIdlePolls = 45;
 
       try {
         while (authWatchers.has(profileId)) {
           const p = await findProfile(profileId);
-          if (!p) break;
+          if (!p) {
+            toast('Профиль не найден', 'error');
+            break;
+          }
 
           if (p.auth_step === 'waiting_sms' && !authModalOpen) {
             const code = await showAuthModal(
@@ -1236,6 +1245,7 @@
           }
 
           if (p.status === 'active' && p.auth_step === 'idle') {
+            toast('Аккаунт подключён', 'success');
             loadGroups(true);
             break;
           }
@@ -1246,11 +1256,22 @@
             break;
           }
 
-          if (!['connecting', 'waiting_sms', 'verifying_sms'].includes(p.auth_step)) {
-            break;
+          if (['connecting', 'waiting_sms', 'verifying_sms'].includes(p.auth_step)) {
+            idlePolls = 0;
+            await sleep(400);
+            continue;
           }
 
-          await sleep(400);
+          if (p.auth_step === 'idle' && initialStep === 'connecting' && idlePolls < maxIdlePolls) {
+            idlePolls++;
+            await sleep(400);
+            continue;
+          }
+
+          if (p.auth_step === 'idle' && p.status === 'pending') {
+            toast('Вход не запустился. Попробуйте ещё раз.', 'error');
+          }
+          break;
         }
       } catch (e) {
         toast(e.message, 'error');
@@ -1848,7 +1869,7 @@
         const r = await api(`/profiles/${id}/login${q}`, { method: 'POST' });
         toast(r.message || 'Вход запущен', 'success');
         loadGroups(true);
-        startLoginWatch(id);
+        startLoginWatch(id, r.auth_step || 'connecting');
       } catch (e) {
         toast(e.message, 'error');
         loadGroups(true);
@@ -1856,15 +1877,15 @@
     }
 
     async function loginFromPhone(groupId, fresh = true) {
-      const phoneRaw = document.getElementById('phone-' + groupId).value;
-      const label = document.getElementById('label-' + groupId).value;
-      if (!phoneRaw.trim()) return toast('Введите номер телефона', 'error');
-      const phone = normalizePhone(phoneRaw);
-
-      const profData = await api(`/groups/${groupId}/profiles?offset=0&limit=500`);
-      let profile = (profData.items || []).find(p => p.phone === phone);
-
       try {
+        const phoneRaw = document.getElementById('phone-' + groupId)?.value || '';
+        const label = document.getElementById('label-' + groupId)?.value || '';
+        if (!phoneRaw.trim()) return toast('Введите номер телефона', 'error');
+        const phone = normalizePhone(phoneRaw);
+
+        const profData = await api(`/groups/${groupId}/profiles?offset=0&limit=500`);
+        let profile = (profData.items || []).find(p => normalizePhone(p.phone) === phone);
+
         if (!profile) {
           const r = await api(`/groups/${groupId}/profiles`, {
             method: 'POST',
@@ -1873,12 +1894,12 @@
           });
           profile = { id: r.id, phone };
         }
-      } catch (e) {
-        return toast(e.message, 'error');
-      }
 
-      openGroupId = groupId;
-      await loginProfile(profile.id, fresh, groupId);
+        openGroupId = groupId;
+        await loginProfile(profile.id, fresh, groupId);
+      } catch (e) {
+        toast(e.message || 'Ошибка входа', 'error');
+      }
     }
 
     async function saveGroupProxy(groupId) {

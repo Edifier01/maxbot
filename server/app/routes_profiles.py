@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.routes_models import CodeIn, ProfilePatchIn
 from app.runtime import main as m
+from app.tenant import clear_context, restore_context, snapshot_context
 
 router = APIRouter(tags=["profiles"])
 
@@ -134,8 +135,12 @@ async def login_profile(
     m._drain_queue(sess["sms_q"])
     m._drain_queue(sess["pwd_q"])
     m._set_auth_step(profile_id, "connecting")
+    session_key = m._auth_session_key(profile_id)
+    ctx_snap = snapshot_context() if m._is_server_mode() else None
 
     async def _login():
+        if ctx_snap is not None:
+            restore_context(ctx_snap)
         try:
             me_id = None
             try:
@@ -170,8 +175,10 @@ async def login_profile(
         finally:
             if m._auth_sessions.get(m._auth_session_key(profile_id), {}).get("step") == "connecting":
                 m._set_auth_step(profile_id, "idle")
+            if ctx_snap is not None:
+                clear_context()
 
-    m._login_tasks[m._auth_session_key(profile_id)] = asyncio.create_task(_login())
+    m._login_tasks[session_key] = asyncio.create_task(_login())
     msg = (
         "Новый вход: дождитесь SMS → код → OK. Облачный пароль — если MAX запросит."
         if fresh
