@@ -6,13 +6,13 @@ Admin global settings navigation — **COMPLETED**
 
 ## Current Feature
 
-Vault password removal (auto .app_key) — **COMPLETED**
+Groups UI fixes (login, invite link, mobile) — **COMPLETED**
 
 ## Key Paths
 
-- `app/vault.py`, `main.py` — `ensure_vault_unlocked`, drop PBKDF2 vault
-- `static/index.html` — removed vault modal and password UI
-- `tests/test_vault.py`
+- `static/index.html` — login try/catch, mobile CSS, group form
+- `app/routes_groups.py` — PATCH invite_link guard
+- `tests/test_groups_invite.py`
 
 ## Last Updated
 

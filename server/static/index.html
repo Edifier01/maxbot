@@ -68,11 +68,13 @@
       --mono: "JetBrains Mono", ui-monospace, monospace;
     }
     * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
+    html { scroll-behavior: smooth; overflow-x: hidden; }
     body {
       font-family: var(--font);
       margin: 0;
       min-height: 100vh;
+      max-width: 100%;
+      overflow-x: hidden;
       color: var(--text);
       background:
         radial-gradient(1200px 600px at 10% -10%, rgba(61,139,253,.14), transparent 55%),
@@ -256,6 +258,15 @@
     .group-head .meta { color: var(--muted); font-size: .85rem; }
     .group-body { padding: 0 1rem 1rem; border-top: 1px solid var(--line-soft); }
     .group-body input, .group-body textarea { pointer-events: auto; min-width: 140px; flex: 1 1 140px; }
+    .group-table-wrap {
+      overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: .5rem;
+    }
+    .group-table-wrap table { width: 100%; min-width: 520px; border-collapse: collapse; font-size: .85rem; }
+    .group-table-wrap th {
+      color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line);
+      padding: .55rem .6rem; text-align: left;
+    }
+    .group-table-wrap td { padding: .5rem .6rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
     .group-actions { display: flex; gap: .5rem; }
     button.small {
       padding: .35rem .7rem; font-size: .8rem; border-radius: 7px;
@@ -396,7 +407,7 @@
     }
     @media (max-width: 720px) {
       header, nav, main { padding-left: 1rem; padding-right: 1rem; }
-      main { padding-top: 1rem; padding-bottom: 5rem; }
+      main { padding-top: 1rem; padding-bottom: 5rem; max-width: 100%; }
       header { flex-direction: column; align-items: stretch; gap: .65rem; }
       .brand { justify-content: flex-start; }
       .header-meta {
@@ -407,12 +418,15 @@
       nav { padding-bottom: .65rem; gap: .25rem; }
       nav button { padding: .5rem .75rem; min-height: 40px; }
       input, select, textarea { max-width: 100%; font-size: 16px; }
+      .panel .row { flex-direction: column; align-items: stretch; }
+      .panel .row input, .panel .row button { width: 100%; max-width: none; }
       .settings-row { grid-template-columns: 1fr; gap: .35rem; }
       .settings-row .controls { width: 100%; }
       .group-head { flex-wrap: wrap; align-items: flex-start; }
       .group-head .meta { width: 100%; margin-top: .15rem; font-size: .8rem; word-break: break-word; }
       .group-body .row { flex-direction: column; align-items: stretch; }
       .group-body input, .group-body textarea, .group-body button { max-width: none; width: 100%; }
+      .group-body td:last-child button { width: 100%; margin-bottom: .35rem; }
       .group-actions { flex-direction: column; width: 100%; }
       .group-actions button { width: 100%; min-height: 40px; }
       .toolbar { flex-direction: column; align-items: stretch; }
@@ -582,9 +596,9 @@
       <div class="panel">
       <div class="panel-title">Новая группа</div>
       <div class="row">
-        <input id="groupName" placeholder="Название группы">
-        <input id="groupLink" placeholder="Пригласительная ссылка группы" style="max-width:420px">
-        <button class="primary" onclick="addGroup()">Создать группу</button>
+        <input id="groupName" placeholder="Название группы" oninput="updateCreateGroupBtn()">
+        <input id="groupLink" type="url" required placeholder="https://max.ru/join/…" oninput="updateCreateGroupBtn()">
+        <button class="primary" id="btnCreateGroup" disabled onclick="withLoading(this, addGroup)">Создать группу</button>
       </div>
       </div>
       <input type="file" id="csvFile" accept=".csv,.txt" style="display:none">
@@ -1475,8 +1489,8 @@
           <div class="meta">Сегодня: ${p.messages_sent_today || 0} · ${esc(p.group_names || '')}</div>
           ${p.last_error ? `<div class="auth-error">${esc(p.last_error)}</div>` : ''}
           <div class="row" style="margin-top:.5rem;margin-bottom:0">
-            <button class="small" onclick="loginProfile(${p.id}, ${isUserRole()}, ${p.primary_group_id || 'null'})">Войти</button>
-            ${isUserRole() ? '' : `<button class="small" onclick="loginProfile(${p.id}, true, ${p.primary_group_id || 'null'})">Заново</button>`}
+            <button class="small" onclick="withLoading(this, () => loginProfile(${p.id}, ${isUserRole()}, ${p.primary_group_id || 'null'}))">Войти</button>
+            ${isUserRole() ? '' : `<button class="small" onclick="withLoading(this, () => loginProfile(${p.id}, true, ${p.primary_group_id || 'null'}))">Заново</button>`}
           </div>
         </div>
       `).join('');
@@ -1763,8 +1777,8 @@
       const busy = ['connecting', 'waiting_sms', 'verifying_sms'].includes(p.auth_step);
       const loginFresh = isUserRole();
       return `
-        <button onclick="loginProfile(${p.id}, ${loginFresh}, ${groupId})" ${busy ? 'disabled' : ''}>Войти</button>
-        ${isUserRole() ? '' : `<button class="small" onclick="loginProfile(${p.id}, true, ${groupId})" ${busy ? 'disabled' : ''}>Заново</button>`}
+        <button onclick="withLoading(this, () => loginProfile(${p.id}, ${loginFresh}, ${groupId}))" ${busy ? 'disabled' : ''}>Войти</button>
+        ${isUserRole() ? '' : `<button class="small" onclick="withLoading(this, () => loginProfile(${p.id}, true, ${groupId}))" ${busy ? 'disabled' : ''}>Заново</button>`}
         ${busy ? `<button class="small" onclick="resetLogin(${p.id})">Сброс</button>` : ''}
         <button class="small danger" onclick="removeProfile(${groupId}, ${p.id})">Удалить</button>`;
     }
@@ -1814,14 +1828,31 @@
       loadGroups(true);
     }
 
+    function isValidInviteLink(link) {
+      return /^https?:\/\/.+/i.test(link);
+    }
+
+    function updateCreateGroupBtn() {
+      const name = document.getElementById('groupName').value.trim();
+      const link = document.getElementById('groupLink').value.trim();
+      const btn = document.getElementById('btnCreateGroup');
+      if (btn) btn.disabled = !name || !link || !isValidInviteLink(link);
+    }
+
     async function loginProfile(id, fresh = false, groupId = null) {
       const params = new URLSearchParams();
       if (fresh) params.set('fresh', 'true');
       if (groupId != null) params.set('group_id', String(groupId));
       const q = params.toString() ? '?' + params.toString() : '';
-      await api(`/profiles/${id}/login${q}`, { method: 'POST' });
-      loadGroups(true);
-      startLoginWatch(id);
+      try {
+        const r = await api(`/profiles/${id}/login${q}`, { method: 'POST' });
+        toast(r.message || 'Вход запущен', 'success');
+        loadGroups(true);
+        startLoginWatch(id);
+      } catch (e) {
+        toast(e.message, 'error');
+        loadGroups(true);
+      }
     }
 
     async function loginFromPhone(groupId, fresh = true) {
@@ -1942,15 +1973,17 @@
                 <textarea id="groupProxy-${g.id}" rows="2" placeholder="1 прокси на группу (~30 acc). Несколько URL — ротация по аккаунту" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
                 <button class="small" onclick="saveGroupProxy(${g.id})">Сохранить прокси</button>
               </div>` : ''}
+              <div class="table-wrap group-table-wrap">
               <table>
                 <thead><tr><th>ID</th><th>Телефон</th><th>Статус</th><th>Сегодня</th><th>Действия</th></tr></thead>
                 <tbody>${body}</tbody>
               </table>
+              </div>
               ${profilePageControls(g.id, total)}
               <div class="row" style="margin-top:.75rem">
                 <input id="phone-${g.id}" placeholder="+79991234567">
                 <input id="label-${g.id}" placeholder="Метка" style="max-width:120px">
-                <button class="primary" onclick="loginFromPhone(${g.id}, true)">Войти</button>
+                <button class="primary" onclick="withLoading(this, () => loginFromPhone(${g.id}, true))">Войти</button>
                 ${isUserRole() ? '' : `<button class="small" onclick="document.getElementById('csvFile').click()">Импорт CSV</button>`}
               </div>
             </div>` : ''}
@@ -1973,14 +2006,21 @@
       const invite_link = document.getElementById('groupLink').value.trim();
       if (!name) return toast('Введите название группы', 'error');
       if (!invite_link) return toast('Введите пригласительную ссылку группы', 'error');
-      await api('/groups', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ name, max_chat_id: '', invite_link, proxy: '' }),
-      });
-      document.getElementById('groupName').value = '';
-      document.getElementById('groupLink').value = '';
-      loadGroups(true);
+      if (!isValidInviteLink(invite_link)) return toast('Ссылка должна начинаться с http:// или https://', 'error');
+      try {
+        await api('/groups', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ name, max_chat_id: '', invite_link, proxy: '' }),
+        });
+        document.getElementById('groupName').value = '';
+        document.getElementById('groupLink').value = '';
+        updateCreateGroupBtn();
+        toast('Группа создана', 'success');
+        loadGroups(true);
+      } catch (e) {
+        toast(e.message, 'error');
+      }
     }
 
     async function loadSettings() {

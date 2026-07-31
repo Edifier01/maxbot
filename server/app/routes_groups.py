@@ -99,9 +99,12 @@ async def patch_group(group_id: int, body: GroupPatchIn):
                 (str(data["max_chat_id"] or "").strip(), group_id),
             )
         if "invite_link" in data:
+            link = str(data["invite_link"] or "").strip()
+            if not link:
+                raise HTTPException(400, "Нельзя очистить пригласительную ссылку группы")
             c.execute(
                 "UPDATE groups SET invite_link=? WHERE id=?",
-                (str(data["invite_link"] or "").strip(), group_id),
+                (link, group_id),
             )
         if "proxy" in data:
             proxy = str(data["proxy"] or "").strip()
