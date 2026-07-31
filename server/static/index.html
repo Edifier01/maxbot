@@ -971,6 +971,14 @@
       if (tabId === 'dashboard') loadDashboard();
     }
 
+    function adminGlobalTabFromUrl() {
+      const stored = sessionStorage.getItem('maxAdminGlobalTab');
+      if (stored === 'messages' || stored === 'settings') return stored;
+      if (location.hash === '#messages') return 'messages';
+      if (location.hash === '#settings') return 'settings';
+      return null;
+    }
+
     function applyAdminGlobalUI() {
       ['campaign', 'dashboard', 'groups'].forEach(tab => {
         const btn = document.querySelector(`nav button[data-tab="${tab}"]`);
@@ -980,7 +988,8 @@
       banner.style.display = 'block';
       banner.className = 'hint';
       banner.innerHTML = 'Глобальные настройки админа (шаблон для всех учреждений) · <a href="/admin.html" style="color:var(--accent)">← админ-панель</a>';
-      const tab = location.hash === '#messages' ? 'messages' : 'settings';
+      const tab = adminGlobalTabFromUrl() || 'settings';
+      sessionStorage.removeItem('maxAdminGlobalTab');
       switchTab(tab);
     }
 
@@ -1092,8 +1101,9 @@
         _subscriptionExpiresAt = me.subscription && me.subscription.expires_at
           ? me.subscription.expires_at
           : null;
-        _adminGlobalMode = me.role === 'admin' && !me.impersonating
-          && /^#(settings|messages)/.test(location.hash);
+        const globalTab = adminGlobalTabFromUrl();
+        _adminGlobalMode = me.role === 'admin' && !me.impersonating && !!globalTab;
+        if (!_adminGlobalMode) sessionStorage.removeItem('maxAdminGlobalTab');
         if (me.role === 'admin' && !me.impersonating && !_adminGlobalMode) {
           location.href = '/admin.html';
           return;

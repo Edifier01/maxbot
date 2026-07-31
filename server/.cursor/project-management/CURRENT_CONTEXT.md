@@ -2,13 +2,12 @@
 
 ## Current Feature
 
-Mobile UI + Admin bulk groups — **COMPLETED**
+Admin global settings navigation — **IN_PROGRESS**
 
 ## Key Paths
 
-- `static/index.html`, `auth.html`, `admin.html` — mobile breakpoints
-- `app/routes_admin.py` — `_bulk_set_groups_active`, activate/deactivate-all
-- `tests/test_admin_groups_bulk.py`
+- `static/admin.html` — `openGlobalSettings`, restore admin JWT after impersonate
+- `static/index.html` — `adminGlobalTabFromUrl`, `_adminGlobalMode` via hash + session flag
 
 ## Last Updated
 

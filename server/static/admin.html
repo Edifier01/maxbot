@@ -225,9 +225,14 @@
       if (t) sessionStorage.setItem('maxAdminAuthToken', t);
     }
     function openGlobalSettings(hash) {
-      const adminTok = sessionStorage.getItem('maxAdminAuthToken') || token();
-      if (adminTok) sessionStorage.setItem('maxAuthToken', adminTok);
+      const adminTok = sessionStorage.getItem('maxAdminAuthToken');
+      if (!adminTok) {
+        alert('Сессия админа не найдена. Выйдите и войдите снова в админ-панель.');
+        return;
+      }
+      sessionStorage.setItem('maxAuthToken', adminTok);
       sessionStorage.removeItem('maxImpersonating');
+      sessionStorage.setItem('maxAdminGlobalTab', hash === '#messages' ? 'messages' : 'settings');
       location.href = '/' + hash;
     }
     async function grantMonth(tid, btn) {
@@ -302,7 +307,17 @@
           return;
         }
         document.getElementById('adminEmail').textContent = me.email;
-        if (!me.impersonating) rememberAdminToken();
+        if (me.impersonating) {
+          const adminTok = sessionStorage.getItem('maxAdminAuthToken');
+          if (adminTok) {
+            sessionStorage.setItem('maxAuthToken', adminTok);
+            sessionStorage.removeItem('maxImpersonating');
+            location.reload();
+            return;
+          }
+        } else {
+          rememberAdminToken();
+        }
         await loadExpiring();
         await loadUsers();
       } catch (e) {
