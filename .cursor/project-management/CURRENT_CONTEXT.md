@@ -1,22 +1,26 @@
 # Current Context
 
-## Product
-MAX Sender is a Python/FastAPI app for controlled MAX messenger text sending with pacing, vault-protected sessions, a static UI panel, and an API.
+## Current Module
 
-## Repository Shape
-- `desktop/`: local Windows/PyInstaller version.
-- `server/`: VPS/Docker version with server-mode extensions.
-- `.cursor/`: shared AI system for both versions.
+AI harness (post `/audit-project` upgrade) — product code stable
 
-## Current State
-The project was split into two independent folders. Future agents must preserve that split and avoid rebuilding the old monolith.
+## Current Feature
 
-## AI System
-Skills and agent routing integrated — see `AGENTS.md` and `.cursor/rules/ai-skills-system.mdc`.
+None in progress — harness ready for first `/start-feature`
 
-Active project skills:
-- orchestration: `context-loading`, `start-feature`, `subagent-orchestrator`
-- server: `maxserver-server-deploy`, `maxserver-fastapi-backend`, `maxserver-postgresql`, `maxserver-auth-security`
-- app/domain: `maxserver-static-ui`, `maxserver-campaign`, `maxserver-testing`
+## Active Agent / Owner
 
-`skills/` is a large vendored source library; do not load it wholesale.
+project-architect (harness upgrade complete) → hand off to product agents
+
+## Current Blockers
+
+- None for harness
+- Product: residual `main.py` monolith; unofficial MAX API ban risk (ongoing)
+
+## Phase / Objective
+
+Milestones 1–3 and production readiness largely done per `docs/PROJECT_PLAN.md`. Next: feature work via harness; optional further `main.py` extraction (ADR 003).
+
+## Last Updated
+
+2026-08-07

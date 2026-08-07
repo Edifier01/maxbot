@@ -1,23 +1,8 @@
-# Python / runtime
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
 venv/
 .venv/
-
-# Local app data and builds
 data/
-desktop/data/
-desktop/build/
-desktop/dist/
-desktop/venv/
-server/data/
-server/.env
-server/venv/
-skills/
-
-# Secrets
-*.key
-*.pem
-data/.app_key
+.env
+backups/
+__pycache__/
+*.pyc
+.pytest_cache/

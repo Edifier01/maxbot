@@ -38,6 +38,13 @@
     .err { color: var(--danger); font-size: .85rem; min-height: 1.2rem; margin-top: .5rem; }
     .panel { display: none; }
     .panel.active { display: block; }
+    @media (max-width: 720px) {
+      body { align-items: flex-start; padding: .75rem; padding-top: 1.25rem; }
+      .card { padding: 1.15rem; border-radius: 10px; }
+      h1 { font-size: 1.2rem; }
+      input, button { font-size: 16px; min-height: 44px; }
+      .tabs button { min-height: 44px; }
+    }
   </style>
 </head>
 <body>

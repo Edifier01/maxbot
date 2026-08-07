@@ -1,0 +1,13 @@
+---
+description: Thin Python coding style for MAX Sender (adapted from ECC)
+globs: ["**/*.py", "**/*.pyi"]
+alwaysApply: false
+---
+
+# Python Coding Style
+
+- Follow existing project style in `app/` and `main.py` (match neighbors).
+- Prefer type annotations on new/changed function signatures.
+- Do not introduce black/ruff/isort tooling unless already configured in repo.
+- Prefer small, focused diffs; no drive-by refactors.
+- See skill `python-patterns` for idioms; prefer existing modules over greenfield layouts.

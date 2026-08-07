@@ -1,60 +1,68 @@
-# MAX Sender — AI System
+# AGENTS.md — MAX Sender Server
 
-Единая AI-система для `desktop/` и `server/`. Конфигурация в `.cursor/`.
+Multi-tenant FastAPI SaaS for controlled MAX messenger campaigns. AI harness map (keep short).
 
-**Серверная версия — самодостаточный проект** в `server/`: собственные `AGENTS.md`, `.cursor/`, `.github/`. Откройте `server/` как корень workspace или скопируйте папку отдельно — desktop не нужен.
-## Быстрый старт
+## Commands
 
-1. `/start-feature [задача]` — Feature Plan перед нетривиальной работой.
-2. `/deploy-server [изменение]` — Docker/VPS/deploy по checklist.
-3. Классифицировать: `desktop` | `server` | `both`.
-4. Загрузить skills по зоне (см. таблицу ниже).
-5. Назначить agents → реализация → verifier.
+```bash
+# Install
+pip install -r requirements.txt -r requirements-server.txt
+pip install pytest httpx
 
-## Skills
+# Tests (CI smoke)
+MAX_TEST=1 MAX_SERVER_MODE=1 python -m pytest tests/ -q
 
-| Skill | Когда |
-|-------|-------|
-| `context-loading` | Старт, resume, выбор зоны |
-| `start-feature` | Feature Plan |
-| `subagent-orchestrator` | Multi-domain, routing |
-| `maxserver-server-deploy` | Docker, VPS, Caddy, deploy, CI/CD |
-| `maxserver-fastapi-backend` | API, hooks, `server/app/` |
-| `maxserver-postgresql` | Schema, `db_pg.py`, migrations |
-| `maxserver-auth-security` | JWT, tenant, secrets |
-| `maxserver-static-ui` | Vanilla HTML/CSS/JS UI, auth/admin panel |
-| `maxserver-campaign` | Anti-ban pacing, warmup, retry, pause/resume |
-| `maxserver-testing` | pytest, UI smoke, deploy verification, verifier gate |
+# E2E (needs Postgres / DATABASE_URL as in CI)
+MAX_TEST=1 MAX_SERVER_MODE=1 python -m pytest tests/test_e2e_server.py -q
 
-Путь: `.cursor/skills/<name>/SKILL.md`
+# Compose validate (set env from .env.example / ci.yml)
+docker compose config -q
 
-## Agents
+# Deploy (VPS)
+bash scripts/deploy.sh && bash scripts/verify_deploy.sh
+bash scripts/backup-volumes.sh
+```
 
-| Agent | Файл |
-|-------|------|
-| Orchestrator | `.cursor/agents/project-orchestrator.md` |
-| Verifier | `.cursor/agents/verifier.md` |
-| Backend | `.cursor/agents/backend-engineer.md` |
-| Frontend | `.cursor/agents/frontend-engineer.md` |
-| Database | `.cursor/agents/database-engineer.md` |
-| DevOps | `.cursor/agents/devops-engineer.md` |
-| Security | `.cursor/agents/security-engineer.md` |
-| QA | `.cursor/agents/qa-engineer.md` |
-| Campaign | `.cursor/agents/campaign-specialist.md` |
+## Architecture Pointers
 
-## External Skills Library
+- Product narrative: `docs/HOW-IT-WORKS.md`
+- Ops runbook: `docs/PRODUCTION-OPS.md`
+- Plan / milestones: `docs/PROJECT_PLAN.md`
+- AI workflow: `docs/MASTER-AI-WORKFLOW.md`
+- ADRs: `docs/adr/` (index in `.cursor/project-management/DECISIONS.md`)
+- Layout: `main.py` (remaining monolith) + `app/` SaaS package; per-tenant SQLite under `data/tenants/{id}/`; SaaS data in PostgreSQL
 
-Большая библиотека находится в `skills/` и не должна загружаться целиком. Project skills выше уже вобрали нужное из релевантных source skills: `fastapi-pro`, `docker-expert`, `postgresql`, `auth-implementation-patterns`, `async-python-patterns`, `webapp-testing`, `frontend-api-integration-patterns`, `verification-before-completion` и др.
+## Guardrails
 
-## Rules
+- Never weaken tenant isolation (ContextVar + tenant paths) or “optimize away” anti-ban pacing.
+- Never commit secrets (`.env`, keys, vault material); treat volume backups as sensitive.
+- Do not invent payment/billing gateways — subscriptions are admin-granted.
+- Non-trivial work: `/start-feature` → Feature Plan → wait for `proceed` → implement → verifier.
+- Prefer skills for procedures; domain agents for high-risk isolation (auth, vault, tenant, campaign, ops).
 
-- `max-sender-workspace.mdc` — общие правила (always)
-- `ai-skills-system.mdc` — маршрутизация skills/agents (always)
-- `server-workspace.mdc` — `server/**`
-- `desktop-workspace.mdc` — `desktop/**`
+## Canonical Examples
 
-## Документация
+- Tenant workers: `docs/adr/001-tenant-worker-isolation.md`
+- Campaign pacing: `docs/adr/002-campaign-scale-pacing.md`
+- Worker extraction: `docs/adr/003-worker-module-extraction-deferred.md`
+- Cross-tenant tests: `tests/test_cross_tenant_api.py`, `tests/test_tenant_isolation_sqlite.py`
 
-- `docs/MASTER-AI-WORKFLOW.md` — архитектура и model routing
-- `.cursor/workflows/feature-lifecycle.md` — жизненный цикл задачи
-- `.cursor/skills/README.md` — индекс + маппинг на внешнюю библиотеку skills
+## Where Things Live
+
+| What | Path |
+|------|------|
+| Agents | `.cursor/agents/` |
+| Skills | `.cursor/skills/` |
+| Rules | `.cursor/rules/` |
+| Hooks | `.cursor/hooks.json` + `.cursor/hooks/` |
+| PM state | `.cursor/project-management/` |
+| Workflows | `.cursor/workflows/` |
+
+## MCP
+
+- **GitHub** (required): `.cursor/mcp.json` — set env `GITHUB_PERSONAL_ACCESS_TOKEN` (PAT), then restart Cursor. Used for PRs, checks, issues.
+- Other MCP servers: opt-in only; no prod DB MCP by default.
+
+## Feature Entry Point
+
+Use `/start-feature <business goal>` for non-trivial work. Wait for `proceed`.

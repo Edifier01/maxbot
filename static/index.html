@@ -68,11 +68,13 @@
       --mono: "JetBrains Mono", ui-monospace, monospace;
     }
     * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
+    html { scroll-behavior: smooth; overflow-x: hidden; }
     body {
       font-family: var(--font);
       margin: 0;
       min-height: 100vh;
+      max-width: 100%;
+      overflow-x: hidden;
       color: var(--text);
       background:
         radial-gradient(1200px 600px at 10% -10%, rgba(61,139,253,.14), transparent 55%),
@@ -256,6 +258,15 @@
     .group-head .meta { color: var(--muted); font-size: .85rem; }
     .group-body { padding: 0 1rem 1rem; border-top: 1px solid var(--line-soft); }
     .group-body input, .group-body textarea { pointer-events: auto; min-width: 140px; flex: 1 1 140px; }
+    .group-table-wrap {
+      overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: .5rem;
+    }
+    .group-table-wrap table { width: 100%; min-width: 520px; border-collapse: collapse; font-size: .85rem; }
+    .group-table-wrap th {
+      color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line);
+      padding: .55rem .6rem; text-align: left;
+    }
+    .group-table-wrap td { padding: .5rem .6rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
     .group-actions { display: flex; gap: .5rem; }
     button.small {
       padding: .35rem .7rem; font-size: .8rem; border-radius: 7px;
@@ -396,12 +407,44 @@
     }
     @media (max-width: 720px) {
       header, nav, main { padding-left: 1rem; padding-right: 1rem; }
-      main { padding-top: 1rem; }
-      input, select, textarea { max-width: 100%; }
+      main { padding-top: 1rem; padding-bottom: 5rem; max-width: 100%; }
+      header { flex-direction: column; align-items: stretch; gap: .65rem; }
+      .brand { justify-content: flex-start; }
+      .header-meta {
+        width: 100%; flex-direction: column; align-items: stretch; gap: .5rem;
+      }
+      #btnLogout { margin-left: 0; align-self: flex-start; }
+      #progressWrap { max-width: 100%; width: 100%; order: 10; }
+      nav { padding-bottom: .65rem; gap: .25rem; }
+      nav button { padding: .5rem .75rem; min-height: 40px; }
+      input, select, textarea { max-width: 100%; font-size: 16px; }
+      .panel .row { flex-direction: column; align-items: stretch; }
+      .panel .row input, .panel .row button { width: 100%; max-width: none; }
       .settings-row { grid-template-columns: 1fr; gap: .35rem; }
-      .group-head { flex-wrap: wrap; }
-      #progressWrap { max-width: 100%; width: 100%; }
+      .settings-row .controls { width: 100%; }
+      .group-head { flex-wrap: wrap; align-items: flex-start; }
+      .group-head .meta { width: 100%; margin-top: .15rem; font-size: .8rem; word-break: break-word; }
+      .group-body .row { flex-direction: column; align-items: stretch; }
+      .group-body input, .group-body textarea, .group-body button { max-width: none; width: 100%; }
+      .group-body td:last-child button { width: 100%; margin-bottom: .35rem; }
+      .group-actions { flex-direction: column; width: 100%; }
+      .group-actions button { width: 100%; min-height: 40px; }
+      .toolbar { flex-direction: column; align-items: stretch; }
+      .toolbar button, .toolbar .primary, .toolbar .danger, .toolbar .small {
+        width: 100%; justify-content: center; min-height: 44px;
+      }
+      .section-head { flex-direction: column; align-items: flex-start; gap: .35rem; }
       .dash-cards { grid-template-columns: 1fr; }
+      .table-wrap { max-height: 50vh; }
+      .data-table { font-size: .82rem; min-width: 520px; }
+      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      #toast-container {
+        left: 1rem; right: 1rem; bottom: 1rem; align-items: stretch;
+      }
+      .toast { max-width: none; width: 100%; }
+      .modal { width: min(380px, 94vw); margin: 1rem; }
+      .phone-cell { flex-direction: column; align-items: flex-start; }
+      button.small { min-height: 36px; }
     }
   </style>
 </head>
@@ -414,6 +457,7 @@
     </div>
     <div class="header-meta">
       <button type="button" id="btnLogout" class="small" style="display:none" onclick="logoutUser()">Выход</button>
+      <span id="subscriptionBadge" class="badge ok" style="display:none" title="Дата окончания подписки"></span>
       <span id="runBadge" class="badge stop header-user-hide">остановлено</span>
       <span id="vaultBadge" class="badge warn header-user-hide">хранилище…</span>
       <span id="liveBadge" class="badge poll header-user-hide" title="Канал статуса">опрос</span>
@@ -552,9 +596,9 @@
       <div class="panel">
       <div class="panel-title">Новая группа</div>
       <div class="row">
-        <input id="groupName" placeholder="Название группы">
-        <input id="groupLink" placeholder="Пригласительная ссылка группы" style="max-width:420px">
-        <button class="primary" onclick="addGroup()">Создать группу</button>
+        <input id="groupName" placeholder="Название группы" oninput="updateCreateGroupBtn()">
+        <input id="groupLink" type="url" required placeholder="https://max.ru/join/…" oninput="updateCreateGroupBtn()">
+        <button class="primary" id="btnCreateGroup" disabled onclick="withLoading(this, addGroup)">Создать группу</button>
       </div>
       </div>
       <input type="file" id="csvFile" accept=".csv,.txt" style="display:none">
@@ -569,25 +613,6 @@
       <div class="section-head">
         <h2>Настройки</h2>
         <span class="hint" style="margin:0">Антибан, доступ и интеграции</span>
-      </div>
-      <div class="vault-box">
-        <h3>Хранилище сессий</h3>
-        <p class="hint" id="vaultHint" style="margin-top:0">Загрузка…</p>
-        <div class="row" id="vaultSetupRow" style="display:none">
-          <input id="vaultPass1" type="password" placeholder="Новый пароль (≥6)">
-          <input id="vaultPass2" type="password" placeholder="Повтор пароля">
-          <button class="primary" onclick="withLoading(this, setupVault)">Защитить паролем</button>
-        </div>
-        <div class="row" id="vaultUnlockRow" style="display:none">
-          <input id="vaultUnlockPass" type="password" placeholder="Пароль хранилища">
-          <button class="primary" onclick="withLoading(this, unlockVault)">Разблокировать</button>
-          <button class="small" onclick="withLoading(this, lockVault)">Заблокировать</button>
-        </div>
-        <div class="row" id="vaultLegacyRow" style="display:none">
-          <input id="vaultMigratePass1" type="password" placeholder="Новый пароль (≥6)">
-          <input id="vaultMigratePass2" type="password" placeholder="Повтор">
-          <button class="primary" onclick="withLoading(this, setupVault)">Мигрировать со старого ключа</button>
-        </div>
       </div>
 
       <details class="settings-panel" open>
@@ -637,12 +662,17 @@
           </div></div>
           <div class="settings-row"><label>Окна будни</label><div class="controls"><input id="windowsWeekday" placeholder="9-13,16-21" style="max-width:280px"></div></div>
           <div class="settings-row"><label>Окна выходные</label><div class="controls"><input id="windowsWeekend" placeholder="11-14,17-20" style="max-width:280px"></div></div>
-          <div class="settings-row"><label>Пропуск дня (%)</label><div class="controls"><input id="daySkipPct" type="number" min="0" max="100" step="1" style="max-width:100px"></div></div>
+          <div class="settings-row"><label>Пропуск / active / quiet (%)</label><div class="controls">
+            <input id="daySkipPct" type="number" min="0" max="100" step="1" style="max-width:70px" title="skip">
+            <input id="roleActivePct" type="number" min="0" max="100" step="1" style="max-width:70px" title="active">
+            <input id="roleQuietPct" type="number" min="0" max="100" step="1" style="max-width:70px" title="quiet">
+          </div></div>
+          <p class="hint" style="margin:.25rem 0 0 1rem">Роли дня: 3-дневная ротация active → quiet → skip по порядку профилей (~33% каждая часть). Legacy % ниже не используются при включённых ролях.</p>
           <div class="settings-row"><label>Роли дня</label><div class="controls">
             <label style="width:auto;max-width:none"><input type="checkbox" id="rolePlanOn" style="width:auto;max-width:none"> вкл</label>
           </div></div>
-          <div class="settings-row"><label>Активных мин/макс</label><div class="controls">
-            <input id="roleActiveMin" type="number" min="0" style="max-width:70px">
+          <div class="settings-row"><label>Legacy active мин/макс</label><div class="controls">
+            <input id="roleActiveMin" type="number" min="0" style="max-width:70px" title="если active % = 0">
             <span class="hint" style="margin:0">–</span>
             <input id="roleActiveMax" type="number" min="0" style="max-width:70px">
           </div></div>
@@ -751,18 +781,6 @@
     </section>
   </main>
 
-  <div id="vaultModal" class="modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true">
-      <h3 id="vaultModalTitle">Хранилище</h3>
-      <p id="vaultModalMsg"></p>
-      <input id="vaultModalPass" type="password" autocomplete="current-password">
-      <input id="vaultModalPass2" type="password" placeholder="Повтор пароля" style="display:none" autocomplete="new-password">
-      <div class="modal-actions">
-        <button class="primary" id="vaultModalOk">Готово</button>
-      </div>
-    </div>
-  </div>
-
   <div id="authModal" class="modal-overlay">
     <div class="modal" role="dialog" aria-modal="true">
       <h3 id="authModalTitle">Код</h3>
@@ -809,6 +827,8 @@
       btn.textContent = '…';
       try {
         await asyncFn();
+      } catch (e) {
+        toast(e.message || 'Ошибка', 'error');
       } finally {
         btn.disabled = false;
         btn.textContent = orig;
@@ -850,6 +870,13 @@
     }
 
     function logoutUser() {
+      const token = getAuthToken();
+      if (token) {
+        fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token },
+        }).catch(() => {});
+      }
       setAuthToken('');
       sessionStorage.removeItem('maxImpersonating');
       location.href = '/auth.html';
@@ -858,21 +885,66 @@
     let _serverMode = false;
     let _userRole = 'local';
     let _subscriptionActive = true;
+    let _subscriptionExpiresAt = null;
     let _adminGlobalMode = false;
+    let _adminImpersonating = false;
     let _lastStatus = null;
 
     function isUserRole() {
       return _serverMode && _userRole === 'user';
     }
 
+    function isAdminImpersonating() {
+      return _serverMode && _userRole === 'admin' && _adminImpersonating;
+    }
+
+    /** User cabinet campaign UX: start/stop only + active-state highlight */
+    function isSimpleCampaignView() {
+      return isUserRole() || isAdminImpersonating();
+    }
+
+    function formatSubscriptionDate(iso) {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+      return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    }
+
+    function subscriptionDaysLeft(iso) {
+      if (!iso) return null;
+      const exp = new Date(iso);
+      if (Number.isNaN(exp.getTime())) return null;
+      const now = new Date();
+      return Math.ceil((exp.getTime() - now.getTime()) / 86400000);
+    }
+
+    function applySubscriptionBadge() {
+      const el = document.getElementById('subscriptionBadge');
+      if (!el) return;
+      if (!isUserRole()) {
+        el.style.display = 'none';
+        return;
+      }
+      el.style.display = '';
+      if (!_subscriptionActive || !_subscriptionExpiresAt) {
+        el.textContent = 'подписка не активна';
+        el.className = 'badge stop';
+        return;
+      }
+      const label = formatSubscriptionDate(_subscriptionExpiresAt);
+      const days = subscriptionDaysLeft(_subscriptionExpiresAt);
+      el.textContent = 'подписка до ' + label;
+      if (days !== null && days <= 7) el.className = 'badge warn';
+      else el.className = 'badge ok';
+    }
+
     function applyCampaignButtonState(s) {
-      const isUser = isUserRole();
       const start = document.getElementById('btnStart');
       const stop = document.getElementById('btnStop');
       if (!start || !stop) return;
       start.classList.remove('campaign-btn-active', 'campaign-btn-idle');
       stop.classList.remove('campaign-btn-active', 'campaign-btn-idle');
-      if (!isUser) return;
+      if (!isSimpleCampaignView()) return;
       const on = !!(s && (s.running || s.auto_run));
       if (on) {
         start.classList.add('campaign-btn-active');
@@ -893,6 +965,14 @@
       if (tabId === 'dashboard') loadDashboard();
     }
 
+    function adminGlobalTabFromUrl() {
+      const stored = sessionStorage.getItem('maxAdminGlobalTab');
+      if (stored === 'messages' || stored === 'settings') return stored;
+      if (location.hash === '#messages') return 'messages';
+      if (location.hash === '#settings') return 'settings';
+      return null;
+    }
+
     function applyAdminGlobalUI() {
       ['campaign', 'dashboard', 'groups'].forEach(tab => {
         const btn = document.querySelector(`nav button[data-tab="${tab}"]`);
@@ -902,7 +982,8 @@
       banner.style.display = 'block';
       banner.className = 'hint';
       banner.innerHTML = 'Глобальные настройки админа (шаблон для всех учреждений) · <a href="/admin.html" style="color:var(--accent)">← админ-панель</a>';
-      const tab = location.hash === '#messages' ? 'messages' : 'settings';
+      const tab = adminGlobalTabFromUrl() || 'settings';
+      sessionStorage.removeItem('maxAdminGlobalTab');
       switchTab(tab);
     }
 
@@ -953,11 +1034,12 @@
 
     function applyServerRoleUI() {
       const isUser = isUserRole();
+      const simpleCampaign = isSimpleCampaignView();
       document.querySelectorAll('nav button[data-tab="messages"], nav button[data-tab="settings"]').forEach(el => {
         el.style.display = isUser ? 'none' : '';
       });
       document.querySelectorAll('.campaign-admin-only').forEach(el => {
-        el.style.display = isUser ? 'none' : '';
+        el.style.display = simpleCampaign ? 'none' : '';
       });
       document.querySelectorAll('.header-user-hide').forEach(el => {
         el.style.display = isUser ? 'none' : '';
@@ -966,8 +1048,8 @@
       if (logoutBtn) logoutBtn.style.display = isUser ? '' : 'none';
       const userHint = document.getElementById('campaignUserHint');
       const adminHint = document.getElementById('campaignAdminHint');
-      if (userHint) userHint.style.display = isUser ? '' : 'none';
-      if (adminHint) adminHint.style.display = isUser ? 'none' : '';
+      if (userHint) userHint.style.display = simpleCampaign ? '' : 'none';
+      if (adminHint) adminHint.style.display = simpleCampaign ? 'none' : '';
       const banner = document.getElementById('serverBanner');
       if (banner) {
         if (!_serverMode) {
@@ -982,14 +1064,22 @@
           } else if (isUser && !_subscriptionActive) {
             banner.className = 'hint';
             banner.style.color = 'var(--danger)';
-            banner.textContent = 'Подписка не активна. Обратитесь к администратору для доступа к рассылке.';
+            const expiredLabel = _subscriptionExpiresAt
+              ? ' (истекла ' + formatSubscriptionDate(_subscriptionExpiresAt) + ')'
+              : '';
+            banner.textContent = 'Подписка не активна' + expiredLabel + '. Обратитесь к администратору для доступа к рассылке.';
           } else if (isUser) {
-            banner.textContent = 'Личный кабинет — группы, аккаунты, рассылка, сводка';
+            banner.style.color = '';
+            const subHint = _subscriptionExpiresAt
+              ? ' · подписка до ' + formatSubscriptionDate(_subscriptionExpiresAt)
+              : '';
+            banner.textContent = 'Личный кабинет — группы, аккаунты, рассылка, сводка' + subHint;
           } else {
             banner.style.display = 'none';
           }
         }
       }
+      applySubscriptionBadge();
       applyCampaignButtonState(_lastStatus);
     }
 
@@ -1002,9 +1092,14 @@
       try {
         const me = await api('/auth/me');
         _userRole = me.role;
+        _adminImpersonating = !!me.impersonating;
         _subscriptionActive = !!(me.subscription && me.subscription.active);
-        _adminGlobalMode = me.role === 'admin' && !me.impersonating
-          && /^#(settings|messages)/.test(location.hash);
+        _subscriptionExpiresAt = me.subscription && me.subscription.expires_at
+          ? me.subscription.expires_at
+          : null;
+        const globalTab = adminGlobalTabFromUrl();
+        _adminGlobalMode = me.role === 'admin' && !me.impersonating && !!globalTab;
+        if (!_adminGlobalMode) sessionStorage.removeItem('maxAdminGlobalTab');
         if (me.role === 'admin' && !me.impersonating && !_adminGlobalMode) {
           location.href = '/admin.html';
           return;
@@ -1019,145 +1114,14 @@
 
     function applyVaultBadge(vs) {
       const el = document.getElementById('vaultBadge');
-      if (!vs) { el.textContent = 'хранилище?'; el.className = 'badge warn'; return; }
-      if (vs.needs_setup) { el.textContent = 'нужен пароль'; el.className = 'badge lock'; }
-      else if (vs.legacy) { el.textContent = 'старый ключ'; el.className = 'badge warn'; }
-      else if (vs.unlocked) { el.textContent = 'хранилище ОК'; el.className = 'badge run'; }
-      else { el.textContent = 'заблокировано'; el.className = 'badge lock'; }
-    }
-
-    function renderVaultControls(vs) {
-      const hint = document.getElementById('vaultHint');
-      document.getElementById('vaultSetupRow').style.display = 'none';
-      document.getElementById('vaultUnlockRow').style.display = 'none';
-      document.getElementById('vaultLegacyRow').style.display = 'none';
-      if (!vs) { hint.textContent = 'Статус недоступен'; return; }
-      if (vs.needs_setup) {
-        hint.textContent = 'Задайте пароль для шифрования сессий MAX (PBKDF2). Без него вход в аккаунты недоступен.';
-        document.getElementById('vaultSetupRow').style.display = 'flex';
-      } else if (vs.legacy) {
-        hint.textContent = 'Используется старый ключ .app_key. Рекомендуется мигрировать на пароль.';
-        document.getElementById('vaultLegacyRow').style.display = 'flex';
-      } else if (vs.protected) {
-        hint.textContent = vs.unlocked
-          ? 'Хранилище разблокировано. Сессии шифруются паролем.'
-          : 'Хранилище заблокировано — введите пароль для работы с аккаунтами.';
-        document.getElementById('vaultUnlockRow').style.display = 'flex';
-      }
-    }
-
-    async function setupVault() {
-      let p1, p2;
-      const modalOpen = document.getElementById('vaultModal').style.display === 'flex';
-      // Модалка имеет приоритет: иначе читаются пустые поля вкладки «Настройки»
-      if (modalOpen) {
-        p1 = document.getElementById('vaultModalPass').value;
-        p2 = document.getElementById('vaultModalPass2').value;
-      } else if (document.getElementById('vaultSetupRow').style.display !== 'none') {
-        p1 = document.getElementById('vaultPass1').value;
-        p2 = document.getElementById('vaultPass2').value;
-      } else if (document.getElementById('vaultLegacyRow').style.display !== 'none') {
-        p1 = document.getElementById('vaultMigratePass1').value;
-        p2 = document.getElementById('vaultMigratePass2').value;
-      } else {
-        p1 = document.getElementById('vaultModalPass').value;
-        p2 = document.getElementById('vaultModalPass2').value;
-      }
-      if (!p1 || p1.length < 6) return toast('Пароль не короче 6 символов', 'error');
-      if (p1 !== p2) return toast('Пароли не совпадают', 'error');
-      try {
-        const r = await api('/vault/setup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: p1 }),
-        });
-        toast('Хранилище защищено' + (r.migrated_sessions ? ` (сессий: ${r.migrated_sessions})` : ''), 'success');
-        document.getElementById('vaultModal').style.display = 'none';
-        ['vaultPass1','vaultPass2','vaultMigratePass1','vaultMigratePass2','vaultModalPass','vaultModalPass2'].forEach(id => {
-          const el = document.getElementById(id); if (el) el.value = '';
-        });
-        await ensureVault();
-        loadSettings();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    }
-
-    async function unlockVault() {
-      const modalOpen = document.getElementById('vaultModal').style.display === 'flex';
-      const pass = modalOpen
-        ? document.getElementById('vaultModalPass').value
-        : (document.getElementById('vaultUnlockPass').value
-          || document.getElementById('vaultModalPass').value);
-      if (!pass) return toast('Введите пароль', 'error');
-      try {
-        await api('/vault/unlock', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: pass }),
-        });
-        toast('Хранилище разблокировано', 'success');
-        document.getElementById('vaultModal').style.display = 'none';
-        document.getElementById('vaultUnlockPass').value = '';
-        document.getElementById('vaultModalPass').value = '';
-        await ensureVault();
-        loadSettings();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    }
-
-    async function lockVault() {
-      try {
-        await api('/vault/lock', { method: 'POST' });
-        toast('Хранилище заблокировано', 'success');
-        await ensureVault();
-        loadSettings();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    }
-
-    function showVaultModal(vs) {
-      const overlay = document.getElementById('vaultModal');
-      const pass2 = document.getElementById('vaultModalPass2');
-      const title = document.getElementById('vaultModalTitle');
-      const msg = document.getElementById('vaultModalMsg');
-      const ok = document.getElementById('vaultModalOk');
-      if (vs.needs_setup || vs.legacy) {
-        title.textContent = vs.legacy ? 'Защитить хранилище' : 'Создать пароль хранилища';
-        msg.textContent = 'Пароль шифрует сессии MAX (PBKDF2). Запомните его — восстановить нельзя.';
-        pass2.style.display = 'block';
-        ok.onclick = () => setupVault();
-      } else {
-        title.textContent = 'Разблокировать хранилище';
-        msg.textContent = 'Введите пароль для расшифровки сессий.';
-        pass2.style.display = 'none';
-        ok.onclick = () => unlockVault();
-      }
-      overlay.style.display = 'flex';
-      document.getElementById('vaultModalPass').focus();
-    }
-
-    async function ensureVault() {
-      const vs = await api('/vault/status');
-      applyVaultBadge(vs);
-      renderVaultControls(vs);
-      if (vs.needs_setup || (!vs.unlocked && vs.protected)) {
-        showVaultModal(vs);
-      } else if (vs.legacy) {
-        applyVaultBadge(vs);
-      }
-      return vs;
+      if (!vs || !vs.unlocked) { el.textContent = 'хранилище'; el.className = 'badge warn'; return; }
+      el.textContent = 'хранилище ОК';
+      el.className = 'badge run';
     }
 
     async function initVaultUI() {
       const vs = await api('/vault/status');
       applyVaultBadge(vs);
-      renderVaultControls(vs);
-      if (vs.needs_setup || (!vs.unlocked && vs.protected)) {
-        showVaultModal(vs);
-      }
       return vs;
     }
 
@@ -1198,8 +1162,10 @@
     }
 
     function normalizePhone(phone) {
-      phone = phone.trim();
-      if (!phone.startsWith('+')) phone = '+' + phone.replace(/^\+/, '');
+      phone = phone.trim().replace(/\s/g, '');
+      if (phone.startsWith('8') && phone.length === 11) phone = '+7' + phone.slice(1);
+      else if (phone.startsWith('7') && phone.length === 11) phone = '+' + phone;
+      else if (!phone.startsWith('+')) phone = '+' + phone.replace(/^\+/, '');
       return phone;
     }
 
@@ -1250,14 +1216,19 @@
       }
     }
 
-    async function startLoginWatch(profileId) {
+    async function startLoginWatch(profileId, initialStep = 'connecting') {
       if (authWatchers.has(profileId)) return;
       authWatchers.add(profileId);
+      let idlePolls = 0;
+      const maxIdlePolls = 45;
 
       try {
         while (authWatchers.has(profileId)) {
           const p = await findProfile(profileId);
-          if (!p) break;
+          if (!p) {
+            toast('Профиль не найден', 'error');
+            break;
+          }
 
           if (p.auth_step === 'waiting_sms' && !authModalOpen) {
             const code = await showAuthModal(
@@ -1278,13 +1249,29 @@
             continue;
           }
 
-          if (p.auth_step === 'waiting_cloud_password') {
-            toast('Аккаунт MAX требует облачный пароль — вход не поддерживается', 'error');
-            await api(`/profiles/${profileId}/login/reset`, { method: 'POST' });
-            break;
+          if (p.auth_step === 'waiting_cloud_password' && !authModalOpen) {
+            const hint = p.auth_hint ? `\nПодсказка: ${p.auth_hint}` : '';
+            const pwd = await showAuthModal(
+              'Облачный пароль MAX',
+              `Введите облачный пароль для ${p.phone}${hint}`,
+              true
+            );
+            if (pwd === null) {
+              await api(`/profiles/${profileId}/login/reset`, { method: 'POST' });
+              break;
+            }
+            await api(`/profiles/${profileId}/password`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ code: pwd }),
+            });
+            loadGroups(true);
+            await sleep(300);
+            continue;
           }
 
           if (p.status === 'active' && p.auth_step === 'idle') {
+            toast('Аккаунт подключён', 'success');
             loadGroups(true);
             break;
           }
@@ -1295,11 +1282,22 @@
             break;
           }
 
-          if (!['connecting', 'waiting_sms', 'verifying_sms'].includes(p.auth_step)) {
-            break;
+          if (['connecting', 'waiting_sms', 'verifying_sms', 'waiting_cloud_password', 'verifying_password'].includes(p.auth_step)) {
+            idlePolls = 0;
+            await sleep(400);
+            continue;
           }
 
-          await sleep(400);
+          if (p.auth_step === 'idle' && initialStep === 'connecting' && idlePolls < maxIdlePolls) {
+            idlePolls++;
+            await sleep(400);
+            continue;
+          }
+
+          if (p.auth_step === 'idle' && p.status === 'pending') {
+            toast('Вход не запустился. Попробуйте ещё раз.', 'error');
+          }
+          break;
         }
       } catch (e) {
         toast(e.message, 'error');
@@ -1415,17 +1413,29 @@
         return;
       }
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const pin = getApiPin();
-      const q = pin ? ('?pin=' + encodeURIComponent(pin)) : '';
+      if (_serverMode && !getAuthToken()) {
+        startStatusPoll();
+        return;
+      }
       let ws;
       try {
-        ws = new WebSocket(`${proto}//${location.host}/ws/status${q}`);
+        ws = new WebSocket(`${proto}//${location.host}/ws/status`);
       } catch (_) {
         startStatusPoll();
         return;
       }
       _statusWs = ws;
       ws.onopen = () => {
+        try {
+          if (_serverMode) {
+            ws.send(JSON.stringify({ type: 'auth', token: getAuthToken() }));
+          } else {
+            ws.send(JSON.stringify({ type: 'auth', pin: getApiPin() || '' }));
+          }
+        } catch (_) {
+          ws.close();
+          return;
+        }
         _statusWsRetry = 0;
         stopStatusPoll();
         setLiveBadge('live');
@@ -1526,8 +1536,8 @@
           <div class="meta">Сегодня: ${p.messages_sent_today || 0} · ${esc(p.group_names || '')}</div>
           ${p.last_error ? `<div class="auth-error">${esc(p.last_error)}</div>` : ''}
           <div class="row" style="margin-top:.5rem;margin-bottom:0">
-            <button class="small" onclick="loginProfile(${p.id}, ${isUserRole()}, ${p.primary_group_id || 'null'})">Войти</button>
-            ${isUserRole() ? '' : `<button class="small" onclick="loginProfile(${p.id}, true, ${p.primary_group_id || 'null'})">Заново</button>`}
+            <button class="small" onclick="withLoading(this, () => loginProfile(${p.id}, ${isUserRole()}, ${p.primary_group_id || 'null'}))">Войти</button>
+            ${isUserRole() ? '' : `<button class="small" onclick="withLoading(this, () => loginProfile(${p.id}, true, ${p.primary_group_id || 'null'}))">Заново</button>`}
           </div>
         </div>
       `).join('');
@@ -1535,7 +1545,7 @@
 
     async function startCampaign() {
       try {
-        if (!isUserRole()) {
+        if (!isSimpleCampaignView()) {
           const s = await api('/status');
           const prog = s.campaign_progress || {};
           const activeCount = (s.profiles && s.profiles.active) || 0;
@@ -1711,13 +1721,7 @@
       if (!skipConfirm && !confirm('Заменить текущие сообщения?')) return;
       const fd = new FormData();
       fd.append('file', file);
-      const headers = {};
-      const pin = getApiPin();
-      if (pin) headers['Authorization'] = 'Bearer ' + pin;
-      await fetch('/api/messages/upload', { method: 'POST', body: fd, headers }).then(r => {
-        if (!r.ok) return r.json().then(j => { throw new Error(j.detail); });
-        return r.json();
-      });
+      await api('/messages/upload', { method: 'POST', body: fd });
       toast('Сообщения загружены', 'success');
       loadMessages();
     }
@@ -1760,7 +1764,8 @@
         connecting: 'Подключение…',
         waiting_sms: '→ введите SMS-код',
         verifying_sms: 'Проверка SMS…',
-        waiting_cloud_password: '→ облачный пароль не поддерживается',
+        waiting_cloud_password: '→ введите облачный пароль',
+        verifying_password: 'Проверка пароля…',
         error: 'Ошибка входа',
         idle: '',
       };
@@ -1794,7 +1799,7 @@
         badges.push(['Пауза', 'warn', until ? `до ${until}` : 'временная пауза']);
       }
       if (p.auth_step === 'waiting_sms') badges.push(['Код SMS', 'warn', 'Ожидает код']);
-      if (p.auth_step === 'waiting_cloud_password') badges.push(['Не поддерж.', 'danger', 'Нужен облачный пароль MAX']);
+      if (p.auth_step === 'waiting_cloud_password') badges.push(['Пароль MAX', 'warn', p.auth_hint || 'Нужен облачный пароль']);
       if (p.auth_step === 'error' && p.status === 'active') {
         badges.push(['Ошибка входа', 'danger', err || 'Ошибка авторизации']);
       }
@@ -1811,11 +1816,11 @@
     }
 
     function profileActions(p, groupId) {
-      const busy = ['connecting', 'waiting_sms', 'verifying_sms'].includes(p.auth_step);
+      const busy = ['connecting', 'waiting_sms', 'verifying_sms', 'waiting_cloud_password', 'verifying_password'].includes(p.auth_step);
       const loginFresh = isUserRole();
       return `
-        <button onclick="loginProfile(${p.id}, ${loginFresh}, ${groupId})" ${busy ? 'disabled' : ''}>Войти</button>
-        ${isUserRole() ? '' : `<button class="small" onclick="loginProfile(${p.id}, true, ${groupId})" ${busy ? 'disabled' : ''}>Заново</button>`}
+        <button onclick="withLoading(this, () => loginProfile(${p.id}, ${loginFresh}, ${groupId}))" ${busy ? 'disabled' : ''}>Войти</button>
+        ${isUserRole() ? '' : `<button class="small" onclick="withLoading(this, () => loginProfile(${p.id}, true, ${groupId}))" ${busy ? 'disabled' : ''}>Заново</button>`}
         ${busy ? `<button class="small" onclick="resetLogin(${p.id})">Сброс</button>` : ''}
         <button class="small danger" onclick="removeProfile(${groupId}, ${p.id})">Удалить</button>`;
     }
@@ -1865,26 +1870,43 @@
       loadGroups(true);
     }
 
+    function isValidInviteLink(link) {
+      return /^https?:\/\/.+/i.test(link);
+    }
+
+    function updateCreateGroupBtn() {
+      const name = document.getElementById('groupName').value.trim();
+      const link = document.getElementById('groupLink').value.trim();
+      const btn = document.getElementById('btnCreateGroup');
+      if (btn) btn.disabled = !name || !link || !isValidInviteLink(link);
+    }
+
     async function loginProfile(id, fresh = false, groupId = null) {
       const params = new URLSearchParams();
       if (fresh) params.set('fresh', 'true');
       if (groupId != null) params.set('group_id', String(groupId));
       const q = params.toString() ? '?' + params.toString() : '';
-      await api(`/profiles/${id}/login${q}`, { method: 'POST' });
-      loadGroups(true);
-      startLoginWatch(id);
+      try {
+        const r = await api(`/profiles/${id}/login${q}`, { method: 'POST' });
+        toast(r.message || 'Вход запущен', 'success');
+        loadGroups(true);
+        startLoginWatch(id, r.auth_step || 'connecting');
+      } catch (e) {
+        toast(e.message, 'error');
+        loadGroups(true);
+      }
     }
 
     async function loginFromPhone(groupId, fresh = true) {
-      const phoneRaw = document.getElementById('phone-' + groupId).value;
-      const label = document.getElementById('label-' + groupId).value;
-      if (!phoneRaw.trim()) return toast('Введите номер телефона', 'error');
-      const phone = normalizePhone(phoneRaw);
-
-      const profData = await api(`/groups/${groupId}/profiles?offset=0&limit=500`);
-      let profile = (profData.items || []).find(p => p.phone === phone);
-
       try {
+        const phoneRaw = document.getElementById('phone-' + groupId)?.value || '';
+        const label = document.getElementById('label-' + groupId)?.value || '';
+        if (!phoneRaw.trim()) return toast('Введите номер телефона', 'error');
+        const phone = normalizePhone(phoneRaw);
+
+        const profData = await api(`/groups/${groupId}/profiles?offset=0&limit=500`);
+        let profile = (profData.items || []).find(p => normalizePhone(p.phone) === phone);
+
         if (!profile) {
           const r = await api(`/groups/${groupId}/profiles`, {
             method: 'POST',
@@ -1893,12 +1915,12 @@
           });
           profile = { id: r.id, phone };
         }
-      } catch (e) {
-        return toast(e.message, 'error');
-      }
 
-      openGroupId = groupId;
-      await loginProfile(profile.id, fresh, groupId);
+        openGroupId = groupId;
+        await loginProfile(profile.id, fresh, groupId);
+      } catch (e) {
+        toast(e.message || 'Ошибка входа', 'error');
+      }
     }
 
     async function saveGroupProxy(groupId) {
@@ -1990,18 +2012,20 @@
             ${open ? `
             <div class="group-body" onclick="event.stopPropagation()">
               ${!isUserRole() ? `<div class="row" style="margin-bottom:.75rem">
-                <textarea id="groupProxy-${g.id}" rows="2" placeholder="Прокси: один URL или несколько (с новой строки / ;)" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
+                <textarea id="groupProxy-${g.id}" rows="2" placeholder="1 прокси на группу (~30 acc). Несколько URL — ротация по аккаунту" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
                 <button class="small" onclick="saveGroupProxy(${g.id})">Сохранить прокси</button>
               </div>` : ''}
+              <div class="table-wrap group-table-wrap">
               <table>
                 <thead><tr><th>ID</th><th>Телефон</th><th>Статус</th><th>Сегодня</th><th>Действия</th></tr></thead>
                 <tbody>${body}</tbody>
               </table>
+              </div>
               ${profilePageControls(g.id, total)}
               <div class="row" style="margin-top:.75rem">
                 <input id="phone-${g.id}" placeholder="+79991234567">
                 <input id="label-${g.id}" placeholder="Метка" style="max-width:120px">
-                <button class="primary" onclick="loginFromPhone(${g.id}, true)">Войти</button>
+                <button class="primary" onclick="withLoading(this, () => loginFromPhone(${g.id}, true))">Войти</button>
                 ${isUserRole() ? '' : `<button class="small" onclick="document.getElementById('csvFile').click()">Импорт CSV</button>`}
               </div>
             </div>` : ''}
@@ -2011,8 +2035,8 @@
       for (const g of groups) {
         if (openGroupId === g.id && openProfiles[g.id]) {
           for (const p of openProfiles[g.id].items) {
-            if (p.auth_step === 'waiting_sms') {
-              startLoginWatch(p.id);
+            if (p.auth_step === 'waiting_sms' || p.auth_step === 'waiting_cloud_password') {
+              startLoginWatch(p.id, p.auth_step);
             }
           }
         }
@@ -2024,14 +2048,21 @@
       const invite_link = document.getElementById('groupLink').value.trim();
       if (!name) return toast('Введите название группы', 'error');
       if (!invite_link) return toast('Введите пригласительную ссылку группы', 'error');
-      await api('/groups', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ name, max_chat_id: '', invite_link, proxy: '' }),
-      });
-      document.getElementById('groupName').value = '';
-      document.getElementById('groupLink').value = '';
-      loadGroups(true);
+      if (!isValidInviteLink(invite_link)) return toast('Ссылка должна начинаться с http:// или https://', 'error');
+      try {
+        await api('/groups', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ name, max_chat_id: '', invite_link, proxy: '' }),
+        });
+        document.getElementById('groupName').value = '';
+        document.getElementById('groupLink').value = '';
+        updateCreateGroupBtn();
+        toast('Группа создана', 'success');
+        loadGroups(true);
+      } catch (e) {
+        toast(e.message, 'error');
+      }
     }
 
     async function loadSettings() {
@@ -2053,21 +2084,23 @@
       document.getElementById('tzOffset').value = s.timezone_offset_hours ?? '3';
       document.getElementById('windowsWeekday').value = s.send_windows_weekday || '9-13,16-21';
       document.getElementById('windowsWeekend').value = s.send_windows_weekend || '11-14,17-20';
-      document.getElementById('daySkipPct').value = s.day_skip_percent || '20';
+      document.getElementById('daySkipPct').value = s.day_skip_percent || '40';
+      document.getElementById('roleActivePct').value = s.role_active_percent || '30';
+      document.getElementById('roleQuietPct').value = s.role_quiet_percent || '30';
       document.getElementById('rolePlanOn').checked = String(s.role_plan_enabled || '1') === '1';
       document.getElementById('roleActiveMin').value = s.role_active_min || '5';
       document.getElementById('roleActiveMax').value = s.role_active_max || '10';
       document.getElementById('roleQuietLimit').value = s.role_quiet_limit || '1';
       document.getElementById('pausesOn').checked = String(s.human_pauses_enabled || '1') === '1';
-      document.getElementById('shortPauseChance').value = s.short_pause_chance || '15';
+      document.getElementById('shortPauseChance').value = s.short_pause_chance || '8';
       document.getElementById('shortPauseMin').value = s.short_pause_min_sec || '30';
       document.getElementById('shortPauseMax').value = s.short_pause_max_sec || '50';
-      document.getElementById('longPauseChance').value = s.long_pause_chance || '10';
-      document.getElementById('longPauseMin').value = s.long_pause_min_sec || '300';
-      document.getElementById('longPauseMax').value = s.long_pause_max_sec || '900';
-      document.getElementById('breakAfterN').value = s.break_after_n || '4';
-      document.getElementById('breakMin').value = s.break_min_sec || '1200';
-      document.getElementById('breakMax').value = s.break_max_sec || '2400';
+      document.getElementById('longPauseChance').value = s.long_pause_chance || '3';
+      document.getElementById('longPauseMin').value = s.long_pause_min_sec || '120';
+      document.getElementById('longPauseMax').value = s.long_pause_max_sec || '300';
+      document.getElementById('breakAfterN').value = s.break_after_n || '8';
+      document.getElementById('breakMin').value = s.break_min_sec || '600';
+      document.getElementById('breakMax').value = s.break_max_sec || '1200';
       document.getElementById('jitterMorning').value = s.jitter_morning_percent || '55';
       document.getElementById('jitterEvening').value = s.jitter_evening_percent || '35';
       document.getElementById('presenceOn').checked = String(s.human_presence_enabled || '1') === '1';
@@ -2100,7 +2133,6 @@
       document.getElementById('backupHours').value = s.backup_interval_hours || '24';
       document.getElementById('workerPool').value = s.worker_pool_size || '1';
       document.getElementById('notifyDone').checked = localStorage.getItem('maxNotifyDone') === '1';
-      renderVaultControls(s.vault || await api('/vault/status'));
       loadScheduleHint();
       loadBackupHint();
       try {
@@ -2133,6 +2165,8 @@
         send_windows_weekend: document.getElementById('windowsWeekend').value.trim(),
         day_skip_percent: +document.getElementById('daySkipPct').value,
         role_plan_enabled: document.getElementById('rolePlanOn').checked ? 1 : 0,
+        role_active_percent: +document.getElementById('roleActivePct').value,
+        role_quiet_percent: +document.getElementById('roleQuietPct').value,
         role_active_min: +document.getElementById('roleActiveMin').value,
         role_active_max: +document.getElementById('roleActiveMax').value,
         role_quiet_limit: +document.getElementById('roleQuietLimit').value,
@@ -2234,13 +2268,6 @@
       }
     });
 
-    document.getElementById('vaultModalPass').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') document.getElementById('vaultModalOk').click();
-    });
-    document.getElementById('vaultModalPass2').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') document.getElementById('vaultModalOk').click();
-    });
-
     (async () => {
       try { await initServerMode(); } catch (_) {}
       if (_adminGlobalMode) {
@@ -2252,16 +2279,18 @@
       loadMessages();
       loadGroups();
       loadSettings();
-      loadSendLog();
-      loadCampaigns();
-      loadScheduleHint();
+      if (!isSimpleCampaignView()) {
+        loadSendLog();
+        loadCampaigns();
+        loadScheduleHint();
+      }
       refreshStatus();
       connectStatusWs();
     })();
     setInterval(() => {
       if (_adminGlobalMode) return;
       if (document.getElementById('groups').classList.contains('active') && !authModalOpen) loadGroups();
-      if (document.getElementById('campaign').classList.contains('active')) {
+      if (document.getElementById('campaign').classList.contains('active') && !isSimpleCampaignView()) {
         loadSendLog(sendLogOffset);
         loadCampaigns();
         loadScheduleHint();

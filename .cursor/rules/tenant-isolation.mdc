@@ -1,0 +1,14 @@
+---
+description: Tenant isolation hard rules for MAX Sender
+globs: ["app/**/*.py", "main.py"]
+alwaysApply: false
+---
+
+# Tenant Isolation
+
+- Tenant identity comes from authenticated context (JWT/middleware), not from client-chosen ids for authorization.
+- Operational data lives under `data/tenants/{id}/` in server mode — do not write tenant ops to global `data/` root.
+- Campaign workers must retain tenant binding for their lifetime (ADR 001).
+- Clear/request-scoped ContextVar must not leak across tenants; workers use snapshots/registry.
+- See `docs/adr/001-tenant-worker-isolation.md` and skill `tenant-isolation-max`.
+- Cross-tenant regression tests are required for isolation-sensitive changes.

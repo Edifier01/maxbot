@@ -1,17 +1,37 @@
 # Handoff
 
-## How Future Agents Should Start
-1. Determine workspace root. Canonical project root is `maxserverapp/`; prefix paths if opened from the parent folder.
-2. Read `README.md` and `AGENTS.md`.
-3. Read `.cursor/project-management/CURRENT_CONTEXT.md`, `PROJECT_STATUS.md`, `TASKS.md`, `DECISIONS.md` and `HANDOFF.md`.
-4. Identify whether the work targets `desktop/`, `server/`, or both.
-5. Load matching project skills from `.cursor/skills/`.
-6. Use `/start-feature ...` for non-trivial changes.
-7. Update these project-management files after meaningful work.
+## Last session
 
-## Important Rule
-Specialist agents must not edit project-management state independently. The parent agent owns integration and handoff updates.
+2026-08-07 — `/audit-project` phases 6–8: AI harness upgrade applied to MAX Sender Server after Gap Report `proceed`.
 
-## Skills Library
+## Done
 
-Do not load `skills/` wholesale. It is a vendored reference library; active distilled skills are in `.cursor/skills/`.
+- Bootstrap core: AGENTS.md, orchestrator, verifier, context-loading, start-feature, subagent-orchestrator, PM, feature-lifecycle, MASTER-AI-WORKFLOW
+- Domain agents (7 Agency-adapted + campaign-antiban)
+- Skills (ECC adapted + AAS saas-multi-tenant adapted + project-local)
+- Rules (7) + hooks (3 Cursor-adapted)
+- KEEP product docs untouched
+
+## Next action
+
+Run first product Feature Plan:
+
+```text
+/start-feature Harden Celery vs in-process campaign start parity (tenant headers + INTERNAL_SERVICE_TOKEN) with tests
+```
+
+Alternate:
+
+```text
+/start-feature Extract next safe slice from main.py into app/ per ADR 003 without changing campaign behavior
+```
+
+## Blockers
+
+None for harness. Product risks remain: unofficial MAX API, hybrid backup discipline, monolith residue.
+
+## Notes for next agent
+
+- Read `AGENTS.md` + this file + `CURRENT_CONTEXT.md` first.
+- Do not install full Agency/AAS/ECC catalogs.
+- Payments are out of scope.
