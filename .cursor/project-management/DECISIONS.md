@@ -14,3 +14,12 @@ Canonical project root is `maxserverapp/`. If Cursor is opened at the parent `Ma
 
 ## 2026-07-28: Vendored Skills Library
 `skills/` is a large source library, not active AI context. Active project skills live in `.cursor/skills/` and contain distilled guidance from relevant source skills.
+
+## 2026-08-07: Tenant group proxy in server mode
+Tenant UI may set group `proxy` via `POST/PATCH /api/groups` in server mode. Validation via `antiban_core.normalize_proxy_field`. Admin `PUT /api/admin/tenants/.../proxy` remains for ops/impersonation.
+
+## 2026-08-07: Lockfiles for Docker only
+`requirements.lock` / `requirements-server.lock` pin Docker installs. CI continues to install from `requirements*.txt` ranges unless flaky CI forces parity.
+
+## 2026-08-07: Specialist delegation gate
+After `/start-feature` + proceed, parent must implement via Task specialists per Agent Assignment (rule: `.cursor/rules/specialist-delegation.mdc`). Exceptions: explicit user override, LOW ≤2 files non-security, PM/docs-only.

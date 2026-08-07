@@ -9,7 +9,7 @@
 2. `/deploy-server [изменение]` — Docker/VPS/deploy по checklist.
 3. Классифицировать: `desktop` | `server` | `both`.
 4. Загрузить skills по зоне (см. таблицу ниже).
-5. Назначить agents → реализация → verifier.
+5. Назначить agents → реализация через Task (см. `.cursor/rules/specialist-delegation.mdc`) → verifier.
 
 ## Skills
 

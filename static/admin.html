@@ -44,7 +44,23 @@
     .badge { font-size: .75rem; padding: .15rem .45rem; border-radius: 4px; background: #2a3348; }
     .badge.ok { background: #1a3d2e; color: var(--ok); }
     .badge.no { background: #3d1a1a; color: var(--danger); }
+    .badge.warn { background: #3d351a; color: #e6b84d; }
     .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+    .global-groups-panel .row { gap: .65rem; }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.25rem; padding: 0 .25rem; }
+    .users-table { min-width: 640px; }
+    @media (max-width: 720px) {
+      header { padding: .85rem 1rem; }
+      main { padding: .85rem 1rem 2rem; }
+      h1 { font-size: 1.05rem; }
+      header .row { width: 100%; margin-left: 0 !important; justify-content: flex-start; }
+      .panel { padding: .85rem; }
+      .global-groups-panel .btn { flex: 1 1 100%; min-height: 44px; }
+      .days-group { flex-wrap: wrap; }
+      td .row { flex-direction: column; align-items: stretch; }
+      td .row .btn, td .days-group { width: 100%; }
+      td .row .btn.primary { order: -1; }
+    }
   </style>
 </head>
 <body>
@@ -56,6 +72,28 @@
     </span>
   </header>
   <main>
+    <div class="panel global-groups-panel">
+      <strong>Группы всех учреждений</strong>
+      <p class="hint" style="margin:.35rem 0 .75rem">Включить или выключить участие всех групп в рассылке (поле <code>is_active</code>).</p>
+      <div class="row">
+        <button class="btn primary" id="btnGroupsOn" onclick="bulkGroups(1)">Включить все группы</button>
+        <button class="btn danger" id="btnGroupsOff" onclick="bulkGroups(0)">Выключить все группы</button>
+      </div>
+      <p class="hint" id="bulkGroupsHint" style="margin:.65rem 0 0">—</p>
+    </div>
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <strong>Подписки, истекающие в ближайшие 7 дней</strong>
+        <button class="btn" onclick="loadExpiring()">Обновить</button>
+      </div>
+      <p class="hint" id="expiringHint">—</p>
+      <table id="expiringTable" style="display:none">
+        <thead>
+          <tr><th>Учреждение</th><th>Email</th><th>До</th><th>Осталось</th></tr>
+        </thead>
+        <tbody id="expiringBody"></tbody>
+      </table>
+    </div>
     <div class="panel">
       <div class="row" style="justify-content:space-between">
         <strong>Пользователи (учреждения)</strong>
@@ -64,7 +102,8 @@
           <a href="/#messages" onclick="openGlobalSettings('#messages'); return false;">Сообщения (пул)</a>
         </span>
       </div>
-      <table>
+      <div class="table-scroll">
+      <table class="users-table">
         <thead>
           <tr>
             <th>Учреждение</th>
@@ -76,6 +115,7 @@
         </thead>
         <tbody id="usersBody"></tbody>
       </table>
+      </div>
     </div>
   </main>
   <script>
@@ -93,11 +133,49 @@
       if (!r.ok) throw new Error(j.detail || r.statusText);
       return j;
     }
-    function logout() {
+    async function logout() {
+      const token = sessionStorage.getItem('maxAdminAuthToken') || sessionStorage.getItem('maxAuthToken');
+      if (token) {
+        try {
+          await fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token },
+          });
+        } catch (_) {}
+      }
       sessionStorage.removeItem('maxAuthToken');
       sessionStorage.removeItem('maxAdminAuthToken');
       sessionStorage.removeItem('maxImpersonating');
       location.href = '/auth.html';
+    }
+    async function loadExpiring() {
+      const hint = document.getElementById('expiringHint');
+      const table = document.getElementById('expiringTable');
+      const tbody = document.getElementById('expiringBody');
+      try {
+        const data = await api('/admin/subscriptions/expiring?days=7');
+        const items = data.items || [];
+        if (!items.length) {
+          hint.textContent = 'Нет подписок, истекающих в ближайшие 7 дней.';
+          table.style.display = 'none';
+          return;
+        }
+        hint.textContent = `Найдено: ${items.length}`;
+        table.style.display = '';
+        tbody.innerHTML = items.map(row => {
+          const exp = row.expires_at ? row.expires_at.slice(0, 10) : '?';
+          const cls = row.days_left <= 1 ? 'no' : (row.days_left <= 7 ? 'warn' : 'ok');
+          return `<tr>
+            <td>${esc(row.institution_name)}</td>
+            <td>${esc(row.email)}</td>
+            <td>${exp}</td>
+            <td><span class="badge ${cls}">${row.days_left} дн.</span></td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        hint.textContent = 'Ошибка: ' + e.message;
+        table.style.display = 'none';
+      }
     }
     async function loadUsers() {
       const items = (await api('/admin/users')).items;
@@ -105,7 +183,15 @@
       tbody.innerHTML = items.map(u => {
         const sub = u.subscription;
         const subBadge = sub.active
-          ? `<span class="badge ok">до ${sub.expires_at ? sub.expires_at.slice(0, 10) : '?'}</span>`
+          ? (() => {
+              const exp = sub.expires_at ? sub.expires_at.slice(0, 10) : '?';
+              const days = sub.expires_at
+                ? Math.ceil((new Date(sub.expires_at) - Date.now()) / 86400000)
+                : null;
+              const cls = days !== null && days <= 7 ? 'warn' : 'ok';
+              const hint = days !== null && days <= 7 ? ` (${days} дн.)` : '';
+              return `<span class="badge ${cls}">до ${exp}${hint}</span>`;
+            })()
           : '<span class="badge no">нет</span>';
         return `<tr>
           <td>${esc(u.institution_name)}</td>
@@ -139,9 +225,14 @@
       if (t) sessionStorage.setItem('maxAdminAuthToken', t);
     }
     function openGlobalSettings(hash) {
-      const adminTok = sessionStorage.getItem('maxAdminAuthToken') || token();
-      if (adminTok) sessionStorage.setItem('maxAuthToken', adminTok);
+      const adminTok = sessionStorage.getItem('maxAdminAuthToken');
+      if (!adminTok) {
+        alert('Сессия админа не найдена. Выйдите и войдите снова в админ-панель.');
+        return;
+      }
+      sessionStorage.setItem('maxAuthToken', adminTok);
       sessionStorage.removeItem('maxImpersonating');
+      sessionStorage.setItem('maxAdminGlobalTab', hash === '#messages' ? 'messages' : 'settings');
       location.href = '/' + hash;
     }
     async function grantMonth(tid, btn) {
@@ -182,6 +273,31 @@
         alert(e.message || 'Не удалось удалить');
       }
     }
+    async function bulkGroups(active) {
+      const on = active === 1;
+      const msg = on
+        ? 'Включить все группы у всех учреждений?\n\nОни снова будут участвовать в рассылке.'
+        : 'Выключить все группы у всех учреждений?\n\nРассылка по ним не пойдёт, пока группы не включат снова.';
+      if (!confirm(msg)) return;
+      const hint = document.getElementById('bulkGroupsHint');
+      const btnOn = document.getElementById('btnGroupsOn');
+      const btnOff = document.getElementById('btnGroupsOff');
+      btnOn.disabled = true;
+      btnOff.disabled = true;
+      hint.textContent = 'Выполняется…';
+      try {
+        const path = on ? '/admin/groups/activate-all' : '/admin/groups/deactivate-all';
+        const r = await api(path, { method: 'POST' });
+        hint.textContent = (on ? 'Включено' : 'Выключено') + ': '
+          + r.groups_updated + ' групп у ' + r.tenants_processed + ' учреждений'
+          + (r.skipped && r.skipped.length ? ' · пропущено ' + r.skipped.length : '');
+      } catch (e) {
+        hint.textContent = 'Ошибка: ' + e.message;
+      } finally {
+        btnOn.disabled = false;
+        btnOff.disabled = false;
+      }
+    }
     (async () => {
       try {
         const me = await api('/auth/me');
@@ -191,7 +307,18 @@
           return;
         }
         document.getElementById('adminEmail').textContent = me.email;
-        if (!me.impersonating) rememberAdminToken();
+        if (me.impersonating) {
+          const adminTok = sessionStorage.getItem('maxAdminAuthToken');
+          if (adminTok) {
+            sessionStorage.setItem('maxAuthToken', adminTok);
+            sessionStorage.removeItem('maxImpersonating');
+            location.reload();
+            return;
+          }
+        } else {
+          rememberAdminToken();
+        }
+        await loadExpiring();
         await loadUsers();
       } catch (e) {
         document.querySelector('main').innerHTML =

@@ -1,0 +1,14 @@
+---
+description: Thin Python security for MAX Sender (adapted from ECC)
+globs: ["**/*.py", "**/*.pyi"]
+alwaysApply: false
+---
+
+# Python Security
+
+- Secrets come from environment / vault — never hardcode tokens or passwords.
+- Do not log JWT secrets, passwords, Fernet keys, or session plaintext.
+- Validate authz server-side on every sensitive route; UI hiding is not security.
+- Prefer existing bcrypt/PyJWT/cryptography usage; do not invent crypto.
+- For django-security skill references in upstream ECC: **N/A** — this is FastAPI.
+- See skills `security-review`, `vault-fernet-sessions`, `tenant-isolation-max`.

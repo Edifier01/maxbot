@@ -1,0 +1,12 @@
+---
+description: Anti-ban and campaign pacing safety for MAX Sender
+globs: ["antiban_core.py", "app/campaign_*.py"]
+alwaysApply: false
+---
+
+# Anti-Ban Safety
+
+- Pacing, warmup, delays, and role percents are safety controls (ADR 002).
+- Do not remove or drastically shorten delays for “performance” without explicit human approval in the Feature Plan.
+- Preserve per-tenant worker isolation while changing campaign code (ADR 001).
+- See skill `antiban-campaign-safety` and agent `campaign-antiban`.

@@ -1,0 +1,22 @@
+---
+description: Mechanical commands and hard guardrails for MAX Sender agents
+alwaysApply: true
+---
+
+# Mechanical Commands & Guardrails
+
+## Commands
+
+- Tests: `MAX_TEST=1 MAX_SERVER_MODE=1 python -m pytest tests/ -q`
+- E2E: `MAX_TEST=1 MAX_SERVER_MODE=1 python -m pytest tests/test_e2e_server.py -q`
+- Compose: `docker compose config -q` (with required env vars)
+- Deploy verify: `bash scripts/verify_deploy.sh`
+
+## Guardrails
+
+- Non-trivial work uses `/start-feature` and waits for `proceed`.
+- Do not commit `.env`, keys, or vault material.
+- Do not weaken tenant isolation or anti-ban pacing.
+- Subscriptions are admin-granted — no payment gateway scope.
+- Parent updates PM files; specialists return handoff notes.
+- See `AGENTS.md` for full map.

@@ -68,6 +68,24 @@ def parse_proxy_list(raw: str | None) -> list[str]:
     ]
 
 
+def normalize_proxy_field(raw: str | None) -> str:
+    """Strip and validate proxy URL(s); empty string clears proxy."""
+    v = (raw or "").strip()
+    if not v:
+        return ""
+    urls = parse_proxy_list(v)
+    if not urls:
+        raise ValueError("Некорректный формат proxy URL")
+    for url in urls:
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "socks5").lower()
+        if not parsed.hostname:
+            raise ValueError("Некорректный формат proxy URL")
+        if not scheme.startswith("socks") and scheme not in ("http", "https"):
+            raise ValueError("Некорректный формат proxy URL")
+    return v
+
+
 def _recv_exact(sock: socket.socket, size: int) -> bytes:
     buf = b""
     while len(buf) < size:
@@ -190,3 +208,91 @@ def dedupe_window(configured: int, enabled_profiles: int) -> int:
     cfg = max(1, int(configured))
     n = max(0, int(enabled_profiles))
     return max(cfg, n * 2)
+
+
+ROLE_ROTATION = ("active", "quiet", "skip")
+
+
+def split_thirds(n: int) -> tuple[int, int, int]:
+    """Три части ~33%; остаток n%3 — первым частям по порядку."""
+    if n <= 0:
+        return 0, 0, 0
+    base = n // 3
+    rem = n % 3
+    return (
+        base + (1 if rem > 0 else 0),
+        base + (1 if rem > 1 else 0),
+        base,
+    )
+
+
+def role_rotation_for_part(cycle_day: int, part_index: int) -> str:
+    """Роль части group в день цикла (0=active→quiet→skip)."""
+    return ROLE_ROTATION[(int(cycle_day) + int(part_index)) % 3]
+
+
+def assign_rotation_roles(
+    profile_ids: list[int],
+    cycle_day: int,
+) -> dict[int, str]:
+    """profile_id → day_role по порядку списка, без shuffle."""
+    roles: dict[int, str] = {}
+    idx = 0
+    for part, size in enumerate(split_thirds(len(profile_ids))):
+        role = role_rotation_for_part(cycle_day, part)
+        for _ in range(size):
+            roles[profile_ids[idx]] = role
+            idx += 1
+    return roles
+
+
+def split_role_counts(
+    n: int,
+    *,
+    skip_percent: float,
+    active_percent: float,
+    quiet_percent: float,
+) -> tuple[int, int, int]:
+    """Распределение skip/active/quiet; сумма = n; хотя бы один non-skip при n > 0."""
+    if n <= 0:
+        return 0, 0, 0
+    skip_n = int(round(n * max(0.0, skip_percent) / 100.0))
+    active_n = int(round(n * max(0.0, active_percent) / 100.0))
+    quiet_n = n - skip_n - active_n
+    if quiet_n < 0:
+        over = -quiet_n
+        take = min(active_n, over)
+        active_n -= take
+        over -= take
+        skip_n = max(0, skip_n - over)
+        quiet_n = n - skip_n - active_n
+    if skip_n >= n:
+        skip_n = max(0, n - 1)
+        quiet_n = max(0, n - skip_n - active_n)
+        if active_n + skip_n + quiet_n != n:
+            quiet_n = n - skip_n - active_n
+    return skip_n, active_n, quiet_n
+
+
+def _self_check_split_role_counts() -> None:
+    s, a, q = split_role_counts(30, skip_percent=40, active_percent=30, quiet_percent=30)
+    assert (s, a, q) == (12, 9, 9)
+    s, a, q = split_role_counts(10, skip_percent=40, active_percent=30, quiet_percent=30)
+    assert s + a + q == 10 and s >= 1
+
+
+def _self_check_role_rotation() -> None:
+    assert split_thirds(30) == (10, 10, 10)
+    assert split_thirds(31) == (11, 10, 10)
+    assert split_thirds(10) == (4, 3, 3)
+    ids = list(range(10))
+    r0 = assign_rotation_roles(ids, 0)
+    assert sum(v == "active" for v in r0.values()) == 4
+    assert sum(v == "quiet" for v in r0.values()) == 3
+    assert sum(v == "skip" for v in r0.values()) == 3
+    roles_day0 = {role_rotation_for_part(0, p) for p in range(3)}
+    assert roles_day0 == {"active", "quiet", "skip"}
+
+
+_self_check_split_role_counts()
+_self_check_role_rotation()

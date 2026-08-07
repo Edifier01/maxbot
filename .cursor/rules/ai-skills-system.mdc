@@ -40,6 +40,7 @@ alwaysApply: true
 5. **UI** — `maxserver-static-ui`, без build step без approval.
 6. **Campaign** — `maxserver-campaign`, не убирать anti-ban/pacing safeguards без approval.
 7. Specialists **не** правят `.cursor/project-management/*` — только orchestrator.
+8. После Feature Plan + proceed — делегирование через Task: см. `.cursor/rules/specialist-delegation.mdc`.
 
 ## Команды
 

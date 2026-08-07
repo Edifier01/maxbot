@@ -1,0 +1,43 @@
+---
+description: After start-feature + proceed, implement via Task specialists — not parent solo coding
+alwaysApply: true
+---
+
+# Specialist Delegation Gate
+
+После `/start-feature` (или Feature Plan с Agent Assignment) и явного **proceed / OK / приступай** parent **не пишет** product/code diff сам, кроме исключений ниже.
+
+## Must
+
+1. Реализация — через Cursor **Task** с `subagent_type` из Agent Assignment плана (и matching skill из `ai-skills-system`).
+2. Multi-domain → параллельные Task где независимо; parent только интегрирует и обновляет `.cursor/project-management/*`.
+3. Auth / tenant / vault / secrets → обязателен `security-engineer` (Task), не «прочитал skill и сам».
+4. После интеграции — Task `verifier` (или `qa-engineer` + verifier), пока нет evidence тестов/проверок.
+5. В ответе пользователю: какие agents/Task запущены (имена + id, если есть).
+
+## Exceptions (parent MAY edit directly)
+
+Разрешено без Task **только** если выполняется одно из:
+
+- Пользователь явно: «сам», «без субагентов», «не через Task».
+- Complexity **LOW** и **≤2 файлов**, и **не** auth/tenant/vault/secrets/deploy/schema.
+- Чисто PM/docs: только `.cursor/project-management/*`, `docs/**`, comments — без runtime code.
+- Hotfix уже в контексте + user сказал «почини тут» на 1–2 строки.
+
+Если сомнение — **делегируй**.
+
+## Anti-patterns
+
+```
+# ❌ BAD — Feature Plan назначил backend+security, parent сам правил middleware/auth
+# ✅ GOOD — Task backend-engineer + Task security-engineer → parent merge → Task verifier
+
+# ❌ BAD — «прочитал maxserver-auth-security и сам поправил JWT»
+# ✅ GOOD — Task security-engineer с skill path в prompt
+```
+
+## Related
+
+- Skills routing: `.cursor/rules/ai-skills-system.mdc`
+- Orchestration: `.cursor/skills/subagent-orchestrator/SKILL.md`
+- Lifecycle: `.cursor/workflows/feature-lifecycle.md`
