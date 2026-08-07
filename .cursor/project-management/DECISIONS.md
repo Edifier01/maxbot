@@ -1,16 +1,24 @@
 # Decisions
 
-## 2026-07-28: Two Independent Versions
-Desktop and server are separate working folders. The server Docker build uses `server/` as context. Desktop does not depend on server extensions.
+Architecture Memory index for MAX Sender Server. New ADRs go in `docs/adr/` and are listed here.
 
-## 2026-07-28: One Common AI System
-Use a single root `.cursor/` system for both versions. It coordinates work through shared project-management files while rules scope implementation to `desktop/**` or `server/**`.
+## Decision Log
 
-## 2026-07-28: Minimal Agent Set
-Created only agents justified by this product: orchestrator, verifier, backend, frontend, database, QA, DevOps, security, and campaign/domain specialist.
+| ID | Date | Status | Summary | Link |
+|----|------|--------|---------|------|
+| ADR-001 | 2026-07-30 | Accepted | Per-tenant campaign worker isolation via RuntimeRegistry + context snapshot | docs/adr/001-tenant-worker-isolation.md |
+| ADR-002 | 2026-07-30 | Accepted | Campaign scale pacing (worker/delay/percent roles) | docs/adr/002-campaign-scale-pacing.md |
+| ADR-003 | 2026-07-30 | Accepted (phase 1) | Worker module extraction from main.py | docs/adr/003-worker-module-extraction-deferred.md |
+| HARNESS-001 | 2026-08-07 | Accepted | Install Cursor AI harness per max-sender-gap.md (selective Agency/ECC/AAS + project-local) | `C:\Users\Maga\Documents\Projects\Global-AI-System\knowledge-catalog\reports\max-sender-gap.md` |
+| HARNESS-002 | 2026-08-07 | Accepted | GitHub MCP is required for this project (PR/CI/issues); config in `.cursor/mcp.json`, PAT via env only | `.cursor/mcp.json` |
+| REPO-001 | 2026-08-07 | Accepted | Repository is server-only: remove desktop monorepo; flatten former `server/` to root | branch `chore/server-only-repo` |
 
-## 2026-07-28: Dual Workspace Bridge
-Canonical project root is `maxserverapp/`. If Cursor is opened at the parent `MaxServer/MaxServer` folder, root `AGENTS.md` and `.cursor/rules/workspace-root.mdc` redirect agents to `maxserverapp/`.
+## When to add an ADR
 
-## 2026-07-28: Vendored Skills Library
-`skills/` is a large source library, not active AI context. Active project skills live in `.cursor/skills/` and contain distilled guidance from relevant source skills.
+- Auth/session model changes
+- Vault/crypto changes
+- Tenant storage topology changes
+- Campaign pacing philosophy changes
+- Deploy topology changes (e.g. introducing K8s)
+
+Trivial edits: do not create ADRs.

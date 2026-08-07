@@ -1,22 +1,26 @@
 # Current Context
 
-## Product
-MAX Sender is a Python/FastAPI app for controlled MAX messenger text sending with pacing, vault-protected sessions, a static UI panel, and an API.
+## Current Module
 
-## Repository Shape
-- `desktop/`: local Windows/PyInstaller version.
-- `server/`: VPS/Docker version with server-mode extensions.
-- `.cursor/`: shared AI system for both versions.
+Repo layout — server-only remote
 
-## Current State
-The project was split into two independent folders. Future agents must preserve that split and avoid rebuilding the old monolith.
+## Current Feature
 
-## AI System
-Skills and agent routing integrated — see `AGENTS.md` and `.cursor/rules/ai-skills-system.mdc`.
+`chore/server-only-repo` — flatten monorepo to server root; remove desktop/skills dump (PR pending merge)
 
-Active project skills:
-- orchestration: `context-loading`, `start-feature`, `subagent-orchestrator`
-- server: `maxserver-server-deploy`, `maxserver-fastapi-backend`, `maxserver-postgresql`, `maxserver-auth-security`
-- app/domain: `maxserver-static-ui`, `maxserver-campaign`, `maxserver-testing`
+## Active Agent / Owner
 
-`skills/` is a large vendored source library; do not load it wholesale.
+parent agent (repo hygiene)
+
+## Current Blockers
+
+- Merge PR for server-only layout, then pull `main`
+- Product: residual `main.py` monolith; unofficial MAX API ban risk (ongoing)
+
+## Phase / Objective
+
+After PR merge: first product `/start-feature`. Optional further `main.py` extraction (ADR 003).
+
+## Last Updated
+
+2026-08-07

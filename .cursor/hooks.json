@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeReadFile": [
+      {
+        "command": "node .cursor/hooks/before-read-file.js",
+        "event": "beforeReadFile",
+        "description": "Warn when reading sensitive files (.env, keys, pem, credentials)"
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node .cursor/hooks/before-submit-prompt.js",
+        "event": "beforeSubmitPrompt",
+        "description": "Detect common secret patterns in prompts"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "node .cursor/hooks/before-shell-config-protection.js",
+        "event": "beforeShellExecution",
+        "description": "Warn against weakening CI/pytest to force green builds"
+      }
+    ]
+  }
+}
