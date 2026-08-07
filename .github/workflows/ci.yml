@@ -6,6 +6,24 @@ on:
   pull_request:
 
 jobs:
+  desktop-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          cd desktop
+          pip install -r requirements.txt
+          pip install pytest httpx
+      - name: Smoke tests
+        env:
+          MAX_TEST: "1"
+          MAX_SERVER_MODE: "0"
+        run: cd desktop && pytest tests/ -q
+
   server-smoke:
     runs-on: ubuntu-latest
     steps:
@@ -15,19 +33,31 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: |
+          cd server
           pip install -r requirements.txt -r requirements-server.txt
           pip install pytest httpx
       - name: Server tests
         env:
           MAX_TEST: "1"
           MAX_SERVER_MODE: "1"
-        run: python -m pytest tests/ -q
+        run: cd server && python -m pytest tests/ -q
+
+  core-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Core sync check
+        run: python scripts/check_core_sync.py --strict
 
   compose-config:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Validate docker compose
+        working-directory: server
         env:
           DOMAIN: ci.example.com
           LETSENCRYPT_EMAIL: ci@example.com
@@ -62,6 +92,7 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: |
+          cd server
           pip install -r requirements.txt -r requirements-server.txt
           pip install pytest httpx
       - name: E2E auth/admin/tenant
@@ -73,4 +104,4 @@ jobs:
           ADMIN_EMAIL: admin@example.com
           ADMIN_PASSWORD: CiAdminPass123!
           INTERNAL_SERVICE_TOKEN: ci-internal-token
-        run: python -m pytest tests/test_e2e_server.py -q
+        run: cd server && python -m pytest tests/test_e2e_server.py -q

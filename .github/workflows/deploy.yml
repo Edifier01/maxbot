@@ -12,27 +12,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt -r requirements-server.txt
-          pip install pytest httpx
-      - name: Server tests (pre-deploy gate)
-        env:
-          MAX_TEST: "1"
-          MAX_SERVER_MODE: "1"
-          JWT_SECRET: ci-deploy-jwt-secret-min-32-characters
-        run: python -m pytest tests/ -q
-
   deploy:
     runs-on: ubuntu-latest
-    needs: verify
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
@@ -50,6 +31,7 @@ jobs:
             git fetch origin
             git checkout main 2>/dev/null || git checkout master
             git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+            cd server
             docker compose pull redis caddy postgres 2>/dev/null || true
             docker compose build --no-cache app
             docker compose up -d

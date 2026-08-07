@@ -1,26 +1,26 @@
-# Agents — MAX Sender Server
+# MAX Sender Agents
 
-| Agent | Role | Model tier | Readonly |
-|-------|------|------------|----------|
-| `project-orchestrator` | Feature Plans, routing | Plan (Grok) | yes |
-| `verifier` | Evidence-based completion gate | Implement (Composer) | yes |
-| `backend-architect` | Module boundaries, `main.py` extraction | Plan / Deep when justified | no |
-| `identity-access` | JWT, sessions, impersonation, rate limit | Implement / Deep for auth design | no |
-| `appsec-engineer` | AuthZ, tenant leak, admin surfaces | Deep when threat-model | no |
-| `secrets-credential` | Vault, `.env`, volume secrets | Implement / Deep | no |
-| `devops-automator` | Docker, Caddy, CI/CD, scripts | Implement / Plan for ops design | no |
-| `database-reliability` | PG + SQLite hybrid, migrations, backup | Implement | no |
-| `api-tester` | pytest/httpx/e2e alignment with CI | Implement | no |
-| `campaign-antiban` | Campaign engine, pacing, MAX API safety | Implement / Deep for pacing changes | no |
+Use the smallest useful agent set. The orchestrator plans, specialists perform scoped work (following their skill), and the verifier checks before completion.
 
-## Considered but NOT created
+Routing: `.cursor/rules/ai-skills-system.mdc`
 
-- Full Agency/ECC reviewer rosters (overlap with verifier + appsec)
-- Agency `security-architect` — optional Feature-Plan-only deep escalate
-- ECC `fastapi-reviewer` / `security-reviewer` — optional second opinion
-- Payments / billing agents — product N/A
-- Heavy frontend / SPA agents — static HTML panel only
+## Core Agents
+- `project-orchestrator.md`: planning, routing, Feature Plans. Readonly by default.
+- `verifier.md`: skeptical validation. Readonly by default.
 
-## Skill mapping (intentional subsets)
+## Specialist Agents
 
-See each agent file. Parent may use `context-loading`, `start-feature`, `subagent-orchestrator`. Never assign all skills to all agents.
+| Agent | Skill | Scope |
+|-------|-------|-------|
+| `backend-engineer.md` | `maxserver-fastapi-backend` | FastAPI, worker, API, shared core |
+| `frontend-engineer.md` | `maxserver-static-ui` | static HTML/CSS/JS UI |
+| `database-engineer.md` | `maxserver-postgresql` | SQLite/PostgreSQL schema, isolation |
+| `qa-engineer.md` | `maxserver-testing` + deploy checklist | smoke, regression, deploy verify |
+| `devops-engineer.md` | `maxserver-server-deploy` | Docker, Caddy, CI/CD, deployment |
+| `security-engineer.md` | `maxserver-auth-security` | vault, JWT, PIN, secrets, tenant |
+| `campaign-specialist.md` | `maxserver-campaign` | MAX sending, pacing, session safety |
+
+## Orchestration Skills
+- `context-loading` — every session start
+- `start-feature` — Feature Plans
+- `subagent-orchestrator` — multi-domain work

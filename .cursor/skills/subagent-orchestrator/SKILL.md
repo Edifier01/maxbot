@@ -1,51 +1,27 @@
 ---
 name: subagent-orchestrator
-description: Executes approved Feature Plans by decomposing Mission Briefs, running independent agents in parallel, and enforcing edit scopes. Use after proceed when specialists are assigned.
+description: Routes scoped MAX Sender work to the smallest useful specialist agent and integrates results. Use for multi-domain changes touching desktop/server, backend/UI/database/devops/security, or when verification needs a separate pass.
+disable-model-invocation: true
 ---
 
 # Subagent Orchestrator
 
-## Purpose
+1. Load context via `context-loading` (includes zone skills).
+2. Pick only necessary agents from `.cursor/agents/README.md`.
+3. Attach the matching skill to each agent assignment:
 
-Execute an approved Feature Plan with scoped specialists. This is a **skill**, not a second orchestrator agent.
+| Agent | Required skill |
+|-------|----------------|
+| devops-engineer | `maxserver-server-deploy` |
+| backend-engineer | `maxserver-fastapi-backend` |
+| frontend-engineer | `maxserver-static-ui` |
+| database-engineer | `maxserver-postgresql` |
+| security-engineer | `maxserver-auth-security` |
+| campaign-specialist | `maxserver-campaign` |
+| qa-engineer | `maxserver-testing` + deploy checklist if server/infra touched |
+| verifier | `maxserver-testing` + all touched domain skills |
 
-## When To Use
-
-- After user `proceed` on STANDARD/COMPLEX plans that assign specialists
-- Parallel independent workstreams with clear file ownership
-
-## When Not To Use
-
-- TRIVIAL work
-- Single-agent / parent-only implementation
-- Procedural checklists better done as skills alone
-
-## Required Inputs
-
-- Approved Feature Plan
-- Agent roster subset
-- Collision matrix
-
-## Workflow
-
-1. Split plan into Mission Briefs (one per specialist or sequential wave).
-2. Each brief MUST include: Goal, May read, May edit, Must not edit, Skills, Rules, Depends on, Expected output, Validation.
-3. Run independent briefs in parallel; dependent briefs sequentially.
-4. Reject any specialist expanding scope (drive-by refactors).
-5. Parent merges results; resolve conflicts by ownership matrix.
-6. Parent runs mechanical checks; invoke `verifier`.
-7. Parent updates PM state; specialists only return handoff notes.
-
-## Validation Checklist
-
-- [ ] No two agents editing the same files in parallel
-- [ ] Shared files sequential or single owner
-- [ ] Verifier ran before COMPLETED
-
-## Related Agents
-
-- All domain agents; `verifier`; parent integrates
-
-## Related Rules
-
-- Domain glob rules as assigned in briefs
+4. Give each agent: narrow scope, target files, skill path, expected output, verification.
+5. Do not let specialists update `.cursor/project-management/*`.
+6. Run `verifier` after integration; security-sensitive work needs `security-engineer` evidence.
+7. Parent agent integrates results, resolves conflicts, and updates project state.
