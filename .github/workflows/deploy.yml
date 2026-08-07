@@ -47,9 +47,13 @@ jobs:
           script: |
             set -euo pipefail
             cd "${{ secrets.DEPLOY_PATH }}"
+            if [[ ! -d .git && -d ../.git ]]; then
+              cd ..
+            fi
             git fetch origin
             git checkout main 2>/dev/null || git checkout master
             git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+            cd "$(git rev-parse --show-toplevel)"
             docker compose pull redis caddy postgres 2>/dev/null || true
             docker compose build --no-cache app
             docker compose up -d
