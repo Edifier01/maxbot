@@ -11,6 +11,7 @@
 8. Update these project-management files after meaningful work.
 
 ## Latest (2026-08-07)
+- **Admin/User panel UX follow-up COMPLETE** — `static/admin.html`: 3 tabs + hash; delete-user via `data-action` delegation (fix option A: broken inline onclick); subscription +30d with confirm; removed days-group. `static/index.html`: dashStats/dashCards visible to tenant users; removed `adminGlobalMode` bridge. Pytest: 105 passed, 13 skipped.
 - **Remember Me (persistent login) COMPLETE** — `remember_me` default true; HttpOnly `max_token` cookie; `POST /api/auth/restore-session`; UI checkbox in `auth.html`; boot restore in `index.html`/`admin.html`. Pytest: 104 passed, 13 skipped.
 - **FEATURE-SAAS-UX-2026 COMPLETE** — verifier PASS. Pytest: 100 passed, 7 skipped.
 - **`/improve-ui` Phase A+B+C DONE** — tokens, a11y, Manrope, Phase C: skip link, modal trap, hash tabs, Intl dates. Pytest: 100 passed.

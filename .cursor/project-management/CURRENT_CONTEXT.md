@@ -14,7 +14,8 @@ MAX Sender is a Python/FastAPI app for controlled MAX messenger text sending wit
 - Follow-up G-2: tenant may set group `proxy` via PATCH/CREATE in server mode (aligned with `static/index.html`).
 - Lockfiles used by Dockerfile; CI still uses loose `requirements*.txt`.
 - **FEATURE-SAAS-UX-2026** complete (verifier PASS). Plan: `FEATURE-SAAS-UX-2026.md`.
-- **Remember Me (persistent login)** complete — HttpOnly cookie + restore-session; checkbox default ON. Tests: 104 passed, 13 skipped.
+- **Remember Me (persistent login)** complete — HttpOnly cookie + restore-session; checkbox default ON.
+- **Admin/User panel UX follow-up** complete — admin tabs (учреждения/настройки/пул), delete-user delegation fix, +30d confirm, user dashCards on «Рассылка». Tests: 105 passed, 13 skipped.
 
 ## AI System
 Skills and agent routing — see `AGENTS.md` and `.cursor/rules/ai-skills-system.mdc`.

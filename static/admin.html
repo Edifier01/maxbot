@@ -78,18 +78,23 @@
     .badge.danger { background: rgba(239,95,95,.14); color: #fca5a5; border-color: rgba(239,95,95,.28); }
     .tabular-nums { font-variant-numeric: tabular-nums; }
     .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
-    .days-group {
-      display: inline-flex; align-items: stretch; border: 1px solid var(--line);
-      border-radius: var(--radius-sm); overflow: hidden; background: var(--bg);
+    nav {
+      display: flex; gap: .35rem; padding: 0 1.25rem .75rem;
+      overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line);
     }
-    .days-group input {
-      width: 3rem; border: none; border-left: 1px solid var(--line); border-right: 1px solid var(--line);
-      border-radius: 0; text-align: center; padding: .45rem .35rem; cursor: text;
+    nav::-webkit-scrollbar { display: none; }
+    nav button {
+      background: transparent; border: 1px solid transparent; color: var(--muted);
+      padding: .45rem .9rem; border-radius: 999px; cursor: pointer;
+      font-family: inherit; font-size: .88rem; font-weight: 500;
+      white-space: nowrap; transition: background .15s, color .15s, border-color .15s;
     }
-    .days-group .days-label {
-      display: flex; align-items: center; padding: 0 .55rem; color: var(--muted); font-size: .85rem;
+    nav button:hover { color: var(--text); background: var(--bg-soft); }
+    nav button.active {
+      background: rgba(61,139,253,.16); border-color: rgba(61,139,253,.35); color: #dbeafe;
     }
-    .days-group button.btn { border: none; border-radius: 0; }
+    main section { display: none; }
+    main section.active { display: block; }
     .global-groups-panel .row { gap: .65rem; }
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.25rem; padding: 0 .25rem; }
     .users-table { min-width: 760px; }
@@ -124,10 +129,10 @@
       h1 { font-size: 1.05rem; }
       header .row { width: 100%; margin-left: 0 !important; justify-content: flex-start; }
       .panel { padding: .85rem; }
+      nav { padding: 0 1rem .65rem; gap: .25rem; }
       .global-groups-panel .btn { flex: 1 1 100%; min-height: 44px; }
-      .days-group { flex-wrap: wrap; }
       td .row { flex-direction: column; align-items: stretch; }
-      td .row .btn, td .days-group { width: 100%; }
+      td .row .btn { width: 100%; }
       td .row .btn.primary { order: -1; }
     }
   </style>
@@ -140,7 +145,13 @@
       <button class="link" onclick="logout()">Выход</button>
     </span>
   </header>
+  <nav role="tablist">
+    <button type="button" role="tab" aria-selected="true" data-tab="users" class="active">Учреждения</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="settings">Настройки рассылки</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="messages">Пул сообщений</button>
+  </nav>
   <main>
+    <section id="users" class="active">
     <div class="panel global-groups-panel">
       <strong>Группы всех учреждений</strong>
       <p class="hint" style="margin:.35rem 0 .75rem">Включить или выключить участие всех групп в рассылке (поле <code>is_active</code>).</p>
@@ -163,6 +174,28 @@
         <tbody id="expiringBody"></tbody>
       </table>
     </div>
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <strong>Пользователи (учреждения)</strong>
+      </div>
+      <div class="table-scroll">
+      <table class="users-table">
+        <thead>
+          <tr>
+            <th>Учреждение</th>
+            <th>Email</th>
+            <th>Подписка</th>
+            <th>Статистика</th>
+            <th>Воркеры</th>
+            <th>Действия</th>
+          </tr>
+        </thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+      </div>
+    </div>
+    </section>
+    <section id="settings">
     <div class="panel" id="globalSettingsPanel">
       <strong>Настройки рассылки</strong>
       <p class="hint" style="margin:.35rem 0 .75rem">Глобальные параметры антибана и лимитов (общие для сервера).</p>
@@ -202,6 +235,8 @@
         <button class="btn primary" id="btnSaveSettings" onclick="saveGlobalSettings()">Сохранить настройки</button>
       </div>
     </div>
+    </section>
+    <section id="messages">
     <div class="panel" id="globalMessagesPanel">
       <strong>Сообщения (пул)</strong>
       <p class="hint" style="margin:.35rem 0 .75rem">Один файл на все аккаунты. Каждая строка — одно сообщение. Загрузка заменяет предыдущий пул.</p>
@@ -213,26 +248,7 @@
       <ul id="msgPreview" class="preview" style="display:none"></ul>
       <p class="hint" id="msgEmpty" style="display:none;margin:.5rem 0 0">Файл не загружен. Поддерживается спинтакс и переменные {{phone}}, {{label}}.</p>
     </div>
-    <div class="panel">
-      <div class="row" style="justify-content:space-between">
-        <strong>Пользователи (учреждения)</strong>
-      </div>
-      <div class="table-scroll">
-      <table class="users-table">
-        <thead>
-          <tr>
-            <th>Учреждение</th>
-            <th>Email</th>
-            <th>Подписка</th>
-            <th>Статистика</th>
-            <th>Воркеры</th>
-            <th>Действия</th>
-          </tr>
-        </thead>
-        <tbody id="usersBody"></tbody>
-      </table>
-      </div>
-    </div>
+    </section>
   </main>
   <div id="toast-container" role="status" aria-live="polite"></div>
   <script>
@@ -368,15 +384,12 @@
               <button class="btn" onclick="saveWorkerPool(${u.tenant_id}, this)">Сохранить</button>
             </span>
           </td>
-          <td class="row">
-            <button class="btn primary" onclick="impersonate(${u.tenant_id})">Войти в кабинет</button>
-            <button class="btn" onclick="grantMonth(${u.tenant_id}, this)">+30 дней</button>
-            <span class="days-group">
-              <button class="btn" onclick="grantDays(${u.tenant_id}, this)">+</button>
-              <input type="number" id="days-${u.tenant_id}" min="1" max="365" value="7">
-              <span class="days-label">дней</span>
-            </span>
-            <button class="btn danger" onclick="deleteUser(${u.tenant_id}, ${JSON.stringify(u.institution_name)}, this)">Удалить</button>
+          <td>
+            <div class="row">
+              <button class="btn primary" onclick="impersonate(${u.tenant_id})">Войти в кабинет</button>
+              <button class="btn" data-action="grant-month" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">+30 дней</button>
+              <button class="btn danger" data-action="delete-user" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Удалить</button>
+            </div>
           </td>
         </tr>`;
       }).join('');
@@ -413,6 +426,9 @@
     }
     function esc(s) {
       return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    function escAttr(s) {
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
     async function loadStats(tid) {
       const s = await api('/admin/tenants/' + tid + '/stats');
@@ -508,23 +524,16 @@
         if (btn) btn.disabled = false;
       }
     }
-    async function grantMonth(tid, btn) {
+    async function grantMonth(tid, name, btn) {
+      const label = name || ('#' + tid);
+      if (!confirm('Продлить подписку «' + label + '» на 30 дней?')) return;
       if (btn) btn.disabled = true;
       try {
         await api('/admin/users/' + tid + '/subscription/month', { method: 'POST' });
+        toast('Подписка продлена на 30 дней', 'success');
         await loadUsers();
-      } finally {
-        if (btn) btn.disabled = false;
-      }
-    }
-    async function grantDays(tid, btn) {
-      const days = parseInt(document.getElementById('days-' + tid).value, 10) || 7;
-      if (btn) btn.disabled = true;
-      try {
-        await api('/admin/users/' + tid + '/subscription', {
-          method: 'POST', body: JSON.stringify({ days }),
-        });
-        await loadUsers();
+      } catch (e) {
+        toast(e.message, 'error');
       } finally {
         if (btn) btn.disabled = false;
       }
@@ -550,6 +559,59 @@
         if (btn) btn.disabled = false;
       }
     }
+    const VALID_TABS = ['users', 'settings', 'messages'];
+    const _tabLoaded = { settings: false, messages: false };
+
+    function tabFromHash() {
+      const h = location.hash.slice(1);
+      return VALID_TABS.includes(h) ? h : 'users';
+    }
+
+    function syncTabHash(tabId) {
+      const next = '#' + tabId;
+      if (location.hash !== next) history.replaceState(null, '', next);
+    }
+
+    async function switchTab(tabId, { skipHash = false } = {}) {
+      const btn = document.querySelector(`nav button[data-tab="${tabId}"]`);
+      if (!btn) return;
+      document.querySelectorAll('nav button').forEach(x => {
+        x.classList.remove('active');
+        x.setAttribute('aria-selected', 'false');
+      });
+      document.querySelectorAll('main > section').forEach(x => x.classList.remove('active'));
+      btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
+      document.getElementById(tabId).classList.add('active');
+      if (!skipHash) syncTabHash(tabId);
+      if (tabId === 'settings' && !_tabLoaded.settings) {
+        _tabLoaded.settings = true;
+        await loadGlobalSettings();
+      }
+      if (tabId === 'messages' && !_tabLoaded.messages) {
+        _tabLoaded.messages = true;
+        await loadAdminMessages();
+      }
+    }
+
+    function applyTabFromHash() {
+      switchTab(tabFromHash(), { skipHash: true });
+    }
+
+    document.querySelectorAll('nav button').forEach(b => {
+      b.onclick = () => switchTab(b.dataset.tab);
+    });
+    window.addEventListener('hashchange', () => applyTabFromHash());
+
+    document.getElementById('usersBody').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const tid = parseInt(btn.dataset.tenantId, 10);
+      const name = btn.dataset.institutionName || '';
+      if (btn.dataset.action === 'delete-user') deleteUser(tid, name, btn);
+      else if (btn.dataset.action === 'grant-month') grantMonth(tid, name, btn);
+    });
+
     async function bulkGroups(active) {
       const on = active === 1;
       const msg = on
@@ -597,8 +659,7 @@
           rememberAdminToken();
         }
         await loadExpiring();
-        await loadGlobalSettings();
-        await loadAdminMessages();
+        applyTabFromHash();
         await loadUsers();
       } catch (e) {
         document.querySelector('main').innerHTML =

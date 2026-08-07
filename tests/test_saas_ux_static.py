@@ -23,11 +23,31 @@ def test_index_worker_pool_hidden_for_users():
     assert "settings-admin-only" in INDEX
 
 
-def test_admin_global_panels_and_delete_user():
+def test_admin_tab_navigation_and_subscription_ux():
+    assert 'role="tablist"' in ADMIN
+    assert 'data-tab="users"' in ADMIN
+    assert 'data-tab="settings"' in ADMIN
+    assert 'data-tab="messages"' in ADMIN
     assert "globalSettingsPanel" in ADMIN
     assert "globalMessagesPanel" in ADMIN
     assert "Настройки рассылки" in ADMIN
     assert "Сообщения (пул)" in ADMIN
+    assert "days-group" not in ADMIN
+    assert "grantDays" not in ADMIN
+    assert 'data-action="delete-user"' in ADMIN
+    assert 'onclick="deleteUser' not in ADMIN
     assert "deleteUser" in ADMIN
     assert "worker_pool_size" in ADMIN
     assert "index.html" not in ADMIN
+
+
+def test_index_user_dashboard_visible():
+    assert "dashStats" in INDEX
+    assert "dashCards" in INDEX
+    assert 'id="dashCards"' in INDEX
+    idx = INDEX.index('id="dashCards"')
+    panel_start = INDEX.rfind('<div class="panel">', 0, idx)
+    panel_snippet = INDEX[panel_start:idx + 80]
+    assert "campaign-admin-only" not in panel_snippet.split("dashCards")[0] or "dashCards" in panel_snippet
+    assert "maxAdminGlobalTab" not in INDEX
+    assert "_adminGlobalMode" not in INDEX

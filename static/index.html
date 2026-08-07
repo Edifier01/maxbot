@@ -503,6 +503,11 @@
       .phone-cell { flex-direction: column; align-items: flex-start; }
       button.small { min-height: 36px; }
     }
+    /* Hide shell until role UI applied — avoids full-layout flash for tenant users on refresh */
+    body:not(.ui-ready) .topbar,
+    body:not(.ui-ready) #main-content {
+      visibility: hidden;
+    }
   </style>
 </head>
 <body>
@@ -580,8 +585,8 @@
         </div>
       </div>
       <div id="dashStats" class="dash-stats"></div>
-      <div class="panel campaign-admin-only">
-        <div class="row">
+      <div class="panel">
+        <div class="row campaign-admin-only">
           <select id="dashFilter" style="max-width:180px" onchange="loadDashboard()">
             <option value="">Все статусы</option>
             <option value="active">активен</option>
@@ -964,7 +969,6 @@
     let _userRole = 'local';
     let _subscriptionActive = true;
     let _subscriptionExpiresAt = null;
-    let _adminGlobalMode = false;
     let _adminImpersonating = false;
     let _lastStatus = null;
 
@@ -1097,28 +1101,6 @@
       if (tabId === 'campaign') loadDashboard();
     }
 
-    function adminGlobalTabFromUrl() {
-      const stored = sessionStorage.getItem('maxAdminGlobalTab');
-      if (stored === 'messages' || stored === 'settings') return stored;
-      if (location.hash === '#messages') return 'messages';
-      if (location.hash === '#settings') return 'settings';
-      return null;
-    }
-
-    function applyAdminGlobalUI() {
-      ['campaign', 'groups'].forEach(tab => {
-        const btn = document.querySelector(`nav button[data-tab="${tab}"]`);
-        if (btn) btn.style.display = 'none';
-      });
-      const banner = document.getElementById('serverBanner');
-      banner.style.display = 'block';
-      banner.className = 'hint';
-      banner.innerHTML = 'Глобальные настройки админа (шаблон для всех учреждений) · <a href="/admin.html" style="color:var(--accent)">← админ-панель</a>';
-      const tab = adminGlobalTabFromUrl() || 'settings';
-      sessionStorage.removeItem('maxAdminGlobalTab');
-      switchTab(tab);
-    }
-
     function getApiPin() {
       const s = sessionStorage.getItem('maxApiPin');
       if (s) return s;
@@ -1163,6 +1145,10 @@
         return j;
       });
     };
+
+    function markUiReady() {
+      document.body.classList.add('ui-ready');
+    }
 
     function applyServerRoleUI() {
       const isUser = isUserRole();
@@ -1230,15 +1216,11 @@
         _subscriptionExpiresAt = me.subscription && me.subscription.expires_at
           ? me.subscription.expires_at
           : null;
-        const globalTab = adminGlobalTabFromUrl();
-        _adminGlobalMode = me.role === 'admin' && !me.impersonating && !!globalTab;
-        if (!_adminGlobalMode) sessionStorage.removeItem('maxAdminGlobalTab');
-        if (me.role === 'admin' && !me.impersonating && !_adminGlobalMode) {
+        if (me.role === 'admin' && !me.impersonating) {
           location.href = '/admin.html';
           return;
         }
         applyServerRoleUI();
-        if (_adminGlobalMode) applyAdminGlobalUI();
       } catch (e) {
         setAuthToken('');
         location.href = '/auth.html';
@@ -2443,11 +2425,7 @@
 
     (async () => {
       try { await initServerMode(); } catch (_) {}
-      if (_adminGlobalMode) {
-        loadMessages().catch(e => toast(e.message, 'error'));
-        loadSettings().catch(e => toast(e.message, 'error'));
-        return;
-      }
+      markUiReady();
       applyTabFromHash();
       try { await initVaultUI(); } catch (e) { toast(e.message, 'error'); }
       loadMessages();
@@ -2463,7 +2441,6 @@
       loadDashboard();
     })();
     setInterval(() => {
-      if (_adminGlobalMode) return;
       if (document.getElementById('groups').classList.contains('active') && !authModalOpen) loadGroups();
       if (document.getElementById('campaign').classList.contains('active') && !isSimpleCampaignView()) {
         loadSendLog(sendLogOffset);
