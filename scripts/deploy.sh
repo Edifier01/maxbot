@@ -3,6 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+if [[ ! -f .env && -f server/.env ]]; then
+  cp server/.env .env
+  echo "Перенесён .env из server/.env (старый layout)"
+fi
+
 if [[ ! -f .env ]]; then
   echo "Создайте .env из .env.example:"
   echo "  cp .env.example .env && nano .env"
