@@ -21,6 +21,7 @@ jobs:
         env:
           MAX_TEST: "1"
           MAX_SERVER_MODE: "1"
+          JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
         run: python -m pytest tests/ -q
 
   compose-config:
