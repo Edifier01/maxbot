@@ -2,36 +2,31 @@
 
 ## Last session
 
-2026-08-07 — `/audit-project` phases 6–8: AI harness upgrade applied to MAX Sender Server after Gap Report `proceed`.
+2026-08-07 — Linked local `Projects/server` to `Edifier01/maxbot` and converted remote to server-only.
 
 ## Done
 
-- Bootstrap core: AGENTS.md, orchestrator, verifier, context-loading, start-feature, subagent-orchestrator, PM, feature-lifecycle, MASTER-AI-WORKFLOW
-- Domain agents (7 Agency-adapted + campaign-antiban)
-- Skills (ECC adapted + AAS saas-multi-tenant adapted + project-local)
-- Rules (7) + hooks (3 Cursor-adapted)
-- KEEP product docs untouched
+- `git remote` → https://github.com/Edifier01/maxbot.git
+- Branch `chore/server-only-repo` @ `8692402`: server tree at repo root; removed `desktop/`, nested `server/`, and skills dumps
+- Local backup kept at `Projects/_server_backup_20260807_155238` (can delete after merge)
 
 ## Next action
 
-Run first product Feature Plan:
+1. Merge PR for `chore/server-only-repo` into `main`
+2. `git checkout main && git pull`
+3. Optionally delete stale branch `cursor/milestone-5-production-readiness` (old monorepo layout)
+4. First product Feature Plan, e.g.:
 
 ```text
 /start-feature Harden Celery vs in-process campaign start parity (tenant headers + INTERNAL_SERVICE_TOKEN) with tests
 ```
 
-Alternate:
-
-```text
-/start-feature Extract next safe slice from main.py into app/ per ADR 003 without changing campaign behavior
-```
-
 ## Blockers
 
-None for harness. Product risks remain: unofficial MAX API, hybrid backup discipline, monolith residue.
+PR merge required for `main` to match local server-only layout.
 
 ## Notes for next agent
 
 - Read `AGENTS.md` + this file + `CURRENT_CONTEXT.md` first.
-- Do not install full Agency/AAS/ECC catalogs.
+- Do not reintroduce `desktop/` or bulk skill catalogs into this repo.
 - Payments are out of scope.

@@ -11,6 +11,7 @@ Architecture Memory index for MAX Sender Server. New ADRs go in `docs/adr/` and 
 | ADR-003 | 2026-07-30 | Accepted (phase 1) | Worker module extraction from main.py | docs/adr/003-worker-module-extraction-deferred.md |
 | HARNESS-001 | 2026-08-07 | Accepted | Install Cursor AI harness per max-sender-gap.md (selective Agency/ECC/AAS + project-local) | `C:\Users\Maga\Documents\Projects\Global-AI-System\knowledge-catalog\reports\max-sender-gap.md` |
 | HARNESS-002 | 2026-08-07 | Accepted | GitHub MCP is required for this project (PR/CI/issues); config in `.cursor/mcp.json`, PAT via env only | `.cursor/mcp.json` |
+| REPO-001 | 2026-08-07 | Accepted | Repository is server-only: remove desktop monorepo; flatten former `server/` to root | branch `chore/server-only-repo` |
 
 ## When to add an ADR
 
