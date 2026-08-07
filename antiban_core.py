@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 import base64
+import re
 import math
 import random
 import socket
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote, urlparse
+
+
+# Ban-class errors stop all tenant sending (ADR-004). Flood/spam are recoverable pacing.
+_BAN_ERROR_RE = re.compile(
+    r"ban(?:ned)?|blocked|restrict|suspend|забан|(?<![a-z])бан(?![a-z])|"
+    r"блок|заблок|ограничен",
+    re.IGNORECASE,
+)
+_RECOVERABLE_PACING_RE = re.compile(r"flood|spam", re.IGNORECASE)
+
+
+def is_ban_error(err: str) -> bool:
+    """True when error indicates account ban/block (not transient flood/spam pacing)."""
+    text = (err or "").strip()
+    if not text:
+        return False
+    if _RECOVERABLE_PACING_RE.search(text) and not _BAN_ERROR_RE.search(text):
+        return False
+    return bool(_BAN_ERROR_RE.search(text))
 
 
 def clamp_range(lo: float, hi: float) -> tuple[float, float]:
@@ -294,5 +314,17 @@ def _self_check_role_rotation() -> None:
     assert roles_day0 == {"active", "quiet", "skip"}
 
 
+def _self_check_is_ban_error() -> None:
+    assert is_ban_error("Account banned by platform")
+    assert is_ban_error("Пользователь заблокирован")
+    assert is_ban_error("access restricted")
+    assert is_ban_error("account suspended")
+    assert not is_ban_error("flood wait 30 seconds")
+    assert not is_ban_error("spam rate limit")
+    assert not is_ban_error("connection timeout")
+    assert is_ban_error("blocked for spam")
+
+
 _self_check_split_role_counts()
 _self_check_role_rotation()
+_self_check_is_ban_error()

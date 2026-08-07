@@ -215,6 +215,7 @@ def _table_columns(c: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _migrate_schema(c: sqlite3.Connection) -> None:
+    # profiles.status is unconstrained TEXT (no CHECK); new values (e.g. banned) need no DDL.
     cols_p = _table_columns(c, "profiles")
     if "daily_limit" not in cols_p:
         c.execute("ALTER TABLE profiles ADD COLUMN daily_limit INTEGER")

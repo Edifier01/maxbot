@@ -6,8 +6,10 @@ import os
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
+from starlette.responses import JSONResponse
 
 from app import auth, db_pg
+from app.auth_cookies import clear_auth_cookie, set_auth_cookie
 from app.config import is_server_mode
 from app.runtime import main as app_main
 
@@ -19,19 +21,16 @@ class RegisterIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     password_confirm: str = Field(min_length=8, max_length=128)
+    remember_me: bool = True
 
 
 class LoginIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
+    remember_me: bool = True
 
 
-def _token_response(user: dict) -> dict:
-    token = auth.create_token(
-        user["id"],
-        tenant_id=user.get("tenant_id"),
-        role=user["role"],
-    )
+def _session_payload(user: dict, token: str) -> dict:
     sub = db_pg.subscription_info(user.get("tenant_id"))
     tenant = None
     if user.get("tenant_id"):
@@ -46,8 +45,29 @@ def _token_response(user: dict) -> dict:
     }
 
 
+def _token_response(user: dict) -> dict:
+    token = auth.create_token(
+        user["id"],
+        tenant_id=user.get("tenant_id"),
+        role=user["role"],
+    )
+    return _session_payload(user, token)
+
+
+def _auth_json_response(
+    data: dict,
+    request: Request,
+    *,
+    remember_me: bool,
+) -> JSONResponse:
+    response = JSONResponse(content=data)
+    if remember_me:
+        set_auth_cookie(response, data["token"], remember_me=True, request=request)
+    return response
+
+
 @router.post("/register")
-async def register(body: RegisterIn):
+async def register(body: RegisterIn, request: Request):
     if not is_server_mode():
         raise HTTPException(400, "Регистрация доступна только на сервере")
     if os.environ.get("REGISTRATION_OPEN", "1").strip().lower() not in (
@@ -78,11 +98,12 @@ async def register(body: RegisterIn):
     user = db_pg.get_user_by_id(info["user_id"])
     if not user:
         raise HTTPException(500, "Не удалось создать пользователя")
-    return _token_response(user)
+    data = _token_response(user)
+    return _auth_json_response(data, request, remember_me=body.remember_me)
 
 
 @router.post("/login")
-async def login(body: LoginIn):
+async def login(body: LoginIn, request: Request):
     if not is_server_mode():
         raise HTTPException(400, "Вход доступен только на сервере")
     user = auth.authenticate(body.email, body.password)
@@ -94,20 +115,49 @@ async def login(body: LoginIn):
 
         init_tenant_db(app_main, user["tenant_id"])
 
-    return _token_response(user)
+    data = _token_response(user)
+    return _auth_json_response(data, request, remember_me=body.remember_me)
+
+
+@router.post("/restore-session")
+async def restore_session(request: Request):
+    if not is_server_mode():
+        raise HTTPException(400, "Восстановление сессии доступно только на сервере")
+    token = request.cookies.get("max_token", "")
+    if not token:
+        raise HTTPException(401, "Требуется вход")
+    try:
+        payload = auth.decode_token(token)
+    except Exception as e:
+        raise HTTPException(401, "Сессия истекла") from e
+    if payload.get("imp"):
+        raise HTTPException(401, "Сессия недоступна")
+    session_err = auth.validate_token_session(payload)
+    if session_err:
+        raise HTTPException(401, session_err)
+    user = db_pg.get_user_by_id(int(payload["sub"]))
+    if not user:
+        raise HTTPException(401, "Пользователь не найден")
+    if user.get("tenant_id"):
+        from app.tenant_init import init_tenant_db
+
+        init_tenant_db(app_main, user["tenant_id"])
+    return _session_payload(user, token)
 
 
 def _bearer_token(request: Request) -> str:
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        return auth[7:]
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
     return request.cookies.get("max_token", "")
 
 
 @router.post("/logout")
 async def logout(request: Request):
     if not is_server_mode():
-        return {"ok": True}
+        response = JSONResponse(content={"ok": True})
+        clear_auth_cookie(response, request)
+        return response
     token = _bearer_token(request)
     if not token:
         raise HTTPException(401, "Требуется вход")
@@ -119,7 +169,9 @@ async def logout(request: Request):
     if jti:
         db_pg.revoke_token(jti, auth.token_expires_at(payload))
         auth.invalidate_session_cache(jti)
-    return {"ok": True}
+    response = JSONResponse(content={"ok": True})
+    clear_auth_cookie(response, request)
+    return response
 
 
 @router.get("/me")

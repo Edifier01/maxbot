@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.routes_models import SettingsIn
 from app.runtime import main as m
+from app.tenant import is_admin
 
 router = APIRouter(tags=["settings"])
 
@@ -28,6 +29,8 @@ async def get_settings():
 async def update_settings(body: SettingsIn):
 
     data = body.model_dump(exclude_unset=True)
+    if not is_admin():
+        data.pop("worker_pool_size", None)
     if "api_pin" in data:
         pin = data.pop("api_pin")
         if pin is None or str(pin).strip() == "":

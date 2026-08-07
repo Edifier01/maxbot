@@ -92,6 +92,7 @@ class ProfileStatus(StrEnum):
     ACTIVE = "active"
     NEEDS_REAUTH = "needs_reauth"
     DISABLED = "disabled"
+    BANNED = "banned"
 
 
 def _is_frozen() -> bool:
@@ -2406,7 +2407,20 @@ def _is_circuit_open_for(profile_id: int, rt) -> bool:
     return time.time() - opened <= mins * 60
 
 
-def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> None:
+def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> bool:
+    """Mark profile after send failure. Returns True if ban-class error detected."""
+    if antiban_core.is_ban_error(err):
+        with _conn() as c:
+            row = c.execute(
+                "SELECT fail_count FROM profiles WHERE id=?", (profile_id,)
+            ).fetchone()
+            fail_count = int((row["fail_count"] if row else None) or 0) + 1
+            c.execute(
+                "UPDATE profiles SET last_error=?, status=?, fail_count=? WHERE id=?",
+                (err, ProfileStatus.BANNED, fail_count, profile_id),
+            )
+        append_log(f"Профиль #{profile_id} забанен: {err}")
+        return True
     with _conn() as c:
         row = c.execute(
             "SELECT fail_count FROM profiles WHERE id=?", (profile_id,)
@@ -2427,7 +2441,7 @@ def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> None:
                 f"Профиль #{profile_id} отключён после {fail_count} ошибок подряд"
             )
             _on_error(profile_id)
-            return
+            return False
         else:
             c.execute(
                 "UPDATE profiles SET last_error=?, fail_count=? WHERE id=?",
@@ -2447,6 +2461,23 @@ def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> None:
             _set_cooldown(profile_id, hours, f"ошибка отправки #{fail_count}")
     except ValueError:
         pass
+    return False
+
+
+async def _handle_profile_banned(profile_id: int, err: str) -> None:
+    """Stop tenant worker and disable auto_run after ban detection (ADR-004)."""
+    from app.tenant import get_tenant_id
+
+    reason = f"Аккаунт забанен: {err}"
+    append_log(
+        f"Профиль #{profile_id} — {reason}. Остановка рассылки для tenant."
+    )
+    set_setting("auto_run", "0")
+    await _stop_worker(
+        finish_status="stopped",
+        reason=reason,
+        tenant_id=get_tenant_id(),
+    )
 
 
 async def _send_with_retry(

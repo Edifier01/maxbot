@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -64,6 +67,10 @@ class ProxyIn(BaseModel):
     @classmethod
     def validate_proxy(cls, v: str) -> str:
         return antiban_core.normalize_proxy_field(v)
+
+
+class AdminTenantSettingsIn(BaseModel):
+    worker_pool_size: int = Field(ge=1, le=32)
 
 
 def _require_admin() -> int:
@@ -158,25 +165,38 @@ async def delete_user(tenant_id: int):
     if not db_pg.get_tenant_user(tenant_id):
         raise HTTPException(404, "Пользователь учреждения не найден")
 
-    from app.campaign_runtime import REGISTRY
     from app.campaign_worker import stop_worker
     from app.tenant import tenant_scope
 
-    rt = REGISTRY.worker_for(tenant_id)
-    if rt.worker_task and not rt.worker_task.done():
-        with tenant_scope(tenant_id=tenant_id, role="admin"):
-            await stop_worker(
-                finish_status="stopped",
-                reason="Учреждение удалено",
-                tenant_id=tenant_id,
-            )
+    orphan_path = app_main.ROOT / "data" / "tenants" / str(tenant_id)
+
+    with tenant_scope(tenant_id=tenant_id, role="admin"):
+        await stop_worker(
+            finish_status="stopped",
+            reason="Учреждение удалено",
+            tenant_id=tenant_id,
+        )
 
     db_pg.bump_tenant_token_version(tenant_id)
     auth.clear_session_cache()
 
     await asyncio.to_thread(_drop_tenant_sqlite, tenant_id)
-    if not db_pg.delete_tenant(tenant_id):
-        raise HTTPException(404, "Учреждение не найдено")
+    try:
+        if not db_pg.delete_tenant(tenant_id):
+            raise HTTPException(404, "Учреждение не найдено")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "delete_user: PG delete failed after SQLite drop tenant_id=%s orphan_path=%s",
+            tenant_id,
+            orphan_path,
+        )
+        raise HTTPException(
+            500,
+            "Учреждение частично удалено (файлы удалены, запись в БД осталась). "
+            "Сообщите администратору.",
+        ) from exc
     return {"ok": True}
 
 
@@ -254,6 +274,75 @@ def _tenant_stats_sync(tenant_id: int) -> dict:
 async def tenant_stats(tenant_id: int):
     _require_admin()
     return await asyncio.to_thread(_tenant_stats_sync, tenant_id)
+
+
+def _tenant_worker_pool_size_sync(tenant_id: int) -> int:
+    from app.tenant import tenant_scope
+
+    with tenant_scope(tenant_id=tenant_id, role="admin"):
+        return app_main._pool_size()
+
+
+def _set_tenant_worker_pool_size_sync(tenant_id: int, worker_pool_size: int) -> int:
+    from app.tenant import tenant_scope
+
+    with tenant_scope(tenant_id=tenant_id, role="admin"):
+        old = app_main._pool_size()
+        app_main.set_setting("worker_pool_size", str(worker_pool_size))
+        return old
+
+
+@router.get("/tenants/{tenant_id}/settings")
+async def get_tenant_settings(tenant_id: int):
+    _require_admin()
+    if not db_pg.get_tenant(tenant_id):
+        raise HTTPException(404, "Учреждение не найдено")
+    size = await asyncio.to_thread(_tenant_worker_pool_size_sync, tenant_id)
+    return {"worker_pool_size": size}
+
+
+@router.put("/tenants/{tenant_id}/settings")
+async def update_tenant_settings(tenant_id: int, body: AdminTenantSettingsIn):
+    _require_admin()
+    if not db_pg.get_tenant(tenant_id):
+        raise HTTPException(404, "Учреждение не найдено")
+
+    from app.campaign_runtime import REGISTRY
+    from app.campaign_worker import start_worker, stop_worker
+    from app.tenant import tenant_scope
+
+    old_size = await asyncio.to_thread(
+        _set_tenant_worker_pool_size_sync, tenant_id, body.worker_pool_size
+    )
+    worker_restarted = False
+    rt = REGISTRY.worker_for(tenant_id)
+    if (
+        rt.worker_task
+        and not rt.worker_task.done()
+        and old_size != body.worker_pool_size
+    ):
+        with tenant_scope(tenant_id=tenant_id, role="admin"):
+            await stop_worker(
+                finish_status=None,
+                reason="Изменён worker_pool_size",
+                tenant_id=tenant_id,
+            )
+            await start_worker(record_campaign=False)
+        worker_restarted = True
+        app_main.append_log(
+            f"Админ: worker_pool_size {old_size}→{body.worker_pool_size}, "
+            f"воркер перезапущен (tenant {tenant_id})"
+        )
+    elif old_size != body.worker_pool_size:
+        app_main.append_log(
+            f"Админ: worker_pool_size {old_size}→{body.worker_pool_size} "
+            f"(tenant {tenant_id})"
+        )
+    return {
+        "ok": True,
+        "worker_pool_size": body.worker_pool_size,
+        "worker_restarted": worker_restarted,
+    }
 
 
 @router.post("/groups/activate-all")

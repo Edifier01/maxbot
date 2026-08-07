@@ -6,7 +6,8 @@
 ## Быстрый старт
 
 1. `/start-feature [задача]` — Feature Plan перед нетривиальной работой.
-2. `/deploy-server [изменение]` — Docker/VPS/deploy по checklist.
+2. `/improve-ui [scope]` — audit и улучшение static UI (см. `maxserver-ui-workflow`).
+3. `/deploy-server [изменение]` — Docker/VPS/deploy по checklist.
 3. Классифицировать: `desktop` | `server` | `both`.
 4. Загрузить skills по зоне (см. таблицу ниже).
 5. Назначить agents → реализация через Task (см. `.cursor/rules/specialist-delegation.mdc`) → verifier.
@@ -23,6 +24,10 @@
 | `maxserver-postgresql` | Schema, `db_pg.py`, migrations |
 | `maxserver-auth-security` | JWT, tenant, secrets |
 | `maxserver-static-ui` | Vanilla HTML/CSS/JS UI, auth/admin panel |
+| `maxserver-ui-workflow` | UI audit → design brief → implement → verify |
+| `web-design-guidelines` | Vercel Web Interface Guidelines audit |
+| `ui-ux-pro-max` | Design system CLI + UX rules (from Knowlange) |
+| `frontend-design-max` | Visual direction brief for static UI |
 | `maxserver-campaign` | Anti-ban pacing, warmup, retry, pause/resume |
 | `maxserver-testing` | pytest, UI smoke, deploy verification, verifier gate |
 
@@ -36,6 +41,7 @@
 | Verifier | `.cursor/agents/verifier.md` |
 | Backend | `.cursor/agents/backend-engineer.md` |
 | Frontend | `.cursor/agents/frontend-engineer.md` |
+| UI Designer | `.cursor/agents/ui-designer.md` |
 | Database | `.cursor/agents/database-engineer.md` |
 | DevOps | `.cursor/agents/devops-engineer.md` |
 | Security | `.cursor/agents/security-engineer.md` |

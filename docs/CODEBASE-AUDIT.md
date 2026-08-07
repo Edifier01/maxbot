@@ -88,10 +88,12 @@ Optional: Celery → POST /api/campaign/start (INTERNAL_SERVICE_TOKEN)
 | `docs/PRODUCTION-OPS.md` | Present — deploy, Celery, backup, monitoring |
 | `docs/PROJECT_PLAN.md` | Present — vision, milestones, risks, out-of-scope |
 | `docs/adr/001–003` | Present — tenant workers, pacing, worker extraction |
-| `docs/MASTER-AI-WORKFLOW.md` | **Missing** (harness) |
+| `docs/MASTER-AI-WORKFLOW.md` | **Present** (harness) |
 | `docs/deps/`, `docs/lessons/` | **Absent** (Phase 2/3 optional — N/A for now) |
-| `AGENTS.md` | **Missing** |
-| `.cursor/**` | **Missing entirely** |
+| `AGENTS.md` | **Present** |
+| `.cursor/**` | **Present** — 18 agents, 18 skills, 14 rules, hooks, PM, workflows |
+| `.cursor/skills/README.md` | **Missing** (referenced by routing) |
+| `maxserver-*` project skills (7) | **Missing** — routing broken; see `HARNESS-AUDIT.md` |
 
 **Doc gaps (product-facing, non-harness):**
 
@@ -175,11 +177,11 @@ CI source of truth: `.github/workflows/ci.yml` (`server-smoke`, `compose-config`
 
 ## 8. Audit verdict
 
-Mature production-oriented FastAPI SaaS with solid product docs (HOW-IT-WORKS, PRODUCTION-OPS, ADRs, PROJECT_PLAN) and meaningful test coverage around auth, vault, and tenant isolation. Architecture risk concentrates on **tenant isolation**, **vault/secrets**, **campaign/anti-ban**, and residual **`main.py` monolith**. **AI harness is absent** — next phases must add bootstrap mandatory core plus security/ops/campaign specialists selected from Agency/AAS/ECC (not full catalogs).
+Mature production-oriented FastAPI SaaS with solid product docs (HOW-IT-WORKS, PRODUCTION-OPS, ADRs, PROJECT_PLAN) and meaningful test coverage around auth, vault, and tenant isolation. Architecture risk concentrates on **tenant isolation**, **vault/secrets**, **campaign/anti-ban**, and residual **`main.py` monolith**. **AI harness shell is installed** (~85%) but **domain skills are broken** (seven `maxserver-*` skills referenced everywhere, zero on disk) — upgrade phase must fix routing before agents can follow checklists.
 
 ---
 
 ## Related
 
 - Harness audit: `docs/HARNESS-AUDIT.md`
-- Gap Report (meta): `C:\Users\Maga\Documents\Projects\Global-AI-System\knowledge-catalog\reports\max-sender-gap.md`
+- Gap Report: `knowledge-catalog/reports/max-sender-gap.md`

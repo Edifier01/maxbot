@@ -7,37 +7,84 @@
   <link rel="stylesheet" href="/static/fonts/fonts.css">
   <style>
     :root {
-      --bg: #0f1117; --bg-soft: #1a1d27; --text: #e8eaef; --muted: #8b92a5;
-      --accent: #5b8def; --danger: #ef5b5b; --ok: #3dd68c; --line: #2a2f3d;
+      --bg: #0c0e14;
+      --bg-elev: #141824;
+      --bg-soft: #1a1f2e;
+      --line: #2a3142;
+      --line-soft: #222838;
+      --text: #e8eaef;
+      --muted: #8b93a7;
+      --faint: #6b758c;
+      --accent: #3d8bfd;
+      --accent-dim: #2563eb;
+      --ok: #3ecf8e;
+      --warn: #e6b84d;
+      --danger: #ef5f5f;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 12px 40px rgba(0,0,0,.35);
+      --font: "Manrope", system-ui, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, monospace;
     }
     * { box-sizing: border-box; }
+    html { color-scheme: dark; }
+    button:focus-visible,
+    input:focus-visible,
+    .btn:focus-visible,
+    .link:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
     body {
-      font-family: 'Inter', system-ui, sans-serif;
+      font-family: var(--font);
       background: var(--bg); color: var(--text); margin: 0; min-height: 100vh;
       display: flex; align-items: center; justify-content: center; padding: 1rem;
     }
     .card {
       width: 100%; max-width: 420px; background: var(--bg-soft);
-      border: 1px solid var(--line); border-radius: 12px; padding: 1.5rem;
+      border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 1.5rem;
+      box-shadow: var(--shadow);
     }
     h1 { margin: 0 0 .25rem; font-size: 1.35rem; }
     .hint { color: var(--muted); font-size: .85rem; margin-bottom: 1rem; }
     label { display: block; font-size: .85rem; margin: .75rem 0 .25rem; color: var(--muted); }
     input {
-      width: 100%; padding: .6rem .75rem; border-radius: 8px;
+      width: 100%; padding: .6rem .75rem; border-radius: var(--radius-sm);
       border: 1px solid var(--line); background: var(--bg); color: var(--text);
+      font-family: inherit;
     }
     button {
-      margin-top: 1rem; width: 100%; padding: .65rem; border: none; border-radius: 8px;
-      background: var(--accent); color: #fff; font-weight: 600; cursor: pointer;
+      margin-top: 1rem; width: 100%; padding: .65rem; border: none; border-radius: var(--radius-sm);
+      background: var(--accent-dim); color: #fff; font-weight: 600; cursor: pointer; font-family: inherit;
     }
+    button:disabled { opacity: .55; cursor: wait; }
     button.secondary { background: transparent; border: 1px solid var(--line); color: var(--text); margin-top: .5rem; }
     .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; }
     .tabs button { margin: 0; flex: 1; }
-    .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .tabs button.active { background: var(--accent-dim); border-color: rgba(147,197,253,.25); color: #fff; }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
     .err { color: var(--danger); font-size: .85rem; min-height: 1.2rem; margin-top: .5rem; }
     .panel { display: none; }
     .panel.active { display: block; }
+    .remember-row {
+      display: flex; align-items: center; gap: .5rem; margin-top: .75rem;
+    }
+    .remember-row input[type="checkbox"] {
+      width: auto; margin: 0; min-height: unset; accent-color: var(--accent);
+    }
+    .remember-row label {
+      margin: 0; font-size: .85rem; color: var(--muted); cursor: pointer;
+    }
     @media (max-width: 720px) {
       body { align-items: flex-start; padding: .75rem; padding-top: 1.25rem; }
       .card { padding: 1.15rem; border-radius: 10px; }
@@ -51,85 +98,135 @@
   <div class="card">
     <h1>MAX Sender</h1>
     <p class="hint">Личный кабинет</p>
-    <div class="tabs">
-      <button type="button" id="tabLogin" class="active" onclick="showTab('login')">Вход</button>
-      <button type="button" id="tabRegister" class="secondary" onclick="showTab('register')">Регистрация</button>
+    <div class="tabs" role="tablist" aria-label="Режим входа">
+      <button type="button" id="tabLogin" role="tab" aria-selected="true" aria-controls="panelLogin" class="active" onclick="showTab('login')">Вход</button>
+      <button type="button" id="tabRegister" role="tab" aria-selected="false" aria-controls="panelRegister" class="secondary" onclick="showTab('register')">Регистрация</button>
     </div>
 
-    <div id="panelLogin" class="panel active">
-      <label>Email</label>
-      <input id="loginEmail" type="email" autocomplete="username">
-      <label>Пароль</label>
-      <input id="loginPass" type="password" autocomplete="current-password">
-      <button type="button" onclick="doLogin()">Войти</button>
+    <div class="remember-row">
+      <input type="checkbox" id="rememberMe" checked>
+      <label for="rememberMe">Запомнить меня</label>
+    </div>
+
+    <div id="panelLogin" class="panel active" role="tabpanel" aria-labelledby="tabLogin">
+      <label for="loginEmail">Email</label>
+      <input id="loginEmail" name="email" type="email" autocomplete="username">
+      <label for="loginPass">Пароль</label>
+      <input id="loginPass" name="password" type="password" autocomplete="current-password">
+      <button type="button" id="btnLogin" onclick="doLogin()">Войти</button>
       <p class="err" id="loginErr"></p>
     </div>
 
-    <div id="panelRegister" class="panel">
-      <label>Название учреждения</label>
-      <input id="regInstitution" type="text" placeholder="Школа №1">
-      <label>Email</label>
-      <input id="regEmail" type="email" autocomplete="username">
-      <label>Пароль</label>
-      <input id="regPass" type="password" autocomplete="new-password">
-      <label>Повтор пароля</label>
-      <input id="regPass2" type="password" autocomplete="new-password">
-      <button type="button" onclick="doRegister()">Зарегистрироваться</button>
+    <div id="panelRegister" class="panel" role="tabpanel" aria-labelledby="tabRegister">
+      <label for="regInstitution">Название учреждения</label>
+      <input id="regInstitution" name="institution_name" type="text" placeholder="Школа №1">
+      <label for="regEmail">Email</label>
+      <input id="regEmail" name="email" type="email" autocomplete="username">
+      <label for="regPass">Пароль</label>
+      <input id="regPass" name="password" type="password" autocomplete="new-password">
+      <label for="regPass2">Повтор пароля</label>
+      <input id="regPass2" name="password_confirm" type="password" autocomplete="new-password">
+      <button type="button" id="btnRegister" onclick="doRegister()">Зарегистрироваться</button>
       <p class="err" id="regErr"></p>
     </div>
   </div>
   <script>
     function showTab(name) {
-      document.getElementById('panelLogin').classList.toggle('active', name === 'login');
-      document.getElementById('panelRegister').classList.toggle('active', name === 'register');
-      document.getElementById('tabLogin').classList.toggle('active', name === 'login');
-      document.getElementById('tabRegister').classList.toggle('active', name === 'register');
+      const isLogin = name === 'login';
+      document.getElementById('panelLogin').classList.toggle('active', isLogin);
+      document.getElementById('panelRegister').classList.toggle('active', !isLogin);
+      document.getElementById('tabLogin').classList.toggle('active', isLogin);
+      document.getElementById('tabRegister').classList.toggle('active', !isLogin);
+      document.getElementById('tabLogin').classList.toggle('secondary', !isLogin);
+      document.getElementById('tabRegister').classList.toggle('secondary', isLogin);
+      document.getElementById('tabLogin').setAttribute('aria-selected', isLogin ? 'true' : 'false');
+      document.getElementById('tabRegister').setAttribute('aria-selected', !isLogin ? 'true' : 'false');
     }
     function saveToken(token) {
       sessionStorage.setItem('maxAuthToken', token);
     }
+    async function withAuthLoading(btn, fn) {
+      const orig = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        await fn();
+      } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    }
     async function doLogin() {
       const err = document.getElementById('loginErr');
+      const btn = document.getElementById('btnLogin');
       err.textContent = '';
-      try {
-        const r = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: document.getElementById('loginEmail').value.trim(),
-            password: document.getElementById('loginPass').value,
-          }),
-        });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.detail || 'Ошибка входа');
-        saveToken(j.token);
-        if (j.role === 'admin') location.href = '/admin.html';
-        else location.href = '/';
-      } catch (e) { err.textContent = e.message; }
+      await withAuthLoading(btn, async () => {
+        try {
+          const r = await fetch('/api/auth/login', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: document.getElementById('loginEmail').value.trim(),
+              password: document.getElementById('loginPass').value,
+              remember_me: document.getElementById('rememberMe').checked,
+            }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.detail || 'Ошибка входа');
+          saveToken(j.token);
+          if (j.role === 'admin') location.href = '/admin.html';
+          else location.href = '/';
+        } catch (e) { err.textContent = e.message; }
+      });
     }
     async function doRegister() {
       const err = document.getElementById('regErr');
+      const btn = document.getElementById('btnRegister');
       err.textContent = '';
+      await withAuthLoading(btn, async () => {
+        try {
+          const r = await fetch('/api/auth/register', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              institution_name: document.getElementById('regInstitution').value.trim(),
+              email: document.getElementById('regEmail').value.trim(),
+              password: document.getElementById('regPass').value,
+              password_confirm: document.getElementById('regPass2').value,
+              remember_me: document.getElementById('rememberMe').checked,
+            }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : 'Ошибка регистрации');
+          saveToken(j.token);
+          location.href = '/';
+        } catch (e) { err.textContent = e.message; }
+      });
+    }
+    async function tryRestoreSession() {
+      if (sessionStorage.getItem('maxAuthToken')) return false;
       try {
-        const r = await fetch('/api/auth/register', {
+        const r = await fetch('/api/auth/restore-session', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            institution_name: document.getElementById('regInstitution').value.trim(),
-            email: document.getElementById('regEmail').value.trim(),
-            password: document.getElementById('regPass').value,
-            password_confirm: document.getElementById('regPass2').value,
-          }),
+          credentials: 'include',
         });
+        if (!r.ok) return false;
         const j = await r.json();
-        if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : 'Ошибка регистрации');
+        if (!j.token) return false;
         saveToken(j.token);
-        location.href = '/';
-      } catch (e) { err.textContent = e.message; }
+        if (j.role === 'admin') location.href = '/admin.html';
+        else location.href = '/';
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
     (async () => {
       const h = await fetch('/api/health').then(r => r.json()).catch(() => ({}));
-      if (!h.server_mode) location.href = '/';
+      if (!h.server_mode) { location.href = '/'; return; }
+      await tryRestoreSession();
     })();
   </script>
 </body>

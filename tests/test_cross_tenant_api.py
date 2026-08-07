@@ -28,7 +28,7 @@ def _truncate_saas() -> None:
 
 
 def _register(client, uid: str, n: int) -> dict:
-    email = f"user{n}-{uid}@cross.test"
+    email = f"user{n}-{uid}@example.com"
     body = {
         "institution_name": f"Org {n} {uid}",
         "email": email,
@@ -101,6 +101,25 @@ def test_tenant_profiles_isolated(cross_client):
 
     r_admin = client.get("/api/admin/users", headers=headers_b)
     assert r_admin.status_code == 403
+
+    delete_other = client.delete(
+        f"/api/admin/users/{a['tenant_id']}",
+        headers=headers_b,
+    )
+    assert delete_other.status_code == 403
+
+    settings_other = client.get(
+        f"/api/admin/tenants/{a['tenant_id']}/settings",
+        headers=headers_b,
+    )
+    assert settings_other.status_code == 403
+
+    settings_put_other = client.put(
+        f"/api/admin/tenants/{a['tenant_id']}/settings",
+        headers=headers_b,
+        json={"worker_pool_size": 2},
+    )
+    assert settings_put_other.status_code == 403
 
 
 def test_two_tenants_independent_worker_runtime(cross_client):

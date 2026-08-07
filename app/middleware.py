@@ -20,7 +20,11 @@ from app.tenant import clear_context, set_context
 class AuthRateLimitMiddleware(BaseHTTPMiddleware):
     """Строгий лимит на login/register (защита от брутфорса)."""
 
-    AUTH_POST_PATHS = frozenset({"/api/auth/login", "/api/auth/register"})
+    AUTH_POST_PATHS = frozenset({
+        "/api/auth/login",
+        "/api/auth/register",
+        "/api/auth/restore-session",
+    })
     _counters = auth_rate_limit._memory  # ponytail: test/e2e compat alias
 
     async def dispatch(self, request: Request, call_next):
@@ -54,6 +58,7 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         "/favicon.ico",
         "/api/auth/register",
         "/api/auth/login",
+        "/api/auth/restore-session",
     }
     USER_WRITE_FORBIDDEN = (
         "/api/settings",

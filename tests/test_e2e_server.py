@@ -164,6 +164,20 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
         headers=_bearer(admin_token),
     )
     assert deleted.status_code == 200
+    assert deleted.json().get("ok") is True
+
+    tenant_b_dir = main_mod.ROOT / "data" / "tenants" / str(tenant_b)
+    assert not tenant_b_dir.exists()
+
+    from app import db_pg
+
+    assert db_pg.get_tenant(tenant_b) is None
+    assert db_pg.get_user_by_email(f"user-b-{uid}@example.com") is None
+
+    users_after = client.get("/api/admin/users", headers=_bearer(admin_token))
+    assert users_after.status_code == 200
+    emails_after = {row["email"] for row in users_after.json()["items"]}
+    assert f"user-b-{uid}@example.com" not in emails_after
 
     me_b = client.get("/api/auth/me", headers=_bearer(token_b))
     assert me_b.status_code == 401
@@ -173,3 +187,108 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
 
     after_logout = client.get("/api/status", headers=_bearer(imp_token))
     assert after_logout.status_code == 401
+
+
+def test_tenant_token_bump_revokes_session(e2e_client):
+    """bump_tenant_token_version invalidates outstanding JWT (tv mismatch)."""
+    client, _main_mod, uid = e2e_client
+
+    reg = client.post(
+        "/api/auth/register",
+        json={
+            "institution_name": f"Revoke Test {uid}",
+            "email": f"revoke-{uid}@example.com",
+            "password": "UserPass123!",
+            "password_confirm": "UserPass123!",
+        },
+    )
+    assert reg.status_code == 200
+    token = reg.json()["token"]
+    tenant_id = reg.json()["tenant_id"]
+
+    me_ok = client.get("/api/auth/me", headers=_bearer(token))
+    assert me_ok.status_code == 200
+
+    from app import auth, db_pg
+
+    db_pg.bump_tenant_token_version(tenant_id)
+    auth.clear_session_cache()
+
+    me_revoked = client.get("/api/auth/me", headers=_bearer(token))
+    assert me_revoked.status_code == 401
+    assert "отозвана" in me_revoked.json()["detail"].lower()
+
+
+def test_admin_tenant_worker_pool_settings(e2e_client):
+    client, _main_mod, uid = e2e_client
+    admin_email = os.environ["ADMIN_EMAIL"]
+
+    reg = client.post(
+        "/api/auth/register",
+        json={
+            "institution_name": f"Worker Pool School {uid}",
+            "email": f"wp-{uid}@example.com",
+            "password": "UserPass123!",
+            "password_confirm": "UserPass123!",
+        },
+    )
+    assert reg.status_code == 200, reg.text
+    token_user = reg.json()["token"]
+    tenant_id = reg.json()["tenant_id"]
+
+    admin_login = client.post(
+        "/api/auth/login",
+        json={"email": admin_email, "password": "AdminPass123!"},
+    )
+    assert admin_login.status_code == 200
+    admin_token = admin_login.json()["token"]
+
+    default_settings = client.get(
+        f"/api/admin/tenants/{tenant_id}/settings",
+        headers=_bearer(admin_token),
+    )
+    assert default_settings.status_code == 200
+    assert default_settings.json()["worker_pool_size"] == 1
+
+    set_pool = client.put(
+        f"/api/admin/tenants/{tenant_id}/settings",
+        headers=_bearer(admin_token),
+        json={"worker_pool_size": 4},
+    )
+    assert set_pool.status_code == 200, set_pool.text
+    body = set_pool.json()
+    assert body["ok"] is True
+    assert body["worker_pool_size"] == 4
+    assert body["worker_restarted"] is False
+
+    updated = client.get(
+        f"/api/admin/tenants/{tenant_id}/settings",
+        headers=_bearer(admin_token),
+    )
+    assert updated.status_code == 200
+    assert updated.json()["worker_pool_size"] == 4
+
+    user_settings = client.get("/api/settings", headers=_bearer(token_user))
+    assert user_settings.status_code == 200
+    assert user_settings.json()["worker_pool_size"] == "4"
+
+    blocked = client.put(
+        "/api/settings",
+        headers=_bearer(token_user),
+        json={"worker_pool_size": 8},
+    )
+    assert blocked.status_code == 403
+
+    still_four = client.get(
+        f"/api/admin/tenants/{tenant_id}/settings",
+        headers=_bearer(admin_token),
+    )
+    assert still_four.status_code == 200
+    assert still_four.json()["worker_pool_size"] == 4
+
+    out_of_range = client.put(
+        f"/api/admin/tenants/{tenant_id}/settings",
+        headers=_bearer(admin_token),
+        json={"worker_pool_size": 64},
+    )
+    assert out_of_range.status_code == 422

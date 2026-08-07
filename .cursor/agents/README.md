@@ -14,6 +14,7 @@ Routing: `.cursor/rules/ai-skills-system.mdc`
 |-------|-------|-------|
 | `backend-engineer.md` | `maxserver-fastapi-backend` | FastAPI, worker, API, shared core |
 | `frontend-engineer.md` | `maxserver-static-ui` | static HTML/CSS/JS UI |
+| `ui-designer.md` | `maxserver-ui-workflow`, `web-design-guidelines`, `ui-ux-pro-max` | UI audit, design brief (readonly) |
 | `database-engineer.md` | `maxserver-postgresql` | SQLite/PostgreSQL schema, isolation |
 | `qa-engineer.md` | `maxserver-testing` + deploy checklist | smoke, regression, deploy verify |
 | `devops-engineer.md` | `maxserver-server-deploy` | Docker, Caddy, CI/CD, deployment |

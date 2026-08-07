@@ -7,6 +7,7 @@
 - Optional: CI install from `*.lock` (today lockfiles are Docker-only; CI uses `requirements*.txt`).
 
 ## Done
+- **FEATURE-SAAS-UX-2026** (2026-08-07): subscription UX, `banned` status, ban→stop-all, summary on campaign tab, admin global settings/messages, per-user `worker_pool_size`, delete user hardening. ADR 004/005. Tests: 100 passed + `test_saas_ux_static.py`. Verifier: [PASS](d8a3d3bc-87f9-4d19-b73b-044bf82b4239).
 - Split project into `desktop/` and `server/`.
 - Added a common AI agent system for both versions.
 - Server review fixes P0–P3 (см. `SERVER-REVIEW-FIX-PLAN.md`).

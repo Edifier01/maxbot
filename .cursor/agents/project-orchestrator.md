@@ -23,6 +23,7 @@ Readonly planning agent for MAX Sender.
 | Backend / API | `maxserver-fastapi-backend` |
 | Database | `maxserver-postgresql` |
 | Security / auth | `maxserver-auth-security` |
+| UI audit / refresh | `maxserver-ui-workflow` |
 | UI | `maxserver-static-ui` |
 | Campaign | `maxserver-campaign` |
 | Testing / QA | `maxserver-testing` |

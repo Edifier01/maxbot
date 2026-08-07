@@ -15,6 +15,7 @@ disable-model-invocation: true
 | devops-engineer | `maxserver-server-deploy` |
 | backend-engineer | `maxserver-fastapi-backend` |
 | frontend-engineer | `maxserver-static-ui` |
+| ui-designer | `maxserver-ui-workflow`, `web-design-guidelines`, `ui-ux-pro-max`, `frontend-design-max` |
 | database-engineer | `maxserver-postgresql` |
 | security-engineer | `maxserver-auth-security` |
 | campaign-specialist | `maxserver-campaign` |

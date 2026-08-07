@@ -55,7 +55,7 @@
       --line-soft: #222838;
       --text: #e8eaef;
       --muted: #8b93a7;
-      --faint: #5c657a;
+      --faint: #6b758c;
       --accent: #3d8bfd;
       --accent-dim: #2563eb;
       --ok: #3ecf8e;
@@ -68,7 +68,35 @@
       --mono: "JetBrains Mono", ui-monospace, monospace;
     }
     * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; overflow-x: hidden; }
+    html { color-scheme: dark; scroll-behavior: smooth; overflow-x: hidden; }
+    button:focus-visible,
+    nav button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    .btn:focus-visible,
+    .link:focus-visible,
+    button.small:focus-visible,
+    button.primary:focus-visible,
+    button.danger:focus-visible,
+    .group-head:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+      .badge.live::before { animation: none; }
+      section.active { animation: none; }
+      .toast { animation: none; }
+      .dash-card:hover { transform: none; }
+      #progressBar, #dashProgressBar { transition: none; }
+      details.settings-panel > summary::after { transition: none; }
+    }
     body {
       font-family: var(--font);
       margin: 0;
@@ -112,6 +140,7 @@
       font-weight: 600; letter-spacing: .02em;
       border: 1px solid transparent;
     }
+    .badge.ok { background: rgba(62,207,142,.15); color: var(--ok); border-color: rgba(62,207,142,.3); }
     .badge.run { background: rgba(62,207,142,.15); color: var(--ok); border-color: rgba(62,207,142,.3); }
     .badge.stop { background: rgba(239,95,95,.12); color: #fca5a5; border-color: rgba(239,95,95,.28); }
     .badge.warn { background: rgba(230,184,77,.14); color: var(--warn); border-color: rgba(230,184,77,.3); }
@@ -196,6 +225,7 @@
     table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .9rem; }
     th, td { text-align: left; padding: .5rem; border-bottom: 1px solid var(--line-soft); }
     .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .75rem; }
+    .panel .row > label { color: var(--muted); font-size: .85rem; font-weight: 500; white-space: nowrap; }
     .settings-row {
       display: grid;
       grid-template-columns: minmax(160px, 220px) 1fr;
@@ -221,6 +251,7 @@
     .status-active { color: var(--ok); }
     .status-needs_reauth { color: var(--warn); }
     .status-disabled { color: var(--faint); }
+    .status-banned { color: var(--danger); }
     .status-pending { color: #93c5fd; }
     .auth-wait { color: var(--warn); font-size: .8rem; }
     .auth-error { color: var(--danger); font-size: .8rem; }
@@ -240,19 +271,42 @@
     input.waiting { outline: 2px solid var(--warn); }
     .hint { color: var(--muted); font-size: .84rem; margin-top: .35rem; }
     .lead { color: var(--muted); font-size: .92rem; margin: 0 0 1rem; line-height: 1.45; }
-    ul.preview { list-style: decimal; padding-left: 1.5rem; }
+    ul.preview {
+      list-style: decimal; padding-left: 1.5rem;
+      content-visibility: auto; contain-intrinsic-size: 0 500px;
+    }
     ul.preview li { margin: .3rem 0; color: #c4c9d4; }
+    .skip-link {
+      position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; overflow: hidden; z-index: 200;
+    }
+    .skip-link:focus {
+      position: fixed; left: 1rem; top: 1rem; width: auto; height: auto;
+      padding: .5rem 1rem; background: var(--accent-dim); color: #fff;
+      border-radius: var(--radius-sm); text-decoration: none; font-weight: 600;
+    }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
     .group-card {
       border: 1px solid var(--line-soft); border-radius: var(--radius);
       margin-bottom: .65rem; background: rgba(20,24,36,.9); overflow: hidden;
       transition: border-color .15s;
     }
     .group-card:hover { border-color: var(--line); }
-    .group-head {
+    .group-head-row {
+      display: flex; align-items: center; gap: .75rem;
+    }
+    button.group-head {
+      flex: 1; min-width: 0;
       padding: .9rem 1rem; cursor: pointer; display: flex; align-items: center;
       gap: .75rem; user-select: none;
+      width: 100%; text-align: left;
+      border: none; background: transparent;
+      font: inherit; color: inherit;
     }
-    .group-head:hover { background: rgba(255,255,255,.02); }
+    button.group-head:hover { background: rgba(255,255,255,.02); }
+    .group-head-row .group-actions { padding-right: 1rem; flex-shrink: 0; }
     .group-head .arrow { width: 1rem; color: var(--faint); }
     .group-head .title { flex: 1; font-weight: 600; }
     .group-head .meta { color: var(--muted); font-size: .85rem; }
@@ -279,7 +333,7 @@
     .modal-overlay {
       display: none; position: fixed; inset: 0; background: rgba(4,6,12,.72);
       z-index: 100; align-items: center; justify-content: center;
-      backdrop-filter: blur(4px);
+      backdrop-filter: blur(4px); overscroll-behavior: contain;
     }
     .modal {
       background: var(--bg-elev); border: 1px solid var(--line); border-radius: 14px;
@@ -355,7 +409,9 @@
       background: rgba(20,24,36,.9); border: 1px solid var(--line-soft); border-radius: var(--radius-sm);
       padding: .7rem .95rem; min-width: 112px;
     }
-    .dash-stat .n { font-size: 1.35rem; font-weight: 700; letter-spacing: -.03em; }
+    .dash-stat .n { font-size: 1.35rem; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    #dashProgressLabel, #campaignProgress { font-variant-numeric: tabular-nums; }
     .dash-stat .l { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; margin-top: .15rem; }
     .tip { border-bottom: 1px dotted var(--faint); cursor: help; }
     .btn-ico { display: inline-flex; align-items: center; gap: .4rem; }
@@ -422,8 +478,9 @@
       .panel .row input, .panel .row button { width: 100%; max-width: none; }
       .settings-row { grid-template-columns: 1fr; gap: .35rem; }
       .settings-row .controls { width: 100%; }
-      .group-head { flex-wrap: wrap; align-items: flex-start; }
-      .group-head .meta { width: 100%; margin-top: .15rem; font-size: .8rem; word-break: break-word; }
+      .group-head-row { flex-wrap: wrap; align-items: flex-start; }
+      button.group-head { flex-wrap: wrap; align-items: flex-start; }
+      button.group-head .meta { width: 100%; margin-top: .15rem; font-size: .8rem; word-break: break-word; }
       .group-body .row { flex-direction: column; align-items: stretch; }
       .group-body input, .group-body textarea, .group-body button { max-width: none; width: 100%; }
       .group-body td:last-child button { width: 100%; margin-bottom: .35rem; }
@@ -449,6 +506,7 @@
   </style>
 </head>
 <body>
+  <a href="#main-content" class="skip-link">Перейти к содержимому</a>
   <div class="topbar">
   <header>
     <div class="brand">
@@ -458,7 +516,7 @@
     <div class="header-meta">
       <button type="button" id="btnLogout" class="small" style="display:none" onclick="logoutUser()">Выход</button>
       <span id="subscriptionBadge" class="badge ok" style="display:none" title="Дата окончания подписки"></span>
-      <span id="runBadge" class="badge stop header-user-hide">остановлено</span>
+      <span id="runBadge" class="badge stop">Отправка: остановлена</span>
       <span id="vaultBadge" class="badge warn header-user-hide">хранилище…</span>
       <span id="liveBadge" class="badge poll header-user-hide" title="Канал статуса">опрос</span>
       <span id="msgCount" class="hint header-user-hide" style="margin:0"></span>
@@ -469,15 +527,14 @@
     </div>
   </header>
   <p id="serverBanner" class="hint" style="display:none;margin:0;padding:0 1.25rem .5rem"></p>
-  <nav>
-    <button data-tab="campaign" class="active">Рассылка</button>
-    <button data-tab="dashboard">Сводка</button>
-    <button data-tab="messages">Сообщения</button>
-    <button data-tab="groups">Группы</button>
-    <button data-tab="settings">Настройки</button>
+  <nav role="tablist">
+    <button type="button" role="tab" aria-selected="true" data-tab="campaign" class="active">Рассылка</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="messages">Сообщения</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="groups">Группы</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="settings">Настройки</button>
   </nav>
   </div>
-  <main>
+  <main id="main-content">
     <section id="campaign" class="active">
       <div class="panel">
       <div class="section-head">
@@ -503,40 +560,12 @@
         <button class="small campaign-admin-only" onclick="withLoading(this, retryFailed)">Повторить ошибки</button>
       </div>
       <div class="row campaign-admin-only" style="margin-bottom:0">
-        <input id="scheduleAt" type="datetime-local" style="max-width:220px">
+        <label for="scheduleAt" class="hint" style="margin:0">Запланировать на</label>
+        <input id="scheduleAt" type="datetime-local" name="schedule_at" style="max-width:220px">
         <button class="small" onclick="withLoading(this, scheduleCampaign)">Запланировать</button>
         <button class="small" onclick="withLoading(this, cancelSchedule)">Отменить план</button>
         <span id="scheduleHint" class="hint" style="margin:0"></span>
       </div>
-      </div>
-      <div class="panel campaign-admin-only">
-        <div class="panel-title">Живой лог</div>
-        <div id="campaignLog" class="log" style="margin-top:0"></div>
-      </div>
-      <div class="panel campaign-admin-only">
-      <h3 class="panel-title">История кампаний</h3>
-      <div id="campaignsHistory" class="table-wrap" style="margin-top:0"></div>
-      </div>
-      <div class="panel campaign-admin-only">
-      <h3 class="panel-title">История отправок</h3>
-      <div class="row">
-        <input id="sendLogQ" placeholder="Поиск: телефон, группа, ошибка" style="max-width:240px" onkeydown="if(event.key==='Enter')loadSendLog(0)">
-        <select id="sendLogStatus" style="max-width:140px" onchange="loadSendLog(0)">
-          <option value="">Все статусы</option>
-          <option value="sent">отправлено</option>
-          <option value="failed">ошибка</option>
-        </select>
-        <button class="small" onclick="loadSendLog(0)">Найти</button>
-      </div>
-      <div id="sendLog" class="table-wrap"></div>
-      <div class="row" id="sendLogPager"></div>
-      </div>
-    </section>
-
-    <section id="dashboard">
-      <div class="section-head">
-        <h2>Сводка</h2>
-        <span class="hint" style="margin:0">Сводка по аккаунтам</span>
       </div>
       <div id="dashProgressPanel" class="panel" style="display:none;margin-bottom:1rem">
         <div class="section-head" style="margin-bottom:.65rem">
@@ -551,17 +580,43 @@
         </div>
       </div>
       <div id="dashStats" class="dash-stats"></div>
-      <div class="row">
-        <select id="dashFilter" style="max-width:180px" onchange="loadDashboard()">
-          <option value="">Все статусы</option>
-          <option value="active">активен</option>
-          <option value="pending">ожидает</option>
-          <option value="needs_reauth">нужен вход</option>
-          <option value="disabled">отключён</option>
-        </select>
-        <button class="small" onclick="loadDashboard()">Обновить</button>
+      <div class="panel campaign-admin-only">
+        <div class="row">
+          <select id="dashFilter" style="max-width:180px" onchange="loadDashboard()">
+            <option value="">Все статусы</option>
+            <option value="active">активен</option>
+            <option value="pending">ожидает</option>
+            <option value="needs_reauth">нужен вход</option>
+            <option value="disabled">отключён</option>
+            <option value="banned">забанен</option>
+          </select>
+          <button class="small" onclick="loadDashboard()">Обновить сводку</button>
+        </div>
+        <div id="dashCards" class="dash-cards"></div>
       </div>
-      <div id="dashCards" class="dash-cards"></div>
+      <div class="panel campaign-admin-only">
+        <div class="panel-title">Живой лог</div>
+        <div id="campaignLog" class="log" style="margin-top:0"></div>
+      </div>
+      <div class="panel campaign-admin-only">
+      <h3 class="panel-title">История кампаний</h3>
+      <div id="campaignsHistory" class="table-wrap" style="margin-top:0"></div>
+      </div>
+      <div class="panel campaign-admin-only">
+      <h3 class="panel-title">История отправок</h3>
+      <div class="row">
+        <label for="sendLogQ" class="hint" style="margin:0">Поиск</label>
+        <input id="sendLogQ" name="send_log_q" placeholder="телефон, группа, ошибка" aria-label="Поиск по истории отправок" style="max-width:240px" onkeydown="if(event.key==='Enter')loadSendLog(0)">
+        <select id="sendLogStatus" style="max-width:140px" onchange="loadSendLog(0)">
+          <option value="">Все статусы</option>
+          <option value="sent">отправлено</option>
+          <option value="failed">ошибка</option>
+        </select>
+        <button class="small" onclick="loadSendLog(0)">Найти</button>
+      </div>
+      <div id="sendLog" class="table-wrap"></div>
+      <div class="row" id="sendLogPager"></div>
+      </div>
     </section>
 
     <section id="messages">
@@ -571,7 +626,8 @@
       <p class="lead">Один файл на все аккаунты. Каждая строка — одно сообщение. Загрузка заменяет предыдущий пул.</p>
       <div class="panel">
       <div class="row" style="margin-bottom:0">
-        <input type="file" id="msgFile" accept=".txt">
+        <label for="msgFile" class="hint" style="margin:0">Файл (.txt)</label>
+        <input type="file" id="msgFile" name="messages_file" accept=".txt" aria-label="Файл сообщений">
         <button class="primary btn-ico" onclick="uploadMessages()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           Загрузить
@@ -596,8 +652,10 @@
       <div class="panel">
       <div class="panel-title">Новая группа</div>
       <div class="row">
-        <input id="groupName" placeholder="Название группы" oninput="updateCreateGroupBtn()">
-        <input id="groupLink" type="url" required placeholder="https://max.ru/join/…" oninput="updateCreateGroupBtn()">
+        <label for="groupName">Название</label>
+        <input id="groupName" name="group_name" placeholder="Название группы" oninput="updateCreateGroupBtn()">
+        <label for="groupLink">Ссылка</label>
+        <input id="groupLink" name="group_link" type="url" required placeholder="https://max.ru/join/…" oninput="updateCreateGroupBtn()">
         <button class="primary" id="btnCreateGroup" disabled onclick="withLoading(this, addGroup)">Создать группу</button>
       </div>
       </div>
@@ -758,7 +816,7 @@
           <p class="hint" id="tgTokenHint"></p>
           <div class="settings-row"><label>ID чата Telegram</label><div class="controls"><input id="tgChat" placeholder="-100…"></div></div>
           <div class="settings-row"><label>Резервная копия каждые (ч)</label><div class="controls"><input id="backupHours" type="number" step="0.5" min="0"></div></div>
-          <div class="settings-row"><label>Пул воркеров</label><div class="controls"><input id="workerPool" type="number" min="1" max="32"></div></div>
+          <div class="settings-row settings-admin-only" id="workerPoolRow"><label>Пул воркеров</label><div class="controls"><input id="workerPool" type="number" min="1" max="32"></div></div>
           <div class="settings-row"><label>Действия</label><div class="controls">
             <button class="small" onclick="withLoading(this, backupNow)">Сделать бэкап</button>
             <span id="backupHint" class="hint" style="margin:0"></span>
@@ -782,7 +840,7 @@
   </main>
 
   <div id="authModal" class="modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
       <h3 id="authModalTitle">Код</h3>
       <p id="authModalMsg"></p>
       <input id="authModalInput" autocomplete="one-time-code">
@@ -792,6 +850,8 @@
       </div>
     </div>
   </div>
+
+  <div id="toast-container" role="status" aria-live="polite"></div>
 
   <script>
     let openGroupId = null;
@@ -812,6 +872,8 @@
       if (!c) {
         c = document.createElement('div');
         c.id = 'toast-container';
+        c.setAttribute('role', 'status');
+        c.setAttribute('aria-live', 'polite');
         document.body.appendChild(c);
       }
       const t = document.createElement('div');
@@ -869,14 +931,30 @@
       else sessionStorage.removeItem('maxAuthToken');
     }
 
+    async function tryRestoreSession() {
+      if (getAuthToken() || sessionStorage.getItem('maxImpersonating')) return false;
+      try {
+        const r = await fetch('/api/auth/restore-session', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        if (!r.ok) return false;
+        const j = await r.json();
+        if (!j.token) return false;
+        setAuthToken(j.token);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
     function logoutUser() {
       const token = getAuthToken();
-      if (token) {
-        fetch('/api/auth/logout', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + token },
-        }).catch(() => {});
-      }
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+      }).catch(() => {});
       setAuthToken('');
       sessionStorage.removeItem('maxImpersonating');
       location.href = '/auth.html';
@@ -926,14 +1004,20 @@
         return;
       }
       el.style.display = '';
-      if (!_subscriptionActive || !_subscriptionExpiresAt) {
-        el.textContent = 'подписка не активна';
+      if (!_subscriptionActive) {
+        el.textContent = 'Подписка не оформлена';
         el.className = 'badge stop';
+        el.title = _subscriptionExpiresAt
+          ? 'Истекла ' + formatSubscriptionDate(_subscriptionExpiresAt)
+          : 'Обратитесь к администратору';
         return;
       }
-      const label = formatSubscriptionDate(_subscriptionExpiresAt);
-      const days = subscriptionDaysLeft(_subscriptionExpiresAt);
-      el.textContent = 'подписка до ' + label;
+      const label = _subscriptionExpiresAt ? formatSubscriptionDate(_subscriptionExpiresAt) : null;
+      el.textContent = label
+        ? 'Подписка активна до ' + label
+        : 'Подписка активна';
+      el.title = label ? 'Действует до ' + label : 'Подписка активна';
+      const days = _subscriptionExpiresAt ? subscriptionDaysLeft(_subscriptionExpiresAt) : null;
       if (days !== null && days <= 7) el.className = 'badge warn';
       else el.className = 'badge ok';
     }
@@ -955,14 +1039,62 @@
       }
     }
 
-    function switchTab(tabId) {
+    const VALID_TABS = ['campaign', 'messages', 'groups', 'settings'];
+
+    function isTabAccessible(tabId) {
+      const btn = document.querySelector(`nav button[data-tab="${tabId}"]`);
+      if (!btn || btn.style.display === 'none') return false;
+      return VALID_TABS.includes(tabId);
+    }
+
+    function tabFromHash() {
+      const h = location.hash.slice(1);
+      return VALID_TABS.includes(h) ? h : null;
+    }
+
+    function syncTabHash(tabId) {
+      const next = '#' + tabId;
+      if (location.hash !== next) history.replaceState(null, '', next);
+    }
+
+    function applyTabFromHash() {
+      const tab = tabFromHash();
+      if (tab && isTabAccessible(tab)) switchTab(tab, { skipHash: true });
+    }
+
+    function initAccessibleTips() {
+      document.querySelectorAll('#settings .tip[title]').forEach((el, i) => {
+        const tip = el.getAttribute('title');
+        if (!tip) return;
+        const id = 'tip-desc-' + i;
+        const span = document.createElement('span');
+        span.id = id;
+        span.className = 'sr-only';
+        span.textContent = tip;
+        el.insertAdjacentElement('afterend', span);
+        el.setAttribute('aria-describedby', id);
+        el.removeAttribute('title');
+      });
+    }
+
+    function getFocusableIn(root) {
+      return [...root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .filter(n => !n.disabled && n.offsetParent !== null);
+    }
+
+    function switchTab(tabId, { skipHash = false } = {}) {
       const btn = document.querySelector(`nav button[data-tab="${tabId}"]`);
       if (!btn) return;
-      document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('nav button').forEach(x => {
+        x.classList.remove('active');
+        x.setAttribute('aria-selected', 'false');
+      });
       document.querySelectorAll('section').forEach(x => x.classList.remove('active'));
       btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
       document.getElementById(tabId).classList.add('active');
-      if (tabId === 'dashboard') loadDashboard();
+      if (!skipHash) syncTabHash(tabId);
+      if (tabId === 'campaign') loadDashboard();
     }
 
     function adminGlobalTabFromUrl() {
@@ -974,7 +1106,7 @@
     }
 
     function applyAdminGlobalUI() {
-      ['campaign', 'dashboard', 'groups'].forEach(tab => {
+      ['campaign', 'groups'].forEach(tab => {
         const btn = document.querySelector(`nav button[data-tab="${tab}"]`);
         if (btn) btn.style.display = 'none';
       });
@@ -1041,6 +1173,9 @@
       document.querySelectorAll('.campaign-admin-only').forEach(el => {
         el.style.display = simpleCampaign ? 'none' : '';
       });
+      document.querySelectorAll('.settings-admin-only').forEach(el => {
+        el.style.display = isUser ? 'none' : '';
+      });
       document.querySelectorAll('.header-user-hide').forEach(el => {
         el.style.display = isUser ? 'none' : '';
       });
@@ -1070,10 +1205,7 @@
             banner.textContent = 'Подписка не активна' + expiredLabel + '. Обратитесь к администратору для доступа к рассылке.';
           } else if (isUser) {
             banner.style.color = '';
-            const subHint = _subscriptionExpiresAt
-              ? ' · подписка до ' + formatSubscriptionDate(_subscriptionExpiresAt)
-              : '';
-            banner.textContent = 'Личный кабинет — группы, аккаунты, рассылка, сводка' + subHint;
+            banner.textContent = 'Личный кабинет — группы, аккаунты, рассылка';
           } else {
             banner.style.display = 'none';
           }
@@ -1087,6 +1219,7 @@
       const h = await fetch('/api/health').then(r => r.json()).catch(() => ({}));
       if (!h.server_mode) return;
       _serverMode = true;
+      if (!getAuthToken()) await tryRestoreSession();
       const token = getAuthToken();
       if (!token) { location.href = '/auth.html'; return; }
       try {
@@ -1127,12 +1260,16 @@
 
     document.querySelectorAll('nav button').forEach(b => {
       b.onclick = () => {
-        if (_adminGlobalMode && (b.dataset.tab === 'settings' || b.dataset.tab === 'messages')) {
-          location.hash = b.dataset.tab;
-        }
         switchTab(b.dataset.tab);
       };
     });
+
+    window.addEventListener('hashchange', () => {
+      const tab = tabFromHash();
+      if (tab && isTabAccessible(tab)) switchTab(tab, { skipHash: true });
+    });
+
+    initAccessibleTips();
 
     const groupsSection = document.getElementById('groups');
     groupsSection.addEventListener('focusin', (e) => {
@@ -1174,7 +1311,9 @@
         authModalOpen = true;
         groupsRefreshPaused = true;
         const overlay = document.getElementById('authModal');
+        const modal = overlay.querySelector('.modal');
         const input = document.getElementById('authModalInput');
+        const previousFocus = document.activeElement;
         document.getElementById('authModalTitle').textContent = title;
         document.getElementById('authModalMsg').textContent = message;
         input.type = password ? 'password' : 'text';
@@ -1183,13 +1322,29 @@
         overlay.style.display = 'flex';
         input.focus();
 
+        overlay.onkeydown = (e) => {
+          if (e.key !== 'Tab') return;
+          const focusable = getFocusableIn(modal);
+          if (!focusable.length) return;
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (e.shiftKey) {
+            if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+          } else if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        };
+
         const finish = (val) => {
           authModalOpen = false;
           groupsRefreshPaused = false;
           overlay.style.display = 'none';
+          overlay.onkeydown = null;
           okBtn.onclick = null;
           cancelBtn.onclick = null;
           input.onkeydown = null;
+          if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
           resolve(val);
         };
 
@@ -1312,6 +1467,21 @@
       applyStatus(s);
     }
 
+    function applyRunBadge(s) {
+      const el = document.getElementById('runBadge');
+      if (!el) return;
+      const running = !!(s && s.running);
+      const autoRun = !!(s && s.auto_run);
+      const sendingActive = running || autoRun;
+      if (isSimpleCampaignView()) {
+        el.textContent = sendingActive ? 'Отправка: активна' : 'Отправка: остановлена';
+        el.className = 'badge ' + (sendingActive ? 'run' : 'stop');
+      } else {
+        el.textContent = running ? 'идёт рассылка' : 'остановлено';
+        el.className = 'badge ' + (running ? 'run' : 'stop');
+      }
+    }
+
     function applyStatus(s) {
       _lastStatus = s;
       const running = !!s.running;
@@ -1319,8 +1489,7 @@
         maybeNotifyDone(s);
       }
       _wasRunning = running;
-      document.getElementById('runBadge').textContent = running ? 'идёт рассылка' : 'остановлено';
-      document.getElementById('runBadge').className = 'badge ' + (running ? 'run' : 'stop');
+      applyRunBadge(s);
       applyVaultBadge(s.vault);
       const circuit = s.circuit_open ? ` · автопауза: ${s.circuit_open}` : '';
       document.getElementById('msgCount').textContent = 'Пул TXT: ' + s.messages_count + circuit;
@@ -1344,7 +1513,7 @@
       const el = document.getElementById('campaignLog');
       el.innerHTML = renderLogLines(s.log || []);
       el.scrollTop = el.scrollHeight;
-      if (document.getElementById('dashboard').classList.contains('active')) {
+      if (document.getElementById('campaign').classList.contains('active')) {
         renderDashProgress(s);
       }
       applyCampaignButtonState(s);
@@ -1513,6 +1682,7 @@
         <div class="dash-stat"><div class="n">${counts.active || 0}</div><div class="l">активны</div></div>
         <div class="dash-stat"><div class="n">${counts.pending || 0}</div><div class="l">ожидают</div></div>
         <div class="dash-stat"><div class="n">${counts.needs_reauth || 0}</div><div class="l">нужен вход</div></div>
+        <div class="dash-stat"><div class="n">${counts.banned || 0}</div><div class="l">забанены</div></div>
         <div class="dash-stat"><div class="n">${d.groups_count || 0}</div><div class="l">групп</div></div>
         <div class="dash-stat"><div class="n">${d.sent_today || 0}</div><div class="l">успешно сегодня</div></div>
         <div class="dash-stat"><div class="n">${d.failed_today || 0}</div><div class="l">ошибок сегодня</div></div>
@@ -1545,6 +1715,10 @@
 
     async function startCampaign() {
       try {
+        if (isUserRole() && !_subscriptionActive) {
+          toast('Для использования бота оформите подписку', 'error');
+          return;
+        }
         if (!isSimpleCampaignView()) {
           const s = await api('/status');
           const prog = s.campaign_progress || {};
@@ -1742,6 +1916,7 @@
         pending: 'ожидает',
         needs_reauth: 'нужен вход',
         disabled: 'отключён',
+        banned: 'забанен',
       })[s] || s || '';
     }
 
@@ -1772,24 +1947,22 @@
       return map[p.auth_step] || '';
     }
 
-    function isBanLikeError(err) {
-      const t = String(err || '').toLowerCase();
-      if (!t) return false;
-      return /ban|banned|blocked|flood|spam|забан|бан|блок|заблок|ограничен|restrict|suspend/.test(t);
-    }
-
     function phoneBadges(p) {
       const badges = [];
       const err = p.last_error || '';
+      if (p.status === 'banned') {
+        badges.push(['Забанен', 'danger', err || 'Аккаунт заблокирован']);
+      } else if (p.status === 'active') {
+        badges.push(['Активен', 'ok', 'Активен']);
+      } else {
+        badges.push(['Неактивен', 'warn', statusRu(p.status) || 'Неактивен']);
+      }
       if (p.status === 'needs_reauth') {
         badges.push(['Сессия', 'warn', err || 'Нужен повторный вход']);
-      } else if (p.status === 'disabled') {
-        badges.push(['Отключён', 'danger', err || 'Профиль отключён']);
       } else if (p.status === 'pending') {
         badges.push(['Не вошёл', 'info', 'Ещё не авторизован']);
-      }
-      if (isBanLikeError(err) && p.status !== 'disabled') {
-        badges.push(['Бан?', 'danger', err]);
+      } else if (p.status === 'disabled') {
+        badges.push(['Отключён', 'danger', err || 'Профиль отключён']);
       }
       if (p.circuit_open) {
         badges.push(['Автопауза', 'danger', 'Пауза после серии ошибок']);
@@ -1803,13 +1976,9 @@
       if (p.auth_step === 'error' && p.status === 'active') {
         badges.push(['Ошибка входа', 'danger', err || 'Ошибка авторизации']);
       }
-      if (p.warmup_active && !badges.length) {
+      if (p.warmup_active && p.status === 'active') {
         badges.push([`Прогрев ${p.warmup_day}`, 'muted', 'Прогрев аккаунта']);
       }
-      if (!badges.length && p.status === 'active') {
-        badges.push(['Активен', 'ok', 'Активен']);
-      }
-      if (!badges.length) return '';
       return `<span class="phone-badges">${badges.map(([label, kind, tip]) =>
         `<span class="phone-badge ${kind}" title="${esc(tip || label)}">${esc(label)}</span>`
       ).join('')}</span>`;
@@ -2001,12 +2170,14 @@
           </tr>`).join('') : `<tr><td colspan="5" class="hint">Профилей нет — ${isUserRole() ? 'добавьте номер' : 'добавьте номер или импортируйте CSV'}</td></tr>`) : '';
         return `
           <div class="group-card">
-            <div class="group-head" onclick="toggleGroup(${g.id})">
+            <div class="group-head-row">
+            <button type="button" class="group-head" aria-expanded="${open ? 'true' : 'false'}" onclick="toggleGroup(${g.id})">
               <span class="arrow">${open ? '▼' : '▶'}</span>
               <span class="title">${esc(g.name)}</span>
               <span class="meta">${g.profiles_count} проф.${g.active_count != null ? ' · ' + g.active_count + ' активных' : ''} · ${esc(g.invite_link || '—')}</span>
-              <span class="group-actions" onclick="event.stopPropagation()">
-                <button class="small danger" onclick="deleteGroup(${g.id})">Удалить группу</button>
+            </button>
+              <span class="group-actions">
+                <button type="button" class="small danger" onclick="deleteGroup(${g.id})">Удалить группу</button>
               </span>
             </div>
             ${open ? `
@@ -2202,8 +2373,10 @@
         webhook_url: document.getElementById('webhookUrl').value.trim(),
         telegram_chat_id: document.getElementById('tgChat').value.trim(),
         backup_interval_hours: +document.getElementById('backupHours').value,
-        worker_pool_size: +document.getElementById('workerPool').value,
       };
+      if (!isUserRole()) {
+        body.worker_pool_size = +document.getElementById('workerPool').value;
+      }
       const pin = document.getElementById('apiPin').value.trim();
       if (pin) body.api_pin = pin;
       const tg = document.getElementById('tgToken').value.trim();
@@ -2275,6 +2448,7 @@
         loadSettings().catch(e => toast(e.message, 'error'));
         return;
       }
+      applyTabFromHash();
       try { await initVaultUI(); } catch (e) { toast(e.message, 'error'); }
       loadMessages();
       loadGroups();
@@ -2286,6 +2460,7 @@
       }
       refreshStatus();
       connectStatusWs();
+      loadDashboard();
     })();
     setInterval(() => {
       if (_adminGlobalMode) return;
@@ -2295,7 +2470,7 @@
         loadCampaigns();
         loadScheduleHint();
       }
-      if (document.getElementById('dashboard').classList.contains('active')) loadDashboard();
+      if (document.getElementById('campaign').classList.contains('active')) loadDashboard();
     }, 2000);
   </script>
 </body>

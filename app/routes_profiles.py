@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
+import antiban_core
+
 from fastapi import APIRouter, HTTPException
 
 from app.routes_models import CodeIn, ProfilePatchIn
@@ -165,13 +167,23 @@ async def login_profile(
             m.append_log(f"Профиль #{profile_id} авторизован (id={me_id})")
         except Exception as e:
             err = str(e)
-            with m._conn() as c:
-                c.execute(
-                    "UPDATE profiles SET status=?, last_error=? WHERE id=?",
-                    (m.ProfileStatus.NEEDS_REAUTH, err, profile_id),
-                )
-            m._set_auth_step(profile_id, "error")
-            m.append_log(f"Ошибка входа #{profile_id}: {err}")
+            if antiban_core.is_ban_error(err):
+                with m._conn() as c:
+                    c.execute(
+                        "UPDATE profiles SET status=?, last_error=? WHERE id=?",
+                        (m.ProfileStatus.BANNED, err, profile_id),
+                    )
+                m._set_auth_step(profile_id, "error")
+                m.append_log(f"Профиль #{profile_id} забанен при входе: {err}")
+                await m._handle_profile_banned(profile_id, err)
+            else:
+                with m._conn() as c:
+                    c.execute(
+                        "UPDATE profiles SET status=?, last_error=? WHERE id=?",
+                        (m.ProfileStatus.NEEDS_REAUTH, err, profile_id),
+                    )
+                m._set_auth_step(profile_id, "error")
+                m.append_log(f"Ошибка входа #{profile_id}: {err}")
         finally:
             if m._auth_sessions.get(m._auth_session_key(profile_id), {}).get("step") == "connecting":
                 m._set_auth_step(profile_id, "idle")

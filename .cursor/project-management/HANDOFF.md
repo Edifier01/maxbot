@@ -11,6 +11,9 @@
 8. Update these project-management files after meaningful work.
 
 ## Latest (2026-08-07)
+- **Remember Me (persistent login) COMPLETE** — `remember_me` default true; HttpOnly `max_token` cookie; `POST /api/auth/restore-session`; UI checkbox in `auth.html`; boot restore in `index.html`/`admin.html`. Pytest: 104 passed, 13 skipped.
+- **FEATURE-SAAS-UX-2026 COMPLETE** — verifier PASS. Pytest: 100 passed, 7 skipped.
+- **`/improve-ui` Phase A+B+C DONE** — tokens, a11y, Manrope, Phase C: skip link, modal trap, hash tabs, Intl dates. Pytest: 100 passed.
 - Agent Fix Plan 2026 waves 1–4 implemented and marked DONE.
 - G-2: removed server-mode strip of group `proxy` on create/PATCH; test `tests/test_group_proxy_server.py`.
 - G-4 decision: keep `*.lock` for Docker only; CI stays on `requirements*.txt`.

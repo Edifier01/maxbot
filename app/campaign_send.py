@@ -169,7 +169,9 @@ async def send_with_retry(
                     last_err = (
                         f"{last_err} — требуется повторный вход (кнопка «Войти» / «Заново»)"
                     )
-                main._mark_profile_failed(profile["id"], last_err, is_auth_err)
+                ban = main._mark_profile_failed(profile["id"], last_err, is_auth_err)
+                if ban:
+                    await main._handle_profile_banned(profile["id"], last_err)
                 with main._conn() as c:
                     c.execute(
                         "INSERT INTO send_log (profile_id, group_id, message_idx, status, error) "

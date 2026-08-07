@@ -7,11 +7,49 @@
   <link rel="stylesheet" href="/static/fonts/fonts.css">
   <style>
     :root {
-      --bg: #0f1117; --bg-soft: #1a1d27; --text: #e8eaef; --muted: #8b92a5;
-      --accent: #5b8def; --danger: #ef5b5b; --ok: #3dd68c; --line: #2a2f3d;
+      --bg: #0c0e14;
+      --bg-elev: #141824;
+      --bg-soft: #1a1f2e;
+      --line: #2a3142;
+      --line-soft: #222838;
+      --text: #e8eaef;
+      --muted: #8b93a7;
+      --faint: #6b758c;
+      --accent: #3d8bfd;
+      --accent-dim: #2563eb;
+      --ok: #3ecf8e;
+      --warn: #e6b84d;
+      --danger: #ef5f5f;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 12px 40px rgba(0,0,0,.35);
+      --font: "Manrope", system-ui, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, monospace;
     }
     * { box-sizing: border-box; }
-    body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
+    html { color-scheme: dark; }
+    button:focus-visible,
+    nav button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    .btn:focus-visible,
+    .link:focus-visible,
+    button.btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+    body {
+      font-family: var(--font);
+      background: var(--bg); color: var(--text); margin: 0;
+    }
     header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
     main { padding: 1rem 1.25rem; max-width: 1100px; margin: 0 auto; }
     h1 { margin: 0; font-size: 1.2rem; }
@@ -20,18 +58,29 @@
     table { width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: 1rem; }
     th, td { text-align: left; padding: .55rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
     th { color: var(--muted); font-weight: 600; }
-    .panel { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+    .panel { background: var(--bg-soft); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }
     input, button.btn {
-      padding: .45rem .65rem; border-radius: 6px; border: 1px solid var(--line);
-      background: var(--bg); color: var(--text); cursor: pointer;
+      padding: .45rem .65rem; border-radius: var(--radius-sm); border: 1px solid var(--line);
+      background: var(--bg); color: var(--text); cursor: pointer; font-family: inherit;
     }
     button.btn:hover:not(:disabled) { border-color: var(--accent); }
     button.btn:disabled { opacity: .55; cursor: wait; }
-    button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.btn.primary { background: var(--accent-dim); border-color: rgba(147,197,253,.25); color: #fff; }
     button.btn.danger { background: rgba(127,29,29,.55); border-color: #991b1b; color: #fca5a5; }
+    .badge {
+      padding: .22rem .65rem; border-radius: 999px; font-size: .72rem;
+      font-weight: 600; letter-spacing: .02em; border: 1px solid transparent;
+      display: inline-block; white-space: nowrap;
+    }
+    .badge.ok { background: rgba(62,207,142,.15); color: var(--ok); border-color: rgba(62,207,142,.3); }
+    .badge.stop { background: rgba(239,95,95,.12); color: #fca5a5; border-color: rgba(239,95,95,.28); }
+    .badge.warn { background: rgba(230,184,77,.14); color: var(--warn); border-color: rgba(230,184,77,.3); }
+    .badge.danger { background: rgba(239,95,95,.14); color: #fca5a5; border-color: rgba(239,95,95,.28); }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
     .days-group {
       display: inline-flex; align-items: stretch; border: 1px solid var(--line);
-      border-radius: 6px; overflow: hidden; background: var(--bg);
+      border-radius: var(--radius-sm); overflow: hidden; background: var(--bg);
     }
     .days-group input {
       width: 3rem; border: none; border-left: 1px solid var(--line); border-right: 1px solid var(--line);
@@ -41,14 +90,34 @@
       display: flex; align-items: center; padding: 0 .55rem; color: var(--muted); font-size: .85rem;
     }
     .days-group button.btn { border: none; border-radius: 0; }
-    .badge { font-size: .75rem; padding: .15rem .45rem; border-radius: 4px; background: #2a3348; }
-    .badge.ok { background: #1a3d2e; color: var(--ok); }
-    .badge.no { background: #3d1a1a; color: var(--danger); }
-    .badge.warn { background: #3d351a; color: #e6b84d; }
-    .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
     .global-groups-panel .row { gap: .65rem; }
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.25rem; padding: 0 .25rem; }
-    .users-table { min-width: 640px; }
+    .users-table { min-width: 760px; }
+    .settings-row {
+      display: grid; grid-template-columns: minmax(130px, 1fr) 2fr;
+      gap: .5rem; align-items: center; padding: .4rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .settings-row:last-child { border-bottom: none; }
+    .settings-row label { color: var(--muted); font-size: .85rem; }
+    .settings-row .controls { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
+    .settings-row input[type="number"], .settings-row select { max-width: 140px; }
+    .preview {
+      list-style: none; padding: 0; margin: .5rem 0 0; max-height: 220px; overflow-y: auto;
+      content-visibility: auto; contain-intrinsic-size: 0 500px;
+    }
+    .preview li { padding: .35rem 0; border-bottom: 1px solid var(--line); font-size: .85rem; color: var(--muted); word-break: break-word; }
+    #toast-container {
+      position: fixed; bottom: 1.25rem; right: 1.25rem;
+      display: flex; flex-direction: column; gap: .5rem; z-index: 200;
+    }
+    .toast {
+      background: var(--bg-elev); border: 1px solid var(--line); color: var(--text);
+      padding: .65rem .9rem; border-radius: var(--radius-sm); font-size: .85rem; max-width: 340px;
+      box-shadow: var(--shadow);
+    }
+    .toast.success { border-color: rgba(62,207,142,.45); }
+    .toast.error { border-color: rgba(239,95,95,.45); }
     @media (max-width: 720px) {
       header { padding: .85rem 1rem; }
       main { padding: .85rem 1rem 2rem; }
@@ -94,13 +163,59 @@
         <tbody id="expiringBody"></tbody>
       </table>
     </div>
+    <div class="panel" id="globalSettingsPanel">
+      <strong>Настройки рассылки</strong>
+      <p class="hint" style="margin:.35rem 0 .75rem">Глобальные параметры антибана и лимитов (общие для сервера).</p>
+      <div class="settings-row"><label>Мин. пауза (сек)</label><div class="controls"><input id="delayMin" type="number"></div></div>
+      <div class="settings-row"><label>Макс. пауза (сек)</label><div class="controls"><input id="delayMax" type="number"></div></div>
+      <div class="settings-row"><label>Лимит/день мин</label><div class="controls"><input id="dayLimitMin" type="number" min="1"></div></div>
+      <div class="settings-row"><label>Лимит/день макс</label><div class="controls"><input id="dayLimitMax" type="number" min="1"></div></div>
+      <div class="settings-row"><label>Разброс (%)</label><div class="controls"><input id="jitter" type="number"></div></div>
+      <div class="settings-row"><label>Режим сообщений</label><div class="controls">
+        <select id="msgPickMode">
+          <option value="random_norepeat">Случайно без повтора</option>
+          <option value="round_robin">По кругу</option>
+        </select>
+      </div></div>
+      <div class="settings-row"><label>Цель кампании</label><div class="controls">
+        <select id="campaignGoal">
+          <option value="daily_limits">Дневные лимиты аккаунтов</option>
+          <option value="message_pool">Исчерпать пул TXT</option>
+        </select>
+      </div></div>
+      <div class="settings-row"><label>Прогрев</label><div class="controls">
+        <label style="color:var(--text);font-size:.85rem"><input type="checkbox" id="warmupOn" style="width:auto;margin-right:.25rem"> вкл</label>
+        <input id="warmupDays" type="number" min="1" style="max-width:70px">
+        <span class="hint" style="margin:0">дней</span>
+      </div></div>
+      <div class="settings-row"><label>Прогрев: старт мин/макс</label><div class="controls">
+        <input id="warmupStartMin" type="number" min="1" style="max-width:70px">
+        <span class="hint" style="margin:0">–</span>
+        <input id="warmupStartMax" type="number" min="1" style="max-width:70px">
+      </div></div>
+      <div class="settings-row"><label>Ленивый день (%)</label><div class="controls">
+        <input id="lazyDayPct" type="number" min="0" max="100" style="max-width:70px">
+        <span class="hint" style="margin:0">×</span>
+        <input id="lazyDayFactor" type="number" min="0.05" max="1" step="0.05" style="max-width:70px">
+      </div></div>
+      <div class="row" style="margin-top:.75rem">
+        <button class="btn primary" id="btnSaveSettings" onclick="saveGlobalSettings()">Сохранить настройки</button>
+      </div>
+    </div>
+    <div class="panel" id="globalMessagesPanel">
+      <strong>Сообщения (пул)</strong>
+      <p class="hint" style="margin:.35rem 0 .75rem">Один файл на все аккаунты. Каждая строка — одно сообщение. Загрузка заменяет предыдущий пул.</p>
+      <div class="row">
+        <input type="file" id="msgFile" accept=".txt">
+        <button class="btn primary" id="btnUploadMessages" onclick="uploadAdminMessages()">Загрузить</button>
+      </div>
+      <p class="hint" id="msgMeta" style="margin:.65rem 0 0">—</p>
+      <ul id="msgPreview" class="preview" style="display:none"></ul>
+      <p class="hint" id="msgEmpty" style="display:none;margin:.5rem 0 0">Файл не загружен. Поддерживается спинтакс и переменные {{phone}}, {{label}}.</p>
+    </div>
     <div class="panel">
       <div class="row" style="justify-content:space-between">
         <strong>Пользователи (учреждения)</strong>
-        <span class="row">
-          <a href="/#settings" onclick="openGlobalSettings('#settings'); return false;">Настройки рассылки</a>
-          <a href="/#messages" onclick="openGlobalSettings('#messages'); return false;">Сообщения (пул)</a>
-        </span>
       </div>
       <div class="table-scroll">
       <table class="users-table">
@@ -110,6 +225,7 @@
             <th>Email</th>
             <th>Подписка</th>
             <th>Статистика</th>
+            <th>Воркеры</th>
             <th>Действия</th>
           </tr>
         </thead>
@@ -118,31 +234,78 @@
       </div>
     </div>
   </main>
+  <div id="toast-container" role="status" aria-live="polite"></div>
   <script>
     function token() { return sessionStorage.getItem('maxAuthToken') || ''; }
-    function authHeaders() {
-      const h = { 'Content-Type': 'application/json' };
+    function authHeaders(json = true) {
+      const h = {};
+      if (json) h['Content-Type'] = 'application/json';
       const t = token();
       if (t) h['Authorization'] = 'Bearer ' + t;
       return h;
     }
+    function formatApiError(detail) {
+      if (!detail) return '';
+      if (typeof detail === 'string') return detail;
+      if (Array.isArray(detail)) {
+        return detail.map(d => (d && d.msg) ? d.msg : JSON.stringify(d)).join('; ');
+      }
+      return String(detail);
+    }
+    const ruDateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short' });
+    function formatAdminDate(iso) {
+      if (!iso) return '?';
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : ruDateFmt.format(d);
+    }
+    function toast(msg, type = 'info', duration = 4000) {
+      let c = document.getElementById('toast-container');
+      if (!c) {
+        c = document.createElement('div');
+        c.id = 'toast-container';
+        c.setAttribute('role', 'status');
+        c.setAttribute('aria-live', 'polite');
+        document.body.appendChild(c);
+      }
+      const t = document.createElement('div');
+      t.className = 'toast ' + type;
+      t.textContent = msg;
+      c.appendChild(t);
+      setTimeout(() => t.remove(), duration);
+    }
     async function api(path, opts = {}) {
-      opts.headers = { ...authHeaders(), ...(opts.headers || {}) };
+      const isForm = opts.body instanceof FormData;
+      opts.headers = { ...authHeaders(!isForm), ...(opts.headers || {}) };
       const r = await fetch('/api' + path, opts);
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.detail || r.statusText);
+      if (!r.ok) throw new Error(formatApiError(j.detail) || r.statusText);
       return j;
+    }
+    async function tryRestoreSession() {
+      if (token()) return true;
+      try {
+        const r = await fetch('/api/auth/restore-session', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        if (!r.ok) return false;
+        const j = await r.json();
+        if (!j.token) return false;
+        sessionStorage.setItem('maxAuthToken', j.token);
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
     async function logout() {
       const token = sessionStorage.getItem('maxAdminAuthToken') || sessionStorage.getItem('maxAuthToken');
-      if (token) {
-        try {
-          await fetch('/api/auth/logout', {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + token },
-          });
-        } catch (_) {}
-      }
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+        });
+      } catch (_) {}
       sessionStorage.removeItem('maxAuthToken');
       sessionStorage.removeItem('maxAdminAuthToken');
       sessionStorage.removeItem('maxImpersonating');
@@ -163,13 +326,13 @@
         hint.textContent = `Найдено: ${items.length}`;
         table.style.display = '';
         tbody.innerHTML = items.map(row => {
-          const exp = row.expires_at ? row.expires_at.slice(0, 10) : '?';
-          const cls = row.days_left <= 1 ? 'no' : (row.days_left <= 7 ? 'warn' : 'ok');
+          const exp = formatAdminDate(row.expires_at);
+          const cls = row.days_left <= 1 ? 'danger' : (row.days_left <= 7 ? 'warn' : 'ok');
           return `<tr>
             <td>${esc(row.institution_name)}</td>
             <td>${esc(row.email)}</td>
             <td>${exp}</td>
-            <td><span class="badge ${cls}">${row.days_left} дн.</span></td>
+            <td><span class="badge ${cls} tabular-nums">${row.days_left} дн.</span></td>
           </tr>`;
         }).join('');
       } catch (e) {
@@ -178,26 +341,33 @@
       }
     }
     async function loadUsers() {
-      const items = (await api('/admin/users')).items;
+      const data = await api('/admin/users');
+      const items = data.items;
       const tbody = document.getElementById('usersBody');
       tbody.innerHTML = items.map(u => {
         const sub = u.subscription;
         const subBadge = sub.active
           ? (() => {
-              const exp = sub.expires_at ? sub.expires_at.slice(0, 10) : '?';
+              const exp = formatAdminDate(sub.expires_at);
               const days = sub.expires_at
                 ? Math.ceil((new Date(sub.expires_at) - Date.now()) / 86400000)
                 : null;
-              const cls = days !== null && days <= 7 ? 'warn' : 'ok';
+              const cls = days !== null && days <= 1 ? 'danger' : (days !== null && days <= 7 ? 'warn' : 'ok');
               const hint = days !== null && days <= 7 ? ` (${days} дн.)` : '';
-              return `<span class="badge ${cls}">до ${exp}${hint}</span>`;
+              return `<span class="badge ${cls} tabular-nums">до ${exp}${hint}</span>`;
             })()
-          : '<span class="badge no">нет</span>';
+          : '<span class="badge stop">нет</span>';
         return `<tr>
           <td>${esc(u.institution_name)}</td>
           <td>${esc(u.email)}</td>
           <td>${subBadge}</td>
           <td id="stats-${u.tenant_id}"><button class="btn" onclick="loadStats(${u.tenant_id})">Загрузить</button></td>
+          <td>
+            <span class="row">
+              <input type="number" id="pool-${u.tenant_id}" min="1" max="32" value="1" style="width:3.2rem;text-align:center">
+              <button class="btn" onclick="saveWorkerPool(${u.tenant_id}, this)">Сохранить</button>
+            </span>
+          </td>
           <td class="row">
             <button class="btn primary" onclick="impersonate(${u.tenant_id})">Войти в кабинет</button>
             <button class="btn" onclick="grantMonth(${u.tenant_id}, this)">+30 дней</button>
@@ -206,10 +376,40 @@
               <input type="number" id="days-${u.tenant_id}" min="1" max="365" value="7">
               <span class="days-label">дней</span>
             </span>
-            <button class="btn danger" onclick="deleteUser(${u.tenant_id}, ${JSON.stringify(u.institution_name)})">Удалить</button>
+            <button class="btn danger" onclick="deleteUser(${u.tenant_id}, ${JSON.stringify(u.institution_name)}, this)">Удалить</button>
           </td>
         </tr>`;
       }).join('');
+      await loadTenantWorkerPools(items);
+    }
+    async function loadTenantWorkerPools(items) {
+      await Promise.all(items.map(async u => {
+        try {
+          const s = await api('/admin/tenants/' + u.tenant_id + '/settings');
+          const inp = document.getElementById('pool-' + u.tenant_id);
+          if (inp) inp.value = s.worker_pool_size || 1;
+        } catch (_) {}
+      }));
+    }
+    async function saveWorkerPool(tid, btn) {
+      const inp = document.getElementById('pool-' + tid);
+      const size = parseInt(inp && inp.value, 10);
+      if (!size || size < 1 || size > 32) {
+        toast('Пул воркеров: от 1 до 32', 'error');
+        return;
+      }
+      if (btn) btn.disabled = true;
+      try {
+        await api('/admin/tenants/' + tid + '/settings', {
+          method: 'PUT',
+          body: JSON.stringify({ worker_pool_size: size }),
+        });
+        toast('Пул воркеров сохранён', 'success');
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
     }
     function esc(s) {
       return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -217,23 +417,96 @@
     async function loadStats(tid) {
       const s = await api('/admin/tenants/' + tid + '/stats');
       document.getElementById('stats-' + tid).innerHTML =
-        `групп: ${s.groups}, акк: ${s.profiles}, ✓${s.sent} ✗${s.failed}`;
+        `<span class="tabular-nums">групп: ${s.groups}, акк: ${s.profiles}, ✓${s.sent} ✗${s.failed}</span>`;
     }
     function rememberAdminToken() {
       if (sessionStorage.getItem('maxImpersonating')) return;
       const t = token();
       if (t) sessionStorage.setItem('maxAdminAuthToken', t);
     }
-    function openGlobalSettings(hash) {
-      const adminTok = sessionStorage.getItem('maxAdminAuthToken');
-      if (!adminTok) {
-        alert('Сессия админа не найдена. Выйдите и войдите снова в админ-панель.');
+    async function loadGlobalSettings() {
+      const s = await api('/settings');
+      document.getElementById('delayMin').value = s.delay_min_sec;
+      document.getElementById('delayMax').value = s.delay_max_sec;
+      document.getElementById('dayLimitMin').value = s.daily_limit_min || '5';
+      document.getElementById('dayLimitMax').value = s.daily_limit_max || s.max_msgs_per_profile_day || '12';
+      document.getElementById('jitter').value = s.jitter_percent;
+      document.getElementById('msgPickMode').value = s.message_pick_mode || 'random_norepeat';
+      document.getElementById('campaignGoal').value = s.campaign_goal || 'daily_limits';
+      document.getElementById('warmupOn').checked = String(s.warmup_enabled || '1') === '1';
+      document.getElementById('warmupDays').value = s.warmup_days || '7';
+      document.getElementById('warmupStartMin').value = s.warmup_start_min || '1';
+      document.getElementById('warmupStartMax').value = s.warmup_start_max || '2';
+      document.getElementById('lazyDayPct').value = s.lazy_day_percent || '15';
+      document.getElementById('lazyDayFactor').value = s.lazy_day_factor || '0.4';
+    }
+    async function saveGlobalSettings() {
+      const btn = document.getElementById('btnSaveSettings');
+      const body = {
+        delay_min_sec: +document.getElementById('delayMin').value,
+        delay_max_sec: +document.getElementById('delayMax').value,
+        daily_limit_min: +document.getElementById('dayLimitMin').value,
+        daily_limit_max: +document.getElementById('dayLimitMax').value,
+        jitter_percent: +document.getElementById('jitter').value,
+        message_pick_mode: document.getElementById('msgPickMode').value,
+        campaign_goal: document.getElementById('campaignGoal').value,
+        warmup_enabled: document.getElementById('warmupOn').checked ? 1 : 0,
+        warmup_days: +document.getElementById('warmupDays').value,
+        warmup_start_min: +document.getElementById('warmupStartMin').value,
+        warmup_start_max: +document.getElementById('warmupStartMax').value,
+        lazy_day_percent: +document.getElementById('lazyDayPct').value,
+        lazy_day_factor: +document.getElementById('lazyDayFactor').value,
+      };
+      if (btn) btn.disabled = true;
+      try {
+        await api('/settings', { method: 'PUT', body: JSON.stringify(body) });
+        toast('Настройки сохранены', 'success');
+        await loadGlobalSettings();
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    async function loadAdminMessages() {
+      const d = await api('/messages');
+      const meta = document.getElementById('msgMeta');
+      const preview = document.getElementById('msgPreview');
+      const empty = document.getElementById('msgEmpty');
+      meta.textContent = d.count
+        ? `Загружено: ${d.count} · ${d.meta.loaded_at || ''}`
+        : 'Файл не загружен';
+      if (d.count) {
+        preview.innerHTML = d.messages.map(m => `<li>${esc(m)}</li>`).join('');
+        preview.style.display = 'block';
+        empty.style.display = 'none';
+      } else {
+        preview.innerHTML = '';
+        preview.style.display = 'none';
+        empty.style.display = 'block';
+      }
+    }
+    async function uploadAdminMessages() {
+      const f = document.getElementById('msgFile').files[0];
+      if (!f) {
+        toast('Выберите файл', 'error');
         return;
       }
-      sessionStorage.setItem('maxAuthToken', adminTok);
-      sessionStorage.removeItem('maxImpersonating');
-      sessionStorage.setItem('maxAdminGlobalTab', hash === '#messages' ? 'messages' : 'settings');
-      location.href = '/' + hash;
+      if (!confirm('Заменить текущие сообщения?')) return;
+      const btn = document.getElementById('btnUploadMessages');
+      if (btn) btn.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', f);
+        await api('/messages/upload', { method: 'POST', body: fd });
+        document.getElementById('msgFile').value = '';
+        toast('Сообщения загружены', 'success');
+        await loadAdminMessages();
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
     }
     async function grantMonth(tid, btn) {
       if (btn) btn.disabled = true;
@@ -263,14 +536,18 @@
       sessionStorage.setItem('maxImpersonating', j.institution_name || '');
       location.href = '/';
     }
-    async function deleteUser(tid, name) {
+    async function deleteUser(tid, name, btn) {
       const label = name || ('#' + tid);
       if (!confirm('Удалить учреждение «' + label + '»?\n\nДанные, аккаунты и подписка будут удалены без восстановления.')) return;
+      if (btn) btn.disabled = true;
       try {
         await api('/admin/users/' + tid, { method: 'DELETE' });
+        toast('Учреждение удалено', 'success');
         await loadUsers();
       } catch (e) {
-        alert(e.message || 'Не удалось удалить');
+        toast(e.message || 'Не удалось удалить', 'error');
+      } finally {
+        if (btn) btn.disabled = false;
       }
     }
     async function bulkGroups(active) {
@@ -300,6 +577,7 @@
     }
     (async () => {
       try {
+        await tryRestoreSession();
         const me = await api('/auth/me');
         if (me.role !== 'admin') {
           document.querySelector('main').innerHTML =
@@ -319,6 +597,8 @@
           rememberAdminToken();
         }
         await loadExpiring();
+        await loadGlobalSettings();
+        await loadAdminMessages();
         await loadUsers();
       } catch (e) {
         document.querySelector('main').innerHTML =
