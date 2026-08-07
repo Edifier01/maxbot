@@ -13,19 +13,22 @@ from app import auth
 
 
 def test_ip_rate_limit_drops_empty_keys():
+    import time
+
     import main as m
-    from main import RateLimitMiddleware
+    from main import RATE_WINDOW, RateLimitMiddleware
 
     m._rate_counters.clear()
     ip = "203.0.113.55"
     mw = RateLimitMiddleware(app=MagicMock())
+    stale = time.monotonic() - RATE_WINDOW - 1
 
     async def run():
         req = MagicMock()
         req.url.path = "/api/status"
         req.client = MagicMock()
         req.client.host = ip
-        m._rate_counters[ip] = [0.0]
+        m._rate_counters[ip] = [stale]
         await mw.dispatch(req, AsyncMock(return_value="ok"))
         assert ip not in m._rate_counters
 
