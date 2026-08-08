@@ -57,67 +57,75 @@ async def get_log():
 async def dashboard():
 
     """Сводка по всем профилям и группам для вкладки Dashboard."""
-    with m._conn() as c:
-        counts = c.execute(
-            "SELECT status, COUNT(*) n FROM profiles "
-            "WHERE EXISTS (SELECT 1 FROM group_profiles gp WHERE gp.profile_id = profiles.id) "
-            "GROUP BY status"
-        ).fetchall()
-        profiles = c.execute(
-            """
-            SELECT p.*,
-                   GROUP_CONCAT(g.name, ', ') AS group_names,
-                   MIN(g.id) AS primary_group_id
-            FROM profiles p
-            JOIN group_profiles gp ON gp.profile_id = p.id AND gp.is_enabled=1
-            JOIN groups g ON g.id = gp.group_id
-            GROUP BY p.id
-            ORDER BY
-              CASE p.status
-                WHEN 'needs_reauth' THEN 0
-                WHEN 'pending' THEN 1
-                WHEN 'active' THEN 2
-                ELSE 3
-              END,
-              p.id
-            LIMIT 500
-            """
-        ).fetchall()
-        groups_n = c.execute("SELECT COUNT(*) n FROM groups").fetchone()["n"]
-        sent_today = c.execute(
-            "SELECT COUNT(*) n FROM send_log WHERE date(sent_at)=date('now') AND status='sent'"
-        ).fetchone()["n"]
-        failed_today = c.execute(
-            "SELECT COUNT(*) n FROM send_log WHERE date(sent_at)=date('now') AND status='failed'"
-        ).fetchone()["n"]
-        qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-    items = []
-    for p in profiles:
-        d = m._profile_auth_view(p)
-        d["circuit_open"] = m._is_circuit_open(p["id"])
-        items.append(d)
-    if m._campaign_goal() == "daily_limits":
-        prog = m._daily_capacity_progress()
-    else:
-        msgs = len(m.load_message_pool())
-        mi = int(qs["message_idx"] if qs else 0)
-        prog = {
-            "goal": "message_pool",
-            "sent": min(mi, msgs),
-            "total": msgs,
-            "remaining": max(0, msgs - mi),
+    import logging
+
+    try:
+        with m._conn() as c:
+            counts = c.execute(
+                "SELECT status, COUNT(*) n FROM profiles "
+                "WHERE EXISTS (SELECT 1 FROM group_profiles gp WHERE gp.profile_id = profiles.id) "
+                "GROUP BY status"
+            ).fetchall()
+            profiles = c.execute(
+                """
+                SELECT p.*,
+                       GROUP_CONCAT(g.name, ', ') AS group_names,
+                       MIN(g.id) AS primary_group_id
+                FROM profiles p
+                JOIN group_profiles gp ON gp.profile_id = p.id AND gp.is_enabled=1
+                JOIN groups g ON g.id = gp.group_id
+                GROUP BY p.id
+                ORDER BY
+                  CASE p.status
+                    WHEN 'needs_reauth' THEN 0
+                    WHEN 'pending' THEN 1
+                    WHEN 'active' THEN 2
+                    ELSE 3
+                  END,
+                  p.id
+                LIMIT 500
+                """
+            ).fetchall()
+            groups_n = c.execute("SELECT COUNT(*) n FROM groups").fetchone()["n"]
+            sent_today = c.execute(
+                "SELECT COUNT(*) n FROM send_log WHERE date(sent_at)=date('now') AND status='sent'"
+            ).fetchone()["n"]
+            failed_today = c.execute(
+                "SELECT COUNT(*) n FROM send_log WHERE date(sent_at)=date('now') AND status='failed'"
+            ).fetchone()["n"]
+            qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
+        items = []
+        for p in profiles:
+            d = m._profile_auth_view(p)
+            d["circuit_open"] = m._is_circuit_open(p["id"])
+            items.append(d)
+        if m._campaign_goal() == "daily_limits":
+            prog = m._daily_capacity_progress()
+        else:
+            msgs = len(m.load_message_pool())
+            mi = int(qs["message_idx"] if qs else 0)
+            prog = {
+                "goal": "message_pool",
+                "sent": min(mi, msgs),
+                "total": msgs,
+                "remaining": max(0, msgs - mi),
+            }
+        return {
+            "counts": {r["status"]: r["n"] for r in counts},
+            "groups_count": groups_n,
+            "sent_today": sent_today,
+            "failed_today": failed_today,
+            "circuit_open": m._circuit_open_count(),
+            "running": bool(qs and qs["running"]),
+            "auto_run": m._auto_run_enabled(),
+            "campaign_progress": prog,
+            "items": items,
         }
-    return {
-        "counts": {r["status"]: r["n"] for r in counts},
-        "groups_count": groups_n,
-        "sent_today": sent_today,
-        "failed_today": failed_today,
-        "circuit_open": m._circuit_open_count(),
-        "running": bool(qs and qs["running"]),
-        "auto_run": m._auto_run_enabled(),
-        "campaign_progress": prog,
-        "items": items,
-    }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.getLogger(__name__).exception("dashboard failed")
+        raise HTTPException(500, f"Сводка недоступна: {exc}") from exc
 
 
 @router.get("/api/send_log")

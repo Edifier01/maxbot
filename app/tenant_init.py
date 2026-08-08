@@ -57,6 +57,6 @@ def init_global_db(main_module) -> None:
 
     ensure_global_data(main_module.ROOT)
     with tenant_scope(use_global_data=True, role="admin"):
-        if not main_module._db_path().exists():
-            main_module.init_db()
+        # Always migrate: empty file from early _global_conn() must still get schema.
+        main_module.init_db()
         main_module._try_legacy_unlock()

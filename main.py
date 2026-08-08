@@ -555,16 +555,20 @@ def parse_messages_text(raw: str) -> list[str]:
 
 
 def load_message_pool() -> list[str]:
-    if _is_server_mode():
-        conn = _global_conn()
-        rows = conn.execute(
-            "SELECT text FROM message_pool ORDER BY order_index"
-        ).fetchall()
-    else:
-        with _conn() as c:
-            rows = c.execute(
+    try:
+        if _is_server_mode():
+            conn = _global_conn()
+            rows = conn.execute(
                 "SELECT text FROM message_pool ORDER BY order_index"
             ).fetchall()
+        else:
+            with _conn() as c:
+                rows = c.execute(
+                    "SELECT text FROM message_pool ORDER BY order_index"
+                ).fetchall()
+    except sqlite3.OperationalError:
+        # Global/tenant DB missing message_pool (empty file before migrate).
+        return []
     return [r["text"] for r in rows]
 
 

@@ -1170,8 +1170,8 @@
           const detail = j.detail;
           const msg = typeof detail === 'string'
             ? detail
-            : (Array.isArray(detail) ? detail.map(x => x.msg || JSON.stringify(x)).join('; ') : r.statusText);
-          throw new Error(msg || r.statusText);
+            : (Array.isArray(detail) ? detail.map(x => x.msg || JSON.stringify(x)).join('; ') : '');
+          throw new Error(msg || r.statusText || ('HTTP ' + r.status));
         }
         return j;
       });
