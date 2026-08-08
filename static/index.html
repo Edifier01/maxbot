@@ -410,8 +410,9 @@
     #userSummaryBlock { margin-bottom: 1rem; }
     .summary-panel { background: rgba(20,24,36,.9); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 1rem; }
     .summary-panel .panel-title { margin: 0 0 .75rem; }
-    .summary-panel #dashCardsPanel { margin-top: .25rem; background: transparent; border: none; padding: 0; }
+    .summary-panel #dashCardsPanel { margin-top: .25rem; background: transparent; border: none; padding: 0; box-shadow: none; }
     .summary-panel .dash-cards { margin-top: .65rem; }
+    #dashSummaryError { color: var(--danger); font-size: .85rem; margin: .35rem 0 .65rem; }
     .run-badge-slot { margin: .5rem 0 .85rem; }
     .dash-stats { display: flex; flex-wrap: wrap; gap: .65rem; margin-bottom: .85rem; }
     .dash-stat {
@@ -560,8 +561,18 @@
         <div class="panel summary-panel">
           <h3 class="panel-title">Сводка</h3>
           <div id="userSummaryContent">
-            <div id="dashStats" class="dash-stats"></div>
-            <div id="dashCardsPanel" class="panel">
+            <p id="dashSummaryError" class="hint" style="display:none;margin:0 0 .65rem"></p>
+            <div id="dashStats" class="dash-stats">
+              <div class="dash-stat"><div class="n">0</div><div class="l">активны</div></div>
+              <div class="dash-stat"><div class="n">0</div><div class="l">ожидают</div></div>
+              <div class="dash-stat"><div class="n">0</div><div class="l">нужен вход</div></div>
+              <div class="dash-stat"><div class="n">0</div><div class="l">забанены</div></div>
+              <div class="dash-stat"><div class="n">0</div><div class="l">групп</div></div>
+              <div class="dash-stat"><div class="n">0</div><div class="l">успешно сегодня</div></div>
+              <div class="dash-stat"><div class="n">0</div><div class="l">ошибок сегодня</div></div>
+              <div class="dash-stat"><div class="n">0</div><div class="l">в автопаузе</div></div>
+            </div>
+            <div id="dashCardsPanel">
               <div class="row campaign-admin-only">
                 <select id="dashFilter" style="max-width:180px" onchange="loadDashboard()">
                   <option value="">Все статусы</option>
@@ -573,7 +584,9 @@
                 </select>
                 <button class="small" onclick="loadDashboard()">Обновить сводку</button>
               </div>
-              <div id="dashCards" class="dash-cards"></div>
+              <div id="dashCards" class="dash-cards">
+                <div class="empty-state" id="dashCardsPlaceholder"><strong>Загрузка…</strong></div>
+              </div>
             </div>
           </div>
         </div>
@@ -1191,6 +1204,9 @@
         }
       }
       document.body.classList.toggle('simple-campaign', !!simpleCampaign);
+      if (simpleCampaign && document.getElementById('campaign').classList.contains('active')) {
+        loadDashboard().catch(e => toast(e.message, 'error'));
+      }
     }
 
     function applyServerRoleUI() {
@@ -1699,29 +1715,39 @@
         : (d.total ? `<span class="hint">${d.total} записей</span>` : '');
     }
 
-    async function loadDashboard() {
-      const d = await api('/dashboard');
-      renderDashProgress(d);
-      const filter = (document.getElementById('dashFilter') || {}).value || '';
-      const counts = d.counts || {};
-      document.getElementById('dashStats').innerHTML = `
+    function renderDashStats(d) {
+      const counts = (d && d.counts) || {};
+      const el = document.getElementById('dashStats');
+      if (!el) return;
+      el.innerHTML = `
         <div class="dash-stat"><div class="n">${counts.active || 0}</div><div class="l">активны</div></div>
         <div class="dash-stat"><div class="n">${counts.pending || 0}</div><div class="l">ожидают</div></div>
         <div class="dash-stat"><div class="n">${counts.needs_reauth || 0}</div><div class="l">нужен вход</div></div>
         <div class="dash-stat"><div class="n">${counts.banned || 0}</div><div class="l">забанены</div></div>
-        <div class="dash-stat"><div class="n">${d.groups_count || 0}</div><div class="l">групп</div></div>
-        <div class="dash-stat"><div class="n">${d.sent_today || 0}</div><div class="l">успешно сегодня</div></div>
-        <div class="dash-stat"><div class="n">${d.failed_today || 0}</div><div class="l">ошибок сегодня</div></div>
-        <div class="dash-stat"><div class="n">${d.circuit_open || 0}</div><div class="l">в автопаузе</div></div>
+        <div class="dash-stat"><div class="n">${(d && d.groups_count) || 0}</div><div class="l">групп</div></div>
+        <div class="dash-stat"><div class="n">${(d && d.sent_today) || 0}</div><div class="l">успешно сегодня</div></div>
+        <div class="dash-stat"><div class="n">${(d && d.failed_today) || 0}</div><div class="l">ошибок сегодня</div></div>
+        <div class="dash-stat"><div class="n">${(d && d.circuit_open) || 0}</div><div class="l">в автопаузе</div></div>
       `;
-      let items = d.items || [];
-      if (filter) items = items.filter(p => p.status === filter);
-      const box = document.getElementById('dashCards');
-      if (!items.length) {
-        box.innerHTML = '<div class="empty-state"><strong>Нет аккаунтов</strong>Добавьте профили во вкладке «Группы»</div>';
-        return;
-      }
-      box.innerHTML = items.map(p => `
+    }
+
+    async function loadDashboard() {
+      const errEl = document.getElementById('dashSummaryError');
+      try {
+        const d = await api('/dashboard');
+        if (errEl) errEl.style.display = 'none';
+        renderDashProgress(d);
+        renderDashStats(d);
+        const filter = (document.getElementById('dashFilter') || {}).value || '';
+        let items = d.items || [];
+        if (filter) items = items.filter(p => p.status === filter);
+        const box = document.getElementById('dashCards');
+        if (!box) return;
+        if (!items.length) {
+          box.innerHTML = '<div class="empty-state"><strong>Нет аккаунтов</strong>Добавьте профили во вкладке «Группы»</div>';
+          return;
+        }
+        box.innerHTML = items.map(p => `
         <div class="dash-card">
           <div class="phone">${esc(p.phone)}${p.label ? ' · ' + esc(p.label) : ''}</div>
           <div class="meta">
@@ -1737,6 +1763,13 @@
           </div>
         </div>
       `).join('');
+      } catch (e) {
+        if (errEl) {
+          errEl.textContent = 'Не удалось загрузить сводку: ' + (e.message || 'ошибка');
+          errEl.style.display = 'block';
+        }
+        throw e;
+      }
     }
 
     async function startCampaign() {
@@ -2472,9 +2505,11 @@
       markUiReady();
       applyTabFromHash();
       try { await initVaultUI(); } catch (e) { toast(e.message, 'error'); }
-      loadMessages();
+      if (!isUserRole()) {
+        loadMessages();
+        loadSettings();
+      }
       loadGroups();
-      loadSettings();
       if (!isSimpleCampaignView()) {
         loadSendLog();
         loadCampaigns();
@@ -2491,7 +2526,9 @@
         loadCampaigns();
         loadScheduleHint();
       }
-      if (document.getElementById('campaign').classList.contains('active')) loadDashboard();
+      if (document.getElementById('campaign').classList.contains('active')) {
+        loadDashboard().catch(() => {});
+      }
     }, 2000);
   </script>
 </body>

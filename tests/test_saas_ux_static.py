@@ -53,6 +53,9 @@ def test_index_user_dashboard_visible():
     stats_idx = INDEX.index('id="dashStats"')
     content_idx = INDEX.index('id="userSummaryContent"')
     assert content_idx < stats_idx
+    assert "dash-stat" in INDEX
+    assert "renderDashStats" in INDEX
+    assert "dashSummaryError" in INDEX
     assert "maxAdminGlobalTab" not in INDEX
     assert "_adminGlobalMode" not in INDEX
 
