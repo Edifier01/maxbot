@@ -406,11 +406,12 @@
     .empty-state strong { display: block; color: var(--text); margin-bottom: .4rem; font-size: 1rem; }
     .campaign-user-only { display: none; }
     body.simple-campaign .campaign-user-only { display: block; }
+    body.simple-campaign #adminSummarySlot { display: none; }
     #userSummaryBlock { margin-bottom: 1rem; }
-    #userSummaryBlock .panel-title { margin: 0 0 .65rem; }
-    #userSummarySlot .panel {
-      background: transparent; border: none; padding: 0; margin-bottom: 0;
-    }
+    .summary-panel { background: rgba(20,24,36,.9); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 1rem; }
+    .summary-panel .panel-title { margin: 0 0 .75rem; }
+    .summary-panel #dashCardsPanel { margin-top: .25rem; background: transparent; border: none; padding: 0; }
+    .summary-panel .dash-cards { margin-top: .65rem; }
     .run-badge-slot { margin: .5rem 0 .85rem; }
     .dash-stats { display: flex; flex-wrap: wrap; gap: .65rem; margin-bottom: .85rem; }
     .dash-stat {
@@ -556,8 +557,26 @@
         <span id="campaignUserHint" class="hint" style="margin:0;display:none">Запустите один раз — рассылка продолжится автоматически</span>
       </div>
       <div id="userSummaryBlock" class="campaign-user-only">
-        <h3 class="panel-title">Сводка</h3>
-        <div id="userSummarySlot"></div>
+        <div class="panel summary-panel">
+          <h3 class="panel-title">Сводка</h3>
+          <div id="userSummaryContent">
+            <div id="dashStats" class="dash-stats"></div>
+            <div id="dashCardsPanel" class="panel">
+              <div class="row campaign-admin-only">
+                <select id="dashFilter" style="max-width:180px" onchange="loadDashboard()">
+                  <option value="">Все статусы</option>
+                  <option value="active">активен</option>
+                  <option value="pending">ожидает</option>
+                  <option value="needs_reauth">нужен вход</option>
+                  <option value="disabled">отключён</option>
+                  <option value="banned">забанен</option>
+                </select>
+                <button class="small" onclick="loadDashboard()">Обновить сводку</button>
+              </div>
+              <div id="dashCards" class="dash-cards"></div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="toolbar row" style="margin-bottom:.85rem">
         <button class="primary btn-ico" id="btnStart" onclick="withLoading(this, startCampaign)">
@@ -597,23 +616,7 @@
           <span id="dashProgressLabel" class="hint" style="margin:0;white-space:nowrap;min-width:160px;text-align:right"></span>
         </div>
       </div>
-      <div id="adminSummarySlot">
-        <div id="dashStats" class="dash-stats"></div>
-        <div id="dashCardsPanel" class="panel">
-          <div class="row campaign-admin-only">
-            <select id="dashFilter" style="max-width:180px" onchange="loadDashboard()">
-              <option value="">Все статусы</option>
-              <option value="active">активен</option>
-              <option value="pending">ожидает</option>
-              <option value="needs_reauth">нужен вход</option>
-              <option value="disabled">отключён</option>
-              <option value="banned">забанен</option>
-            </select>
-            <button class="small" onclick="loadDashboard()">Обновить сводку</button>
-          </div>
-          <div id="dashCards" class="dash-cards"></div>
-        </div>
-      </div>
+      <div id="adminSummarySlot"></div>
       <div class="panel campaign-admin-only">
         <div class="panel-title">Живой лог</div>
         <div id="campaignLog" class="log" style="margin-top:0"></div>
@@ -1166,11 +1169,11 @@
     }
 
     function mountCampaignLayout(simpleCampaign) {
-      const userSlot = document.getElementById('userSummarySlot');
+      const userContent = document.getElementById('userSummaryContent');
       const adminSlot = document.getElementById('adminSummarySlot');
       const dashStats = document.getElementById('dashStats');
       const dashCardsPanel = document.getElementById('dashCardsPanel');
-      const target = simpleCampaign ? userSlot : adminSlot;
+      const target = simpleCampaign ? userContent : adminSlot;
       if (dashStats && target && dashStats.parentElement !== target) {
         target.appendChild(dashStats);
         if (dashCardsPanel) target.appendChild(dashCardsPanel);
@@ -2479,7 +2482,7 @@
       }
       refreshStatus();
       connectStatusWs();
-      loadDashboard();
+      try { await loadDashboard(); } catch (e) { toast(e.message, 'error'); }
     })();
     setInterval(() => {
       if (document.getElementById('groups').classList.contains('active') && !authModalOpen) loadGroups();
