@@ -1314,6 +1314,20 @@ async def resolve_chat_id(client, group: sqlite3.Row) -> str | None:
     return cid
 
 
+def _setting_float(key: str, default: float) -> float:
+    try:
+        return float(get_setting(key) or str(default))
+    except ValueError:
+        return default
+
+
+def _setting_int(key: str, default: int) -> int:
+    try:
+        return int(float(get_setting(key) or str(default)))
+    except ValueError:
+        return default
+
+
 def _setting_truthy(key: str, default: str = "0") -> bool:
     return (get_setting(key) or default).strip().lower() in ("1", "true", "yes", "on")
 
