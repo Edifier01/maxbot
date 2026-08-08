@@ -572,8 +572,8 @@
               <div class="dash-stat"><div class="n">0</div><div class="l">ошибок сегодня</div></div>
               <div class="dash-stat"><div class="n">0</div><div class="l">в автопаузе</div></div>
             </div>
-            <div id="dashCardsPanel">
-              <div class="row campaign-admin-only">
+            <div id="dashCardsPanel" class="campaign-admin-only">
+              <div class="row">
                 <select id="dashFilter" style="max-width:180px" onchange="loadDashboard()">
                   <option value="">Все статусы</option>
                   <option value="active">активен</option>
@@ -584,9 +584,7 @@
                 </select>
                 <button class="small" onclick="loadDashboard()">Обновить сводку</button>
               </div>
-              <div id="dashCards" class="dash-cards">
-                <div class="empty-state" id="dashCardsPlaceholder"><strong>Загрузка…</strong></div>
-              </div>
+              <div id="dashCards" class="dash-cards"></div>
             </div>
           </div>
         </div>
@@ -1186,10 +1184,13 @@
       const adminSlot = document.getElementById('adminSummarySlot');
       const dashStats = document.getElementById('dashStats');
       const dashCardsPanel = document.getElementById('dashCardsPanel');
-      const target = simpleCampaign ? userContent : adminSlot;
-      if (dashStats && target && dashStats.parentElement !== target) {
-        target.appendChild(dashStats);
-        if (dashCardsPanel) target.appendChild(dashCardsPanel);
+      // User summary: stats tiles only. Profile cards stay admin-only.
+      if (dashStats && userContent && adminSlot) {
+        const statsTarget = simpleCampaign ? userContent : adminSlot;
+        if (dashStats.parentElement !== statsTarget) statsTarget.appendChild(dashStats);
+      }
+      if (dashCardsPanel && adminSlot && dashCardsPanel.parentElement !== adminSlot) {
+        adminSlot.appendChild(dashCardsPanel);
       }
       const runBadge = document.getElementById('runBadge');
       const runBadgeSlot = document.getElementById('runBadgeSlot');
@@ -1738,6 +1739,7 @@
         if (errEl) errEl.style.display = 'none';
         renderDashProgress(d);
         renderDashStats(d);
+        if (isSimpleCampaignView()) return;
         const filter = (document.getElementById('dashFilter') || {}).value || '';
         let items = d.items || [];
         if (filter) items = items.filter(p => p.status === filter);

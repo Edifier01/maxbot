@@ -56,6 +56,7 @@ def test_index_user_dashboard_visible():
     assert "dash-stat" in INDEX
     assert "renderDashStats" in INDEX
     assert "dashSummaryError" in INDEX
+    assert 'id="dashCardsPanel" class="campaign-admin-only"' in INDEX
     assert "maxAdminGlobalTab" not in INDEX
     assert "_adminGlobalMode" not in INDEX
 
