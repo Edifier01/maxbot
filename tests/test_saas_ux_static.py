@@ -11,7 +11,7 @@ ADMIN = (ROOT / "static" / "admin.html").read_text(encoding="utf-8")
 
 def test_index_subscription_start_gate_and_no_svodka_tab():
     assert "оформите подписку" in INDEX
-    assert "Сводка" not in INDEX
+    assert 'data-tab="svodka"' not in INDEX
     assert 'data-tab="campaign"' in INDEX
     assert "Отправка:" in INDEX
     assert "p.status === 'banned'" in INDEX
@@ -45,9 +45,21 @@ def test_index_user_dashboard_visible():
     assert "dashStats" in INDEX
     assert "dashCards" in INDEX
     assert 'id="dashCards"' in INDEX
-    idx = INDEX.index('id="dashCards"')
-    panel_start = INDEX.rfind('<div class="panel">', 0, idx)
-    panel_snippet = INDEX[panel_start:idx + 80]
-    assert "campaign-admin-only" not in panel_snippet.split("dashCards")[0] or "dashCards" in panel_snippet
+    assert 'id="userSummaryBlock"' in INDEX
+    assert 'id="userSummarySlot"' in INDEX
+    assert 'id="adminSummarySlot"' in INDEX
+    assert "Сводка" in INDEX
     assert "maxAdminGlobalTab" not in INDEX
     assert "_adminGlobalMode" not in INDEX
+
+
+def test_index_simple_campaign_layout_slots():
+    assert 'id="runBadgeSlot"' in INDEX
+    assert "mountCampaignLayout" in INDEX
+    assert "campaign-user-only" in INDEX
+    user_block = INDEX.index('id="userSummaryBlock"')
+    toolbar = INDEX.index('class="toolbar row"', user_block)
+    assert user_block < toolbar
+    slot = INDEX.index('id="runBadgeSlot"')
+    schedule = INDEX.index('id="scheduleAt"', slot)
+    assert slot < schedule

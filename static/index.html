@@ -404,6 +404,13 @@
       background: rgba(20,24,36,.4);
     }
     .empty-state strong { display: block; color: var(--text); margin-bottom: .4rem; font-size: 1rem; }
+    .campaign-user-only { display: none; }
+    #userSummaryBlock { margin-bottom: 1rem; }
+    #userSummaryBlock .panel-title { margin: 0 0 .65rem; }
+    #userSummarySlot .panel {
+      background: transparent; border: none; padding: 0; margin-bottom: 0;
+    }
+    .run-badge-slot { margin: .5rem 0 .85rem; }
     .dash-stats { display: flex; flex-wrap: wrap; gap: .65rem; margin-bottom: .85rem; }
     .dash-stat {
       background: rgba(20,24,36,.9); border: 1px solid var(--line-soft); border-radius: var(--radius-sm);
@@ -547,6 +554,10 @@
         <span id="campaignAdminHint" class="hint" style="margin:0">Старт / пауза / стоп без потери прогресса</span>
         <span id="campaignUserHint" class="hint" style="margin:0;display:none">Запустите один раз — рассылка продолжится автоматически</span>
       </div>
+      <div id="userSummaryBlock" class="campaign-user-only">
+        <h3 class="panel-title">Сводка</h3>
+        <div id="userSummarySlot"></div>
+      </div>
       <div class="toolbar row" style="margin-bottom:.85rem">
         <button class="primary btn-ico" id="btnStart" onclick="withLoading(this, startCampaign)">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Старт
@@ -564,6 +575,7 @@
         <button class="small campaign-admin-only" onclick="withLoading(this, testSend)">Тест</button>
         <button class="small campaign-admin-only" onclick="withLoading(this, retryFailed)">Повторить ошибки</button>
       </div>
+      <div id="runBadgeSlot" class="campaign-user-only run-badge-slot"></div>
       <div class="row campaign-admin-only" style="margin-bottom:0">
         <label for="scheduleAt" class="hint" style="margin:0">Запланировать на</label>
         <input id="scheduleAt" type="datetime-local" name="schedule_at" style="max-width:220px">
@@ -584,20 +596,22 @@
           <span id="dashProgressLabel" class="hint" style="margin:0;white-space:nowrap;min-width:160px;text-align:right"></span>
         </div>
       </div>
-      <div id="dashStats" class="dash-stats"></div>
-      <div class="panel">
-        <div class="row campaign-admin-only">
-          <select id="dashFilter" style="max-width:180px" onchange="loadDashboard()">
-            <option value="">Все статусы</option>
-            <option value="active">активен</option>
-            <option value="pending">ожидает</option>
-            <option value="needs_reauth">нужен вход</option>
-            <option value="disabled">отключён</option>
-            <option value="banned">забанен</option>
-          </select>
-          <button class="small" onclick="loadDashboard()">Обновить сводку</button>
+      <div id="adminSummarySlot">
+        <div id="dashStats" class="dash-stats"></div>
+        <div id="dashCardsPanel" class="panel">
+          <div class="row campaign-admin-only">
+            <select id="dashFilter" style="max-width:180px" onchange="loadDashboard()">
+              <option value="">Все статусы</option>
+              <option value="active">активен</option>
+              <option value="pending">ожидает</option>
+              <option value="needs_reauth">нужен вход</option>
+              <option value="disabled">отключён</option>
+              <option value="banned">забанен</option>
+            </select>
+            <button class="small" onclick="loadDashboard()">Обновить сводку</button>
+          </div>
+          <div id="dashCards" class="dash-cards"></div>
         </div>
-        <div id="dashCards" class="dash-cards"></div>
       </div>
       <div class="panel campaign-admin-only">
         <div class="panel-title">Живой лог</div>
@@ -1150,9 +1164,37 @@
       document.body.classList.add('ui-ready');
     }
 
+    function mountCampaignLayout(simpleCampaign) {
+      const userSlot = document.getElementById('userSummarySlot');
+      const adminSlot = document.getElementById('adminSummarySlot');
+      const dashStats = document.getElementById('dashStats');
+      const dashCardsPanel = document.getElementById('dashCardsPanel');
+      const target = simpleCampaign ? userSlot : adminSlot;
+      if (dashStats && target && dashStats.parentElement !== target) {
+        target.appendChild(dashStats);
+        if (dashCardsPanel) target.appendChild(dashCardsPanel);
+      }
+      const runBadge = document.getElementById('runBadge');
+      const runBadgeSlot = document.getElementById('runBadgeSlot');
+      const headerMeta = document.querySelector('.header-meta');
+      const subBadge = document.getElementById('subscriptionBadge');
+      if (runBadge && headerMeta) {
+        if (simpleCampaign && runBadgeSlot) {
+          if (runBadge.parentElement !== runBadgeSlot) runBadgeSlot.appendChild(runBadge);
+        } else if (runBadge.parentElement !== headerMeta) {
+          if (subBadge) subBadge.insertAdjacentElement('afterend', runBadge);
+          else headerMeta.insertBefore(runBadge, headerMeta.firstChild);
+        }
+      }
+      document.querySelectorAll('.campaign-user-only').forEach(el => {
+        el.style.display = simpleCampaign ? '' : 'none';
+      });
+    }
+
     function applyServerRoleUI() {
       const isUser = isUserRole();
       const simpleCampaign = isSimpleCampaignView();
+      mountCampaignLayout(simpleCampaign);
       document.querySelectorAll('nav button[data-tab="messages"], nav button[data-tab="settings"]').forEach(el => {
         el.style.display = isUser ? 'none' : '';
       });
