@@ -405,6 +405,7 @@
     }
     .empty-state strong { display: block; color: var(--text); margin-bottom: .4rem; font-size: 1rem; }
     .campaign-user-only { display: none; }
+    body.simple-campaign .campaign-user-only { display: block; }
     #userSummaryBlock { margin-bottom: 1rem; }
     #userSummaryBlock .panel-title { margin: 0 0 .65rem; }
     #userSummarySlot .panel {
@@ -1186,9 +1187,7 @@
           else headerMeta.insertBefore(runBadge, headerMeta.firstChild);
         }
       }
-      document.querySelectorAll('.campaign-user-only').forEach(el => {
-        el.style.display = simpleCampaign ? '' : 'none';
-      });
+      document.body.classList.toggle('simple-campaign', !!simpleCampaign);
     }
 
     function applyServerRoleUI() {

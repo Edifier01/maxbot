@@ -57,6 +57,8 @@ def test_index_simple_campaign_layout_slots():
     assert 'id="runBadgeSlot"' in INDEX
     assert "mountCampaignLayout" in INDEX
     assert "campaign-user-only" in INDEX
+    assert "body.simple-campaign .campaign-user-only" in INDEX
+    assert "classList.toggle('simple-campaign'" in INDEX
     user_block = INDEX.index('id="userSummaryBlock"')
     toolbar = INDEX.index('class="toolbar row"', user_block)
     assert user_block < toolbar
