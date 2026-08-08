@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 
 
@@ -25,8 +24,6 @@ def test_load_message_pool_missing_table_returns_empty(tmp_path, monkeypatch):
     # Empty SQLite file without schema (simulates early _global_conn create).
     sqlite3.connect(global_db).close()
 
-    monkeypatch.setattr(m, "_global_db_path", lambda: global_db)
-    # Clear cached conn so path override applies.
     from app import sqlite_backend
 
     sqlite_backend.reset_connections()
@@ -58,8 +55,19 @@ def test_dashboard_ok_with_empty_tenant(tmp_path, monkeypatch):
 
     from app import routes_dashboard
 
+    async def _call():
+        return await routes_dashboard.dashboard()
+
     with tenant_scope(tenant_id=1, role="user"):
-        data = asyncio.run(routes_dashboard.dashboard())
+        # nest_asyncio-free: use dedicated loop for this sync test
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            data = loop.run_until_complete(_call())
+        finally:
+            loop.close()
+
     assert "counts" in data
     assert data["groups_count"] == 0
     assert data["items"] == []
