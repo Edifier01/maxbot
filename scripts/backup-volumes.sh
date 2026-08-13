@@ -15,10 +15,9 @@ echo "  PostgreSQL dump…"
 docker compose exec -T postgres pg_dump -U maxsender -Fc maxsender > "$DEST/pg.dump"
 
 echo "  max_server_data volume…"
-docker compose run --rm --no-deps \
-  -v max_server_data:/data:ro \
-  -v "$DEST:/backup" \
-  alpine sh -c 'tar czf /backup/data.tar.gz -C /data .'
+# App image has tar; compose has no alpine service. -T keeps the archive binary-clean.
+docker compose run --rm -T --no-deps --entrypoint tar \
+  app czf - -C /app/data . > "$DEST/data.tar.gz"
 
 cat > "$DEST/README.txt" <<EOF
 MAX Sender backup $STAMP

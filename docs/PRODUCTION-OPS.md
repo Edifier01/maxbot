@@ -132,10 +132,15 @@ docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --i
 
 ```bash
 docker compose stop app celery-worker
-docker compose run --rm --no-deps \
-  -v max_server_data:/data \
+docker compose run --rm -T --no-deps \
   -v "$(pwd)/backups/<stamp>:/backup:ro" \
-  alpine sh -c 'find /data -mindepth 1 -delete && tar xzf /backup/data.tar.gz -C /data'
+  --entrypoint python \
+  app -c 'import pathlib, shutil, tarfile
+root = pathlib.Path("/app/data")
+for child in list(root.iterdir()):
+    shutil.rmtree(child) if child.is_dir() else child.unlink()
+with tarfile.open("/backup/data.tar.gz") as archive:
+    archive.extractall(root, filter="data")'
 docker compose up -d
 ```
 
