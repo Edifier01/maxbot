@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  # Full suite with Postgres so DATABASE_URL skipif modules cannot silently skip.
-  # server-e2e kept as a focused e2e gate (acceptable duplicate cost for now).
+  # SQLite suite stays without DATABASE_URL. Postgres service + second step
+  # run skipif modules so they cannot silently skip. server-e2e remains a focused gate.
   server-smoke:
     runs-on: ubuntu-latest
     services:
@@ -33,7 +33,15 @@ jobs:
         run: |
           pip install -r requirements.txt -r requirements-server.txt
           pip install pytest httpx
+      # DATABASE_URL on the full suite leaks into SQLite tests (db_pg / JWT import order).
+      # Keep skipif modules honest with a separate Postgres invocation.
       - name: Server tests
+        env:
+          MAX_TEST: "1"
+          MAX_SERVER_MODE: "1"
+          JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
+        run: python -m pytest tests/ -q
+      - name: Postgres skipif modules
         env:
           DATABASE_URL: postgresql://maxsender:testpass@localhost:5432/maxsender
           MAX_TEST: "1"
@@ -42,7 +50,13 @@ jobs:
           ADMIN_EMAIL: admin@example.com
           ADMIN_PASSWORD: CiAdminPass123!
           INTERNAL_SERVICE_TOKEN: ci-internal-token
-        run: python -m pytest tests/ -q
+        run: >
+          python -m pytest -q
+          tests/test_e2e_server.py
+          tests/test_cross_tenant_api.py
+          tests/test_auth_remember_me.py
+          tests/test_register_rollback.py
+          tests/test_admin_impersonation_campaign.py
 
   compose-config:
     runs-on: ubuntu-latest
