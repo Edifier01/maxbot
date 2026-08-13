@@ -50,13 +50,19 @@ jobs:
           ADMIN_EMAIL: admin@example.com
           ADMIN_PASSWORD: CiAdminPass123!
           INTERNAL_SERVICE_TOKEN: ci-internal-token
-        run: >
-          python -m pytest -q
-          tests/test_e2e_server.py
-          tests/test_cross_tenant_api.py
-          tests/test_auth_remember_me.py
-          tests/test_register_rollback.py
-          tests/test_admin_impersonation_campaign.py
+        run: |
+          set -euo pipefail
+          for f in \
+            tests/test_e2e_server.py \
+            tests/test_cross_tenant_api.py \
+            tests/test_auth_remember_me.py \
+            tests/test_register_rollback.py \
+            tests/test_admin_impersonation_campaign.py
+          do
+            echo "::group::${f}"
+            python -m pytest -q --tb=short "$f"
+            echo "::endgroup::"
+          done
 
   compose-config:
     runs-on: ubuntu-latest
