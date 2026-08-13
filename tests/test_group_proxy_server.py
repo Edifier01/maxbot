@@ -1,4 +1,4 @@
-"""G-2: tenant can set group proxy in server mode via PATCH /api/groups."""
+"""G-2: admin (impersonating) can set group proxy; cabinet user cannot."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def test_server_mode_patch_group_keeps_proxy(tmp_path, monkeypatch):
     from app.routes_models import GroupPatchIn
 
     ensure_tenant_data(m.ROOT, 1)
-    with tenant_scope(tenant_id=1, role="user"):
+    with tenant_scope(tenant_id=1, role="admin", impersonating=True):
         if not m._db_path().exists():
             m.init_db()
         with m._conn() as c:

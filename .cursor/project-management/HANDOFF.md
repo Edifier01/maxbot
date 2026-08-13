@@ -10,7 +10,11 @@
 7. Use `/start-feature ...` for non-trivial changes.
 8. Update these project-management files after meaningful work.
 
-## Latest (2026-08-09)
+## Latest (2026-08-13)
+- **FEATURE-REVIEW-FIX-2026 wave 1 COMPLETE** — API cabinet lock (pause/reset/test/schedule/retry/settings/messages/group proxy/`is_active`/bulk 403 for `role=user`); impersonation 403 on `/api/admin`; Compose `REGISTRATION_OPEN=0`; `stop_worker` no self-await; watchdog respects `auto_run`; reset re-exported; backup before upgrade; restore fail-closed. Verifier [PASS WITH NOTES](5a1474e2-4f02-48c1-8bb0-44e49c1ad2d2); QA [PASS](db0cab57-e8b4-42ef-add7-00032226ebe1). Parent pytest **148 passed, 19 skipped**. Residual: profile-level proxy on add-phone still allowed for user.
+- **FEATURE-UX-OPS-2026 COMPLETE** — pause clears `auto_run`; admin settings allowlist-copy to tenant SQLite (ADR 007); subscription extend from remaining + revoke; group `is_active` PATCH + `phone=` lookup; global TXT replace resets tenant queue; UI: tenant simple cabinet (no progress), impersonation full ops, auth Enter, file upload feedback. Verifier [PASS WITH NOTES](d9ef07ec-e2be-40fb-a98f-9de1afcae56b). Parent pytest **131 passed, 19 skipped**. Residual pause/`is_active` APIs closed by REVIEW-FIX wave 1.
+
+## Prior (2026-08-09)
 - **FEATURE-VAULT-CI-2026 COMPLETE** — vault hot-path `main`→`app.vault` per-`data_dir`; shutdown encrypt per tenant; ADR-006 + HOW-IT-WORKS `.app_key` threat model; CI `server-smoke` + Postgres/`DATABASE_URL`; `tests/test_vault_hot_path_isolation.py`. Agents: security ADR [e3cb7f15](e3cb7f15-7181-4370-9671-63046d3d1166), devops [15b477e9](15b477e9-5f4a-4f40-a546-6623ef020be6), backend [ce6c2f60](ce6c2f60-8a20-4345-894f-2d71774d0b43), qa [4b9a2ee9](4b9a2ee9-9ba9-4911-bdfe-7a9b3649e378), verifier [56c95f7b](56c95f7b-5643-4db8-842f-ffea53ed94e4) PASS WITH NOTES, security spot-check [4da280c8](4da280c8-fcc5-4f8c-aca5-74ef3ece34dd) PASS WITH NOTES. Parent pytest: **110 passed, 13 skipped**.
 
 ## Prior (2026-08-08)

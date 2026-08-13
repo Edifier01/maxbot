@@ -564,6 +564,36 @@ def load_message_pool() -> list[str]:
     return [r["text"] for r in rows]
 
 
+def _reset_current_queue_for_new_pool(n: int) -> None:
+    """Reset send-queue indices + message bag. Does not touch send_log."""
+    with _conn() as c:
+        c.execute(
+            "UPDATE queue_state SET profile_idx=0, message_idx=0, group_idx=0 WHERE id=1"
+        )
+    _rebuild_message_bag(n)
+
+
+def _reset_all_tenants_queue_for_new_pool(n: int) -> None:
+    """After global TXT replace, every tenant must restart pool indices."""
+    from app.tenant import tenant_scope
+
+    tenants_root = ROOT / "data" / "tenants"
+    if not tenants_root.is_dir():
+        return
+    for entry in sorted(tenants_root.iterdir()):
+        if not entry.is_dir() or not (entry / "app.db").is_file():
+            continue
+        try:
+            tid = int(entry.name)
+        except ValueError:
+            continue
+        with tenant_scope(tenant_id=tid, role="user"):
+            try:
+                _reset_current_queue_for_new_pool(n)
+            except sqlite3.OperationalError:
+                continue
+
+
 def save_messages_file(content: bytes) -> int:
     text = content.decode("utf-8-sig")
     messages = parse_messages_text(text)
@@ -574,12 +604,13 @@ def save_messages_file(content: bytes) -> int:
     msg_file = global_dir / "active.txt" if _is_server_mode() else MESSAGES_FILE
     msg_file.write_bytes(content)
     if _is_server_mode():
-        conn = _global_conn()
-        conn.execute("DELETE FROM message_pool")
-        conn.executemany(
-            "INSERT INTO message_pool (text, order_index) VALUES (?, ?)",
-            [(m, i) for i, m in enumerate(messages)],
-        )
+        with _global_conn() as conn:
+            conn.execute("DELETE FROM message_pool")
+            conn.executemany(
+                "INSERT INTO message_pool (text, order_index) VALUES (?, ?)",
+                [(m, i) for i, m in enumerate(messages)],
+            )
+        _reset_all_tenants_queue_for_new_pool(len(messages))
     else:
         with _conn() as c:
             c.execute("DELETE FROM message_pool")
@@ -587,10 +618,7 @@ def save_messages_file(content: bytes) -> int:
                 "INSERT INTO message_pool (text, order_index) VALUES (?, ?)",
                 [(m, i) for i, m in enumerate(messages)],
             )
-            c.execute(
-                "UPDATE queue_state SET profile_idx=0, message_idx=0, group_idx=0 WHERE id=1"
-            )
-    _rebuild_message_bag(len(messages))
+        _reset_current_queue_for_new_pool(len(messages))
     return len(messages)
 
 
@@ -2169,6 +2197,7 @@ from app.campaign_worker import (
     begin_campaign as _begin_campaign,
     finish_campaign as _finish_campaign,
     notify_campaign_end as _notify_campaign_end,
+    reset_queue_progress as _reset_queue_progress,
     schedule_telegram as _schedule_telegram,
     scheduler_loop as _scheduler_loop,
     start_worker as _start_worker,

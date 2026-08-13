@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import logging
 import shutil
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -16,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 import antiban_core
 from app import auth, db_pg
-from app.tenant import get_user_id, is_admin
+from app.tenant import get_user_id, is_admin, is_impersonating
 from app.tenant_sqlite import tenant_conn
 from app.runtime import main as app_main
 
@@ -74,6 +73,8 @@ class AdminTenantSettingsIn(BaseModel):
 
 
 def _require_admin() -> int:
+    if is_impersonating():
+        raise HTTPException(403, "Недоступно в режиме impersonation")
     if not is_admin():
         raise HTTPException(403, "Только админ")
     uid = get_user_id()
@@ -132,14 +133,23 @@ async def grant_subscription(tenant_id: int, body: SubscriptionIn):
     tenant = db_pg.get_tenant(tenant_id)
     if not tenant:
         raise HTTPException(404, "Учреждение не найдено")
-    expires = datetime.now(timezone.utc) + timedelta(days=body.days)
-    db_pg.grant_subscription(tenant_id, expires, admin_id)
+    expires = db_pg.extend_subscription(tenant_id, body.days, admin_id)
     return {"ok": True, "expires_at": expires.isoformat()}
 
 
 @router.post("/users/{tenant_id}/subscription/month")
 async def grant_subscription_month(tenant_id: int):
     return await grant_subscription(tenant_id, SubscriptionIn(days=30))
+
+
+@router.post("/users/{tenant_id}/subscription/revoke")
+async def revoke_subscription(tenant_id: int):
+    admin_id = _require_admin()
+    tenant = db_pg.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(404, "Учреждение не найдено")
+    expires = db_pg.revoke_subscription(tenant_id, admin_id)
+    return {"ok": True, "active": False, "expires_at": expires.isoformat()}
 
 
 def _drop_tenant_sqlite(tenant_id: int) -> None:

@@ -68,18 +68,26 @@
       color: var(--accent); background: none; border: none; cursor: pointer; font: inherit;
       display: inline-flex; align-items: center; min-height: var(--touch-min); padding: .35rem .25rem;
     }
+    a:hover, button.link:hover { text-decoration: underline; color: #93c5fd; }
     table { width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: 1rem; }
     th, td { text-align: left; padding: .55rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
     th { color: var(--muted); font-weight: 600; }
     .panel { background: var(--bg-soft); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }
-    input, button.btn {
+    input, select, textarea {
+      padding: .45rem .65rem; border-radius: var(--radius-sm); border: 1px solid var(--line);
+      background: var(--bg); color: var(--text); cursor: text; font-family: inherit;
+    }
+    input[type="file"], input[type="checkbox"], input[type="radio"] { cursor: pointer; }
+    button.btn {
       padding: .45rem .65rem; border-radius: var(--radius-sm); border: 1px solid var(--line);
       background: var(--bg); color: var(--text); cursor: pointer; font-family: inherit;
     }
     button.btn:hover:not(:disabled) { border-color: var(--accent); }
     button.btn:disabled { opacity: .55; cursor: wait; }
     button.btn.primary { background: var(--accent-dim); border-color: rgba(147,197,253,.25); color: #fff; }
+    button.btn.primary:hover:not(:disabled) { filter: brightness(1.06); }
     button.btn.danger { background: rgba(127,29,29,.55); border-color: #991b1b; color: #fca5a5; }
+    button.btn.danger:hover:not(:disabled) { filter: brightness(1.08); border-color: #b91c1c; }
     .badge {
       padding: .22rem .65rem; border-radius: 999px; font-size: .72rem;
       font-weight: 600; letter-spacing: .02em; border: 1px solid transparent;
@@ -240,19 +248,19 @@
     <section id="settings">
     <div class="panel" id="globalSettingsPanel">
       <strong>Настройки рассылки</strong>
-      <p class="hint" style="margin:.35rem 0 .75rem">Глобальные параметры антибана и лимитов (общие для сервера).</p>
-      <div class="settings-row"><label>Мин. пауза (сек)</label><div class="controls"><input id="delayMin" type="number"></div></div>
-      <div class="settings-row"><label>Макс. пауза (сек)</label><div class="controls"><input id="delayMax" type="number"></div></div>
-      <div class="settings-row"><label>Лимит/день мин</label><div class="controls"><input id="dayLimitMin" type="number" min="1"></div></div>
-      <div class="settings-row"><label>Лимит/день макс</label><div class="controls"><input id="dayLimitMax" type="number" min="1"></div></div>
-      <div class="settings-row"><label>Разброс (%)</label><div class="controls"><input id="jitter" type="number"></div></div>
-      <div class="settings-row"><label>Режим сообщений</label><div class="controls">
+      <p class="hint" style="margin:.35rem 0 .75rem">Параметры антибана и лимитов. Сохранение применяется ко всем учреждениям.</p>
+      <div class="settings-row"><label for="delayMin">Мин. пауза (сек)</label><div class="controls"><input id="delayMin" type="number"></div></div>
+      <div class="settings-row"><label for="delayMax">Макс. пауза (сек)</label><div class="controls"><input id="delayMax" type="number"></div></div>
+      <div class="settings-row"><label for="dayLimitMin">Лимит/день мин</label><div class="controls"><input id="dayLimitMin" type="number" min="1"></div></div>
+      <div class="settings-row"><label for="dayLimitMax">Лимит/день макс</label><div class="controls"><input id="dayLimitMax" type="number" min="1"></div></div>
+      <div class="settings-row"><label for="jitter">Разброс (%)</label><div class="controls"><input id="jitter" type="number"></div></div>
+      <div class="settings-row"><label for="msgPickMode">Режим сообщений</label><div class="controls">
         <select id="msgPickMode">
           <option value="random_norepeat">Случайно без повтора</option>
           <option value="round_robin">По кругу</option>
         </select>
       </div></div>
-      <div class="settings-row"><label>Цель кампании</label><div class="controls">
+      <div class="settings-row"><label for="campaignGoal">Цель кампании</label><div class="controls">
         <select id="campaignGoal">
           <option value="daily_limits">Дневные лимиты аккаунтов</option>
           <option value="message_pool">Исчерпать пул TXT</option>
@@ -283,8 +291,10 @@
       <strong>Сообщения (пул)</strong>
       <p class="hint" style="margin:.35rem 0 .75rem">Один файл на все аккаунты. Каждая строка — одно сообщение. Загрузка заменяет предыдущий пул.</p>
       <div class="row">
-        <input type="file" id="msgFile" accept=".txt">
-        <button class="btn primary" id="btnUploadMessages" onclick="uploadAdminMessages()">Загрузить</button>
+        <label for="msgFile" class="hint" style="margin:0">Файл (.txt)</label>
+        <input type="file" id="msgFile" accept=".txt" aria-label="Файл сообщений" onchange="onAdminMsgFileChange()">
+        <span id="msgFileStatus" class="hint" style="margin:0">Файл не выбран</span>
+        <button class="btn primary" id="btnUploadMessages" disabled onclick="uploadAdminMessages()">Загрузить</button>
       </div>
       <p class="hint" id="msgMeta" style="margin:.65rem 0 0">—</p>
       <ul id="msgPreview" class="preview" style="display:none"></ul>
@@ -402,6 +412,10 @@
       const data = await api('/admin/users');
       const items = data.items;
       const tbody = document.getElementById('usersBody');
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="hint">Учреждений пока нет</td></tr>';
+        return;
+      }
       tbody.innerHTML = items.map(u => {
         const sub = u.subscription;
         const subBadge = sub.active
@@ -414,22 +428,27 @@
               const hint = days !== null && days <= 7 ? ` (${days} дн.)` : '';
               return `<span class="badge ${cls} tabular-nums">до ${exp}${hint}</span>`;
             })()
-          : '<span class="badge stop">нет</span>';
+          : (sub.expires_at
+              ? `<span class="badge warn tabular-nums">истекла ${formatAdminDate(sub.expires_at)}</span>`
+              : '<span class="badge stop">нет</span>');
         return `<tr>
           <td>${esc(u.institution_name)}</td>
           <td>${esc(u.email)}</td>
           <td>${subBadge}</td>
-          <td id="stats-${u.tenant_id}"><button class="btn" onclick="loadStats(${u.tenant_id})">Загрузить</button></td>
+          <td id="stats-${u.tenant_id}"><button class="btn" onclick="loadStats(${u.tenant_id})">Статистика</button></td>
           <td>
             <span class="row">
-              <input type="number" id="pool-${u.tenant_id}" min="1" max="32" value="1" style="width:3.2rem;text-align:center">
+              <input type="number" id="pool-${u.tenant_id}" min="1" max="32" value="1" style="width:3.2rem;text-align:center" aria-label="Пул воркеров">
               <button class="btn" onclick="saveWorkerPool(${u.tenant_id}, this)">Сохранить</button>
             </span>
           </td>
           <td>
             <div class="row">
-              <button class="btn primary" onclick="impersonate(${u.tenant_id})">Войти в кабинет</button>
+              <button class="btn primary" data-action="impersonate" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Войти в кабинет</button>
               <button class="btn" data-action="grant-month" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">+30 дней</button>
+              <input type="number" id="sub-days-${u.tenant_id}" min="1" max="3650" value="30" style="width:3.5rem;text-align:center" aria-label="Дней продления">
+              <button class="btn" data-action="grant-days" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Продлить</button>
+              <button class="btn danger" data-action="revoke-sub" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Отозвать</button>
               <button class="btn danger" data-action="delete-user" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Удалить</button>
             </div>
           </td>
@@ -473,9 +492,17 @@
       return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
     async function loadStats(tid) {
-      const s = await api('/admin/tenants/' + tid + '/stats');
-      document.getElementById('stats-' + tid).innerHTML =
-        `<span class="tabular-nums">групп: ${s.groups}, акк: ${s.profiles}, ✓${s.sent} ✗${s.failed}</span>`;
+      const cell = document.getElementById('stats-' + tid);
+      try {
+        const s = await api('/admin/tenants/' + tid + '/stats');
+        if (cell) {
+          cell.innerHTML =
+            `<span class="tabular-nums">групп: ${s.groups}, акк: ${s.profiles}, ✓${s.sent} ✗${s.failed}</span>`;
+        }
+      } catch (e) {
+        if (cell) cell.innerHTML = '<span class="hint">' + esc(e.message || 'Ошибка') + '</span>';
+        toast(e.message || 'Не удалось загрузить статистику', 'error');
+      }
     }
     function rememberAdminToken() {
       if (sessionStorage.getItem('maxImpersonating')) return;
@@ -544,35 +571,63 @@
         empty.style.display = 'block';
       }
     }
+    function formatFileSize(n) {
+      if (n < 1024) return n + ' Б';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ';
+      return (n / (1024 * 1024)).toFixed(1) + ' МБ';
+    }
+    function onAdminMsgFileChange() {
+      const input = document.getElementById('msgFile');
+      const status = document.getElementById('msgFileStatus');
+      const btn = document.getElementById('btnUploadMessages');
+      const f = input && input.files && input.files[0];
+      if (!f) {
+        if (status) status.textContent = 'Файл не выбран';
+        if (btn) btn.disabled = true;
+        return;
+      }
+      if (status) status.textContent = f.name + ' · ' + formatFileSize(f.size);
+      if (btn) btn.disabled = false;
+    }
     async function uploadAdminMessages() {
-      const f = document.getElementById('msgFile').files[0];
+      const input = document.getElementById('msgFile');
+      const f = input && input.files[0];
       if (!f) {
         toast('Выберите файл', 'error');
         return;
       }
       if (!confirm('Заменить текущие сообщения?')) return;
       const btn = document.getElementById('btnUploadMessages');
-      if (btn) btn.disabled = true;
+      const orig = btn ? btn.textContent : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Загрузка…';
+      }
       try {
         const fd = new FormData();
         fd.append('file', f);
-        await api('/messages/upload', { method: 'POST', body: fd });
-        document.getElementById('msgFile').value = '';
-        toast('Сообщения загружены', 'success');
+        const r = await api('/messages/upload', { method: 'POST', body: fd });
+        input.value = '';
+        onAdminMsgFileChange();
+        const n = r && r.count != null ? r.count : 0;
+        toast('Загружено ' + n + ' сообщений', 'success');
         await loadAdminMessages();
       } catch (e) {
         toast(e.message, 'error');
       } finally {
-        if (btn) btn.disabled = false;
+        if (btn) {
+          btn.textContent = orig || 'Загрузить';
+          onAdminMsgFileChange();
+        }
       }
     }
     async function grantMonth(tid, name, btn) {
       const label = name || ('#' + tid);
-      if (!confirm('Продлить подписку «' + label + '» на 30 дней?')) return;
+      if (!confirm('Продлить подписку «' + label + '» на 30 дней?\n\nСрок увеличится от оставшихся дней, а не установится заново с сегодня.')) return;
       if (btn) btn.disabled = true;
       try {
         await api('/admin/users/' + tid + '/subscription/month', { method: 'POST' });
-        toast('Подписка продлена на 30 дней', 'success');
+        toast('Подписка продлена на 30 дней от текущей даты окончания', 'success');
         await loadUsers();
       } catch (e) {
         toast(e.message, 'error');
@@ -580,12 +635,54 @@
         if (btn) btn.disabled = false;
       }
     }
-    async function impersonate(tid) {
-      rememberAdminToken();
-      const j = await api('/admin/impersonate/' + tid, { method: 'POST' });
-      sessionStorage.setItem('maxAuthToken', j.token);
-      sessionStorage.setItem('maxImpersonating', j.institution_name || '');
-      location.href = '/';
+    async function grantSubscriptionDays(tid, name, days, btn) {
+      const label = name || ('#' + tid);
+      const n = parseInt(days, 10);
+      if (!n || n < 1) {
+        toast('Укажите число дней (от 1)', 'error');
+        return;
+      }
+      if (!confirm('Продлить подписку «' + label + '» на ' + n + ' дн.?\n\nСрок увеличится от оставшихся дней, а не установится заново с сегодня.')) return;
+      if (btn) btn.disabled = true;
+      try {
+        await api('/admin/users/' + tid + '/subscription', {
+          method: 'POST',
+          body: JSON.stringify({ days: n }),
+        });
+        toast('Подписка продлена на ' + n + ' дн. от текущей даты окончания', 'success');
+        await loadUsers();
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    async function revokeSubscription(tid, name, btn) {
+      const label = name || ('#' + tid);
+      if (!confirm('Отозвать подписку «' + label + '»?\n\nРассылка для учреждения станет недоступна.')) return;
+      if (btn) btn.disabled = true;
+      try {
+        await api('/admin/users/' + tid + '/subscription/revoke', { method: 'POST' });
+        toast('Подписка отозвана', 'success');
+        await loadUsers();
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    async function impersonate(tid, name) {
+      const label = name || ('#' + tid);
+      if (!confirm('Открыть кабинет «' + label + '»?')) return;
+      try {
+        rememberAdminToken();
+        const j = await api('/admin/impersonate/' + tid, { method: 'POST' });
+        sessionStorage.setItem('maxAuthToken', j.token);
+        sessionStorage.setItem('maxImpersonating', j.institution_name || '');
+        location.href = '/';
+      } catch (e) {
+        toast(e.message || 'Не удалось открыть кабинет', 'error');
+      }
     }
     async function deleteUser(tid, name, btn) {
       const label = name || ('#' + tid);
@@ -652,6 +749,11 @@
       const name = btn.dataset.institutionName || '';
       if (btn.dataset.action === 'delete-user') deleteUser(tid, name, btn);
       else if (btn.dataset.action === 'grant-month') grantMonth(tid, name, btn);
+      else if (btn.dataset.action === 'grant-days') {
+        const inp = document.getElementById('sub-days-' + tid);
+        grantSubscriptionDays(tid, name, inp && inp.value, btn);
+      } else if (btn.dataset.action === 'revoke-sub') revokeSubscription(tid, name, btn);
+      else if (btn.dataset.action === 'impersonate') impersonate(tid, name);
     });
 
     async function bulkGroups(active) {

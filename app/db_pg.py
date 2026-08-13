@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from app.config import require_database_url
@@ -234,6 +234,7 @@ def grant_subscription(
     expires_at: datetime,
     granted_by: int,
 ) -> None:
+    """INSERT a subscription history row. Prefer extend_subscription / revoke_subscription."""
     with _cursor() as cur:
         cur.execute(
             """
@@ -242,6 +243,83 @@ def grant_subscription(
             """,
             (tenant_id, expires_at, granted_by),
         )
+
+
+def current_subscription_expires(tenant_id: int) -> datetime | None:
+    """Effective expiry: MAX(expires_at) for the tenant (None if never granted)."""
+    with _cursor() as cur:
+        cur.execute(
+            """
+            SELECT MAX(expires_at) AS expires_at
+            FROM subscriptions
+            WHERE tenant_id = %s
+            """,
+            (tenant_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return row["expires_at"]
+
+
+def extend_subscription(tenant_id: int, days: int, granted_by: int) -> datetime:
+    """Insert expiry = max(now, current MAX(expires_at)) + days. Returns new expires_at."""
+    now = _now()
+    with _cursor(transaction=True) as cur:
+        cur.execute(
+            """
+            SELECT expires_at FROM subscriptions
+            WHERE tenant_id = %s
+            FOR UPDATE
+            """,
+            (tenant_id,),
+        )
+        current = None
+        for row in cur.fetchall():
+            exp = row["expires_at"]
+            if current is None or exp > current:
+                current = exp
+        base = current if current is not None and current > now else now
+        expires = base + timedelta(days=days)
+        cur.execute(
+            """
+            INSERT INTO subscriptions (tenant_id, expires_at, granted_by)
+            VALUES (%s, %s, %s)
+            """,
+            (tenant_id, expires, granted_by),
+        )
+    return expires
+
+
+def revoke_subscription(tenant_id: int, admin_id: int) -> datetime:
+    """Make the tenant inactive immediately. Returns the clamped expiry (now).
+
+    INSERT-only with expires_at=now would leave older future rows, so
+    MAX(expires_at) would still be in the future and list_expiring /
+    subscription_active / lifecycle jobs would treat the tenant as active.
+
+    Clamp every future row to now (effective expiry becomes now), then INSERT
+    a history row with expires_at=now and granted_by=admin for audit.
+    Past rows are left unchanged. No schema migration.
+    """
+    now = _now()
+    with _cursor(transaction=True) as cur:
+        cur.execute(
+            """
+            UPDATE subscriptions
+            SET expires_at = %s
+            WHERE tenant_id = %s AND expires_at > %s
+            """,
+            (now, tenant_id, now),
+        )
+        cur.execute(
+            """
+            INSERT INTO subscriptions (tenant_id, expires_at, granted_by)
+            VALUES (%s, %s, %s)
+            """,
+            (tenant_id, now, admin_id),
+        )
+    return now
 
 
 def subscription_active(tenant_id: int | None) -> bool:
@@ -262,47 +340,33 @@ def subscription_active(tenant_id: int | None) -> bool:
 def subscription_info_from_expires(expires_at: Any) -> dict[str, Any]:
     if expires_at is None:
         return {"active": False, "expires_at": None}
-    if expires_at <= _now():
-        return {"active": False, "expires_at": None}
-    return {
-        "active": True,
-        "expires_at": expires_at.isoformat()
+    iso = (
+        expires_at.isoformat()
         if hasattr(expires_at, "isoformat")
-        else str(expires_at),
-    }
+        else str(expires_at)
+    )
+    return {"active": expires_at > _now(), "expires_at": iso}
 
 
 def subscription_info(tenant_id: int | None) -> dict[str, Any]:
     if tenant_id is None:
         return {"active": True, "expires_at": None}
-    with _cursor() as cur:
-        cur.execute(
-            """
-            SELECT expires_at FROM subscriptions
-            WHERE tenant_id = %s AND expires_at > %s
-            ORDER BY expires_at DESC LIMIT 1
-            """,
-            (tenant_id, _now()),
-        )
-        row = cur.fetchone()
-    if not row:
-        return {"active": False, "expires_at": None}
-    exp = row["expires_at"]
-    return {
-        "active": True,
-        "expires_at": exp.isoformat() if hasattr(exp, "isoformat") else str(exp),
-    }
+    return subscription_info_from_expires(current_subscription_expires(tenant_id))
 
 
 def count_subscriptions_expiring(within_days: int = 7) -> int:
-    """Tenants with active sub expiring within N days (not yet expired)."""
+    """Tenants whose effective (MAX) expiry is within N days (not yet expired)."""
     now = _now()
     with _cursor() as cur:
         cur.execute(
             """
-            SELECT COUNT(DISTINCT tenant_id) AS n FROM subscriptions
-            WHERE expires_at > %s
-              AND expires_at <= %s + make_interval(days => %s)
+            SELECT COUNT(*) AS n FROM (
+                SELECT tenant_id
+                FROM subscriptions
+                GROUP BY tenant_id
+                HAVING MAX(expires_at) > %s
+                   AND MAX(expires_at) <= %s + make_interval(days => %s)
+            ) t
             """,
             (now, now, within_days),
         )

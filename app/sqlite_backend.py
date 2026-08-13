@@ -205,11 +205,19 @@ def init_db() -> None:
             """
         )
         _migrate_schema(c)
+        n_settings = c.execute("SELECT COUNT(*) AS n FROM settings").fetchone()["n"]
         for k, v in m.DEFAULTS.items():
             c.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v)
             )
         _migrate_antiban_defaults(c)
+        from app.settings_scope import (
+            seed_tenant_settings_from_global,
+            should_seed_tenant_pacing,
+        )
+
+        if n_settings == 0 and should_seed_tenant_pacing():
+            seed_tenant_settings_from_global(c)
     m.BACKUPS.mkdir(parents=True, exist_ok=True)
 
 

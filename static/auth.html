@@ -69,9 +69,12 @@
     button {
       margin-top: 1rem; width: 100%; padding: .65rem; border: none; border-radius: var(--radius-sm);
       background: var(--accent-dim); color: #fff; font-weight: 600; cursor: pointer; font-family: inherit;
+      transition: filter .12s;
     }
+    button:hover:not(:disabled):not(.secondary) { filter: brightness(1.06); }
     button:disabled { opacity: .55; cursor: wait; }
     button.secondary { background: transparent; border: 1px solid var(--line); color: var(--text); margin-top: .5rem; }
+    button.secondary:hover:not(:disabled) { background: var(--bg); }
     .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; }
     .tabs button { margin: 0; flex: 1; }
     .tabs button.active { background: var(--accent-dim); border-color: rgba(147,197,253,.25); color: #fff; }
@@ -117,31 +120,38 @@
       <button type="button" id="tabRegister" role="tab" aria-selected="false" aria-controls="panelRegister" class="secondary" onclick="showTab('register')">Регистрация</button>
     </div>
 
-    <div class="remember-row">
-      <input type="checkbox" id="rememberMe" checked>
-      <label for="rememberMe">Запомнить меня</label>
-    </div>
-
     <div id="panelLogin" class="panel active" role="tabpanel" aria-labelledby="tabLogin">
+      <form id="formLogin" onsubmit="event.preventDefault(); doLogin();">
       <label for="loginEmail">Email</label>
-      <input id="loginEmail" name="email" type="email" autocomplete="username">
+      <input id="loginEmail" name="email" type="email" autocomplete="username" spellcheck="false">
       <label for="loginPass">Пароль</label>
       <input id="loginPass" name="password" type="password" autocomplete="current-password">
-      <button type="button" id="btnLogin" onclick="doLogin()">Войти</button>
+      <div class="remember-row">
+        <input type="checkbox" id="rememberMeLogin" checked>
+        <label for="rememberMeLogin">Запомнить меня</label>
+      </div>
+      <button type="submit" id="btnLogin">Войти</button>
       <p class="err" id="loginErr" aria-live="polite"></p>
+      </form>
     </div>
 
     <div id="panelRegister" class="panel" role="tabpanel" aria-labelledby="tabRegister">
+      <form id="formRegister" onsubmit="event.preventDefault(); doRegister();">
       <label for="regInstitution">Название учреждения</label>
-      <input id="regInstitution" name="institution_name" type="text" placeholder="Школа №1">
+      <input id="regInstitution" name="institution_name" type="text" placeholder="Школа №1" autocomplete="organization">
       <label for="regEmail">Email</label>
-      <input id="regEmail" name="email" type="email" autocomplete="username">
+      <input id="regEmail" name="email" type="email" autocomplete="username" spellcheck="false">
       <label for="regPass">Пароль</label>
       <input id="regPass" name="password" type="password" autocomplete="new-password">
       <label for="regPass2">Повтор пароля</label>
       <input id="regPass2" name="password_confirm" type="password" autocomplete="new-password">
-      <button type="button" id="btnRegister" onclick="doRegister()">Зарегистрироваться</button>
+      <div class="remember-row">
+        <input type="checkbox" id="rememberMeRegister" checked>
+        <label for="rememberMeRegister">Запомнить меня</label>
+      </div>
+      <button type="submit" id="btnRegister">Зарегистрироваться</button>
       <p class="err" id="regErr" aria-live="polite"></p>
+      </form>
     </div>
   </div>
   <script>
@@ -156,13 +166,27 @@
       document.getElementById('tabLogin').setAttribute('aria-selected', isLogin ? 'true' : 'false');
       document.getElementById('tabRegister').setAttribute('aria-selected', !isLogin ? 'true' : 'false');
     }
+    function formatApiError(detail, fallback) {
+      if (!detail) return fallback;
+      if (typeof detail === 'string') return detail;
+      if (Array.isArray(detail)) {
+        const msgs = detail.map(d => {
+          if (!d) return '';
+          if (typeof d === 'string') return d;
+          return d.msg || '';
+        }).filter(Boolean);
+        return msgs.join('; ') || fallback;
+      }
+      if (typeof detail === 'object' && detail.msg) return detail.msg;
+      return fallback;
+    }
     function saveToken(token) {
       sessionStorage.setItem('maxAuthToken', token);
     }
-    async function withAuthLoading(btn, fn) {
+    async function withAuthLoading(btn, label, fn) {
       const orig = btn.textContent;
       btn.disabled = true;
-      btn.textContent = '…';
+      btn.textContent = label;
       try {
         await fn();
       } finally {
@@ -174,7 +198,7 @@
       const err = document.getElementById('loginErr');
       const btn = document.getElementById('btnLogin');
       err.textContent = '';
-      await withAuthLoading(btn, async () => {
+      await withAuthLoading(btn, 'Вход…', async () => {
         try {
           const r = await fetch('/api/auth/login', {
             method: 'POST',
@@ -183,11 +207,11 @@
             body: JSON.stringify({
               email: document.getElementById('loginEmail').value.trim(),
               password: document.getElementById('loginPass').value,
-              remember_me: document.getElementById('rememberMe').checked,
+              remember_me: document.getElementById('rememberMeLogin').checked,
             }),
           });
-          const j = await r.json();
-          if (!r.ok) throw new Error(j.detail || 'Ошибка входа');
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(formatApiError(j.detail, 'Ошибка входа'));
           saveToken(j.token);
           if (j.role === 'admin') location.href = '/admin.html';
           else location.href = '/';
@@ -198,7 +222,13 @@
       const err = document.getElementById('regErr');
       const btn = document.getElementById('btnRegister');
       err.textContent = '';
-      await withAuthLoading(btn, async () => {
+      const pass = document.getElementById('regPass').value;
+      const pass2 = document.getElementById('regPass2').value;
+      if (pass !== pass2) {
+        err.textContent = 'Пароли не совпадают';
+        return;
+      }
+      await withAuthLoading(btn, 'Регистрация…', async () => {
         try {
           const r = await fetch('/api/auth/register', {
             method: 'POST',
@@ -207,13 +237,13 @@
             body: JSON.stringify({
               institution_name: document.getElementById('regInstitution').value.trim(),
               email: document.getElementById('regEmail').value.trim(),
-              password: document.getElementById('regPass').value,
-              password_confirm: document.getElementById('regPass2').value,
-              remember_me: document.getElementById('rememberMe').checked,
+              password: pass,
+              password_confirm: pass2,
+              remember_me: document.getElementById('rememberMeRegister').checked,
             }),
           });
-          const j = await r.json();
-          if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : 'Ошибка регистрации');
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(formatApiError(j.detail, 'Ошибка регистрации'));
           saveToken(j.token);
           location.href = '/';
         } catch (e) { err.textContent = e.message; }

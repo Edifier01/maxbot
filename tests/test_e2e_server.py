@@ -113,6 +113,7 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
     assert me_a.status_code == 200
     assert me_a.json()["tenant_id"] == tenant_a
     assert me_a.json()["subscription"]["active"] is False
+    assert me_a.json()["subscription"]["expires_at"] is None
 
     dir_a = main_mod.ROOT / "data" / "tenants" / str(tenant_a) / "app.db"
     dir_b = main_mod.ROOT / "data" / "tenants" / str(tenant_b) / "app.db"
@@ -269,8 +270,7 @@ def test_admin_tenant_worker_pool_settings(e2e_client):
     assert updated.json()["worker_pool_size"] == 4
 
     user_settings = client.get("/api/settings", headers=_bearer(token_user))
-    assert user_settings.status_code == 200
-    assert user_settings.json()["worker_pool_size"] == "4"
+    assert user_settings.status_code == 403
 
     blocked = client.put(
         "/api/settings",
@@ -292,3 +292,78 @@ def test_admin_tenant_worker_pool_settings(e2e_client):
         json={"worker_pool_size": 64},
     )
     assert out_of_range.status_code == 422
+
+
+def test_admin_subscription_extend_and_revoke(e2e_client):
+    from datetime import datetime, timedelta, timezone
+
+    client, _main_mod, uid = e2e_client
+    admin_email = os.environ["ADMIN_EMAIL"]
+
+    reg = client.post(
+        "/api/auth/register",
+        json={
+            "institution_name": f"Sub School {uid}",
+            "email": f"sub-{uid}@example.com",
+            "password": "UserPass123!",
+            "password_confirm": "UserPass123!",
+        },
+    )
+    assert reg.status_code == 200, reg.text
+    token_user = reg.json()["token"]
+    tenant_id = reg.json()["tenant_id"]
+
+    me0 = client.get("/api/auth/me", headers=_bearer(token_user))
+    assert me0.json()["subscription"] == {"active": False, "expires_at": None}
+
+    admin_login = client.post(
+        "/api/auth/login",
+        json={"email": admin_email, "password": "AdminPass123!"},
+    )
+    assert admin_login.status_code == 200
+    admin_token = admin_login.json()["token"]
+
+    missing = client.post(
+        "/api/admin/users/999999/subscription/revoke",
+        headers=_bearer(admin_token),
+    )
+    assert missing.status_code == 404
+
+    first = client.post(
+        f"/api/admin/users/{tenant_id}/subscription",
+        headers=_bearer(admin_token),
+        json={"days": 5},
+    )
+    assert first.status_code == 200
+    exp1 = datetime.fromisoformat(first.json()["expires_at"])
+
+    second = client.post(
+        f"/api/admin/users/{tenant_id}/subscription/month",
+        headers=_bearer(admin_token),
+    )
+    assert second.status_code == 200
+    exp2 = datetime.fromisoformat(second.json()["expires_at"])
+    assert exp2 - exp1 >= timedelta(days=29, hours=23)
+    assert exp2 - datetime.now(timezone.utc) > timedelta(days=30)
+
+    me_active = client.get("/api/auth/me", headers=_bearer(token_user))
+    assert me_active.json()["subscription"]["active"] is True
+
+    revoked = client.post(
+        f"/api/admin/users/{tenant_id}/subscription/revoke",
+        headers=_bearer(admin_token),
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["ok"] is True
+    assert revoked.json()["active"] is False
+    assert revoked.json()["expires_at"] is not None
+
+    me_revoked = client.get("/api/auth/me", headers=_bearer(token_user))
+    sub = me_revoked.json()["subscription"]
+    assert sub["active"] is False
+    assert sub["expires_at"] is not None
+
+    blocked = client.post("/api/campaign/start", headers=_bearer(token_user))
+    assert blocked.status_code == 403
+    assert "Подписка" in blocked.json()["detail"]
+

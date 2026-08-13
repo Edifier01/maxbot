@@ -21,7 +21,9 @@ async def campaign_start():
     m._require_vault_unlocked()
     messages = m.load_message_pool()
     if not messages:
-        raise HTTPException(400, "Сначала загрузите файл сообщений")
+        raise HTTPException(
+            400, "Нет файла сообщений. Обратитесь к администратору."
+        )
     if not m._active_groups():
         raise HTTPException(400, "Создайте хотя бы одну группу")
     if not m._has_active_profiles():
@@ -47,6 +49,7 @@ async def campaign_stop():
 @router.post("/api/campaign/pause")
 async def campaign_pause():
 
+    m.set_setting("auto_run", "0")
     await m._stop_worker(finish_status="paused", reason="Пауза")
     m.append_log("Рассылка на паузе")
     return {"ok": True}
@@ -128,6 +131,7 @@ async def campaign_retry_failed():
     m.append_log(f"Повтор ошибок: продолжение с индекса={mi}")
     if not m._has_sendable_profile():
         raise HTTPException(400, "Нет доступных профилей для отправки")
+    m.set_setting("auto_run", "1")
     await m._start_worker()
     return {"ok": True, "message_idx": mi, "campaign_id": m.RUNTIME.current_campaign_id}
 

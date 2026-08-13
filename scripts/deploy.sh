@@ -26,6 +26,7 @@ missing=()
 [[ -z "${ADMIN_PASSWORD:-}" || "${ADMIN_PASSWORD}" == change-me* ]] && missing+=("ADMIN_PASSWORD")
 [[ -z "${POSTGRES_PASSWORD:-}" || "${POSTGRES_PASSWORD}" == change-me* ]] && missing+=("POSTGRES_PASSWORD")
 [[ -z "${INTERNAL_SERVICE_TOKEN:-}" || "${INTERNAL_SERVICE_TOKEN}" == change-me* ]] && missing+=("INTERNAL_SERVICE_TOKEN")
+[[ -z "${REDIS_PASSWORD:-}" || "${REDIS_PASSWORD}" == change-me* ]] && missing+=("REDIS_PASSWORD")
 
 if ((${#missing[@]})); then
   echo "Заполните в .env (не оставляйте значения-заглушки): ${missing[*]}"
@@ -33,6 +34,12 @@ if ((${#missing[@]})); then
 fi
 
 echo "Деплой MAX Sender → https://${DOMAIN}"
+if docker compose ps postgres --status running -q 2>/dev/null | grep -q .; then
+  echo "PostgreSQL already running — backing up volumes before rebuild…"
+  bash scripts/backup-volumes.sh
+else
+  echo "First deploy (postgres not running) — skipping volume backup"
+fi
 docker compose pull redis caddy postgres 2>/dev/null || true
 docker compose up --build -d
 

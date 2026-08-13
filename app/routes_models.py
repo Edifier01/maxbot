@@ -51,6 +51,7 @@ class GroupPatchIn(BaseModel):
     max_chat_id: str | None = None
     invite_link: str | None = None
     proxy: str | None = None
+    is_active: int | None = None
 
     @field_validator("proxy")
     @classmethod
@@ -58,6 +59,16 @@ class GroupPatchIn(BaseModel):
         if v is None:
             return None
         return antiban_core.normalize_proxy_field(v)
+
+    @field_validator("is_active")
+    @classmethod
+    def validate_is_active(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        iv = int(v)
+        if iv not in (0, 1):
+            raise ValueError("is_active должен быть 0 или 1")
+        return iv
 
 
 class SettingsIn(BaseModel):

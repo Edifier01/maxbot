@@ -6,8 +6,15 @@ from fastapi import APIRouter, HTTPException
 
 from app.routes_models import BulkProfilesIn, GroupIn, GroupPatchIn, ProfileIn
 from app.runtime import main as m
+from app.tenant import get_user_role, is_impersonating
 
 router = APIRouter(tags=["groups"])
+
+_CABINET_DENIED = "Недоступно в личном кабинете"
+
+
+def _is_cabinet_user() -> bool:
+    return get_user_role() == "user" and not is_impersonating()
 
 
 @router.get("/api/groups")
@@ -31,25 +38,50 @@ async def list_groups():
 
 
 @router.get("/api/groups/{group_id}/profiles")
-async def list_group_profiles(group_id: int, offset: int = 0, limit: int = 20):
+async def list_group_profiles(
+    group_id: int,
+    offset: int = 0,
+    limit: int = 20,
+    phone: str | None = None,
+):
 
+    phone_filter = m._normalize_phone(phone) if (phone or "").strip() else None
     with m._conn() as c:
         if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
             raise HTTPException(404, "Группа не найдена")
-        total = c.execute(
-            "SELECT COUNT(*) n FROM group_profiles WHERE group_id=? AND is_enabled=1",
-            (group_id,),
-        ).fetchone()["n"]
-        rows = c.execute(
-            """
-            SELECT p.*, gp.order_index FROM profiles p
-            JOIN group_profiles gp ON gp.profile_id = p.id
-            WHERE gp.group_id=? AND gp.is_enabled=1
-            ORDER BY gp.order_index, p.id
-            LIMIT ? OFFSET ?
-            """,
-            (group_id, min(max(limit, 1), 100), max(offset, 0)),
-        ).fetchall()
+        if phone_filter:
+            total = c.execute(
+                """
+                SELECT COUNT(*) n FROM group_profiles gp
+                JOIN profiles p ON p.id = gp.profile_id
+                WHERE gp.group_id=? AND gp.is_enabled=1 AND p.phone=?
+                """,
+                (group_id, phone_filter),
+            ).fetchone()["n"]
+            rows = c.execute(
+                """
+                SELECT p.*, gp.order_index FROM profiles p
+                JOIN group_profiles gp ON gp.profile_id = p.id
+                WHERE gp.group_id=? AND gp.is_enabled=1 AND p.phone=?
+                ORDER BY gp.order_index, p.id
+                """,
+                (group_id, phone_filter),
+            ).fetchall()
+        else:
+            total = c.execute(
+                "SELECT COUNT(*) n FROM group_profiles WHERE group_id=? AND is_enabled=1",
+                (group_id,),
+            ).fetchone()["n"]
+            rows = c.execute(
+                """
+                SELECT p.*, gp.order_index FROM profiles p
+                JOIN group_profiles gp ON gp.profile_id = p.id
+                WHERE gp.group_id=? AND gp.is_enabled=1
+                ORDER BY gp.order_index, p.id
+                LIMIT ? OFFSET ?
+                """,
+                (group_id, min(max(limit, 1), 100), max(offset, 0)),
+            ).fetchall()
     items = [m._profile_auth_view(p) for p in rows]
     return {"items": items, "total": total, "offset": offset, "limit": limit}
 
@@ -61,6 +93,10 @@ async def add_group(body: GroupIn):
     if not invite:
         raise HTTPException(400, "Укажите пригласительную ссылку группы")
     proxy = (body.proxy or "").strip()
+    if _is_cabinet_user():
+        if proxy:
+            raise HTTPException(403, _CABINET_DENIED)
+        proxy = ""
     with m._conn() as c:
         cur = c.execute(
             "INSERT INTO groups (name, max_chat_id, invite_link, proxy) VALUES (?, ?, ?, ?)",
@@ -81,6 +117,8 @@ async def patch_group(group_id: int, body: GroupPatchIn):
     data = body.model_dump(exclude_unset=True)
     if not data:
         raise HTTPException(400, "Нечего обновлять")
+    if _is_cabinet_user() and ("proxy" in data or "is_active" in data):
+        raise HTTPException(403, _CABINET_DENIED)
     if "max_chat_id" in data:
         data.pop("max_chat_id")
     with m._conn() as c:
@@ -109,6 +147,11 @@ async def patch_group(group_id: int, body: GroupPatchIn):
             c.execute("UPDATE groups SET proxy=? WHERE id=?", (proxy, group_id))
             m.append_log(
                 f"Прокси группы #{group_id}: {'задан' if proxy else 'очищен'}"
+            )
+        if "is_active" in data and data["is_active"] is not None:
+            c.execute(
+                "UPDATE groups SET is_active=? WHERE id=?",
+                (int(data["is_active"]), group_id),
             )
         row = c.execute("SELECT * FROM groups WHERE id=?", (group_id,)).fetchone()
     return dict(row)
@@ -167,6 +210,8 @@ async def add_group_profile(group_id: int, body: ProfileIn):
 async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
 
     """Импорт phone,label. Пропускает уже существующие в группе."""
+    if _is_cabinet_user():
+        raise HTTPException(403, _CABINET_DENIED)
     if not body.profiles:
         raise HTTPException(400, "Список профилей пуст")
     if len(body.profiles) > 2000:

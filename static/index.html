@@ -98,7 +98,7 @@
       .badge.live::before { animation: none; }
       section.active { animation: none; }
       .toast { animation: none; }
-      .dash-card:hover { transform: none; }
+      .dash-card:hover { transform: none; border-color: var(--line); }
       #progressBar, #dashProgressBar { transition: none; }
       details.settings-panel > summary::after { transition: none; }
     }
@@ -230,7 +230,10 @@
       border: 1px solid rgba(252,165,165,.25);
       color: #fff; padding: .55rem 1.05rem; border-radius: var(--radius-sm);
       cursor: pointer; font-family: inherit; font-weight: 600;
+      transition: transform .12s, filter .12s;
     }
+    button.danger:hover { filter: brightness(1.06); }
+    button.danger:active { transform: translateY(1px); }
     table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .9rem; }
     th, td { text-align: left; padding: .5rem; border-bottom: 1px solid var(--line-soft); }
     .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .75rem; }
@@ -339,6 +342,7 @@
     }
     button.small:hover { background: #22283a; border-color: #3a4358; }
     button.small.danger { background: rgba(127,29,29,.55); border-color: #991b1b; }
+    button.small.danger:hover { filter: brightness(1.08); border-color: #b91c1c; }
     .modal-overlay {
       display: none; position: fixed; inset: 0; background: rgba(4,6,12,.72);
       z-index: 100; align-items: center; justify-content: center;
@@ -389,7 +393,6 @@
     }
     #btnStart.campaign-btn-idle,
     #btnStop.campaign-btn-idle {
-      opacity: .5;
       filter: none;
       box-shadow: none;
     }
@@ -418,6 +421,8 @@
     .campaign-user-only { display: none; }
     body.simple-campaign .campaign-user-only { display: block; }
     body.simple-campaign #adminSummarySlot { display: none; }
+    body.simple-campaign #dashProgressPanel,
+    body.simple-campaign #progressWrap { display: none !important; }
     #userSummaryBlock { margin-bottom: 1rem; }
     .summary-panel { background: rgba(20,24,36,.9); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 1rem; }
     .summary-panel .panel-title { margin: 0 0 .75rem; }
@@ -449,9 +454,9 @@
     }
     .dash-card {
       background: rgba(20,24,36,.9); border: 1px solid var(--line-soft); border-radius: var(--radius);
-      padding: .95rem 1rem; transition: border-color .15s, transform .15s;
+      padding: .95rem 1rem; transition: border-color .15s;
     }
-    .dash-card:hover { border-color: var(--line); transform: translateY(-1px); }
+    .dash-card:hover { border-color: var(--line); }
     .dash-card .phone { font-weight: 600; font-size: .95rem; }
     .dash-card .meta { color: var(--muted); font-size: .8rem; margin-top: .35rem; }
     details.settings-panel {
@@ -614,17 +619,17 @@
         </div>
       </div>
       <div class="toolbar row" style="margin-bottom:.85rem">
-        <button class="primary btn-ico" id="btnStart" onclick="withLoading(this, startCampaign)">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Старт
+        <button class="primary btn-ico" id="btnStart" data-loading-label="Старт…" onclick="withLoading(this, startCampaign)">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Старт
         </button>
         <button class="small btn-ico campaign-admin-only" id="btnPause" onclick="withLoading(this, pauseCampaign)">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>Пауза
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>Пауза
         </button>
-        <button class="danger btn-ico" id="btnStop" onclick="withLoading(this, stopCampaign)">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>Стоп
+        <button class="danger btn-ico" id="btnStop" data-loading-label="Стоп…" onclick="withLoading(this, stopCampaign)">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg>Стоп
         </button>
         <button class="small btn-ico campaign-admin-only" id="btnReset" onclick="withLoading(this, resetCampaign)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
           Начать заново
         </button>
         <button class="small campaign-admin-only" onclick="withLoading(this, testSend)">Тест</button>
@@ -685,9 +690,10 @@
       <div class="panel">
       <div class="row" style="margin-bottom:0">
         <label for="msgFile" class="hint" style="margin:0">Файл (.txt)</label>
-        <input type="file" id="msgFile" name="messages_file" accept=".txt" aria-label="Файл сообщений">
-        <button class="primary btn-ico" onclick="uploadMessages()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+        <input type="file" id="msgFile" name="messages_file" accept=".txt" aria-label="Файл сообщений" onchange="onMsgFileChange()">
+        <span id="msgFileStatus" class="hint" style="margin:0">Файл не выбран</span>
+        <button class="primary btn-ico" id="btnUploadMessages" data-loading-label="Загрузка…" disabled onclick="withLoading(this, uploadMessages).then(() => onMsgFileChange())">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
           Загрузить
         </button>
       </div>
@@ -716,6 +722,7 @@
         <input id="groupLink" name="group_link" type="url" required placeholder="https://max.ru/join/…" oninput="updateCreateGroupBtn()">
         <button class="primary" id="btnCreateGroup" disabled onclick="withLoading(this, addGroup)">Создать группу</button>
       </div>
+      <p id="createGroupHint" class="hint" style="margin:.35rem 0 0">Нужны название и ссылка, начинающаяся с https://</p>
       </div>
       <input type="file" id="csvFile" accept=".csv,.txt" style="display:none">
       <div id="groupsList"></div>
@@ -942,16 +949,16 @@
     }
 
     async function withLoading(btn, asyncFn) {
-      const orig = btn.textContent;
+      const orig = btn.innerHTML;
       btn.disabled = true;
-      btn.textContent = '…';
+      btn.textContent = btn.getAttribute('data-loading-label') || '…';
       try {
         await asyncFn();
       } catch (e) {
         toast(e.message || 'Ошибка', 'error');
       } finally {
         btn.disabled = false;
-        btn.textContent = orig;
+        btn.innerHTML = orig;
       }
     }
 
@@ -1033,9 +1040,9 @@
       return _serverMode && _userRole === 'admin' && _adminImpersonating;
     }
 
-    /** User cabinet campaign UX: start/stop only + active-state highlight */
+    /** Institution user cabinet: start/stop + stats only. Impersonating admin gets full ops. */
     function isSimpleCampaignView() {
-      return isUserRole() || isAdminImpersonating();
+      return isUserRole();
     }
 
     function formatSubscriptionDate(iso) {
@@ -1062,10 +1069,15 @@
       }
       el.style.display = '';
       if (!_subscriptionActive) {
-        el.textContent = 'Подписка не оформлена';
+        const expiredLabel = _subscriptionExpiresAt
+          ? formatSubscriptionDate(_subscriptionExpiresAt)
+          : null;
+        el.textContent = expiredLabel
+          ? 'Подписка истекла ' + expiredLabel
+          : 'Подписка не оформлена';
         el.className = 'badge stop';
-        el.title = _subscriptionExpiresAt
-          ? 'Истекла ' + formatSubscriptionDate(_subscriptionExpiresAt)
+        el.title = expiredLabel
+          ? 'Истекла ' + expiredLabel + '. Обратитесь к администратору'
           : 'Обратитесь к администратору';
         return;
       }
@@ -1086,13 +1098,21 @@
       start.classList.remove('campaign-btn-active', 'campaign-btn-idle');
       stop.classList.remove('campaign-btn-active', 'campaign-btn-idle');
       if (!isSimpleCampaignView()) return;
+      if (isUserRole() && !_subscriptionActive) {
+        start.disabled = true;
+        start.title = 'Обратитесь к администратору';
+        stop.classList.remove('campaign-btn-active', 'campaign-btn-idle');
+        return;
+      }
+      start.disabled = false;
+      start.title = '';
       const on = !!(s && (s.running || s.auto_run));
       if (on) {
-        start.classList.add('campaign-btn-active');
-        stop.classList.add('campaign-btn-idle');
-      } else {
         stop.classList.add('campaign-btn-active');
         start.classList.add('campaign-btn-idle');
+      } else {
+        start.classList.add('campaign-btn-active');
+        stop.classList.add('campaign-btn-idle');
       }
     }
 
@@ -1254,7 +1274,17 @@
       if (logoutBtn) logoutBtn.style.display = isUser ? '' : 'none';
       const userHint = document.getElementById('campaignUserHint');
       const adminHint = document.getElementById('campaignAdminHint');
-      if (userHint) userHint.style.display = simpleCampaign ? '' : 'none';
+      if (userHint) {
+        if (simpleCampaign && isUser && !_subscriptionActive) {
+          userHint.style.display = '';
+          userHint.textContent = 'Обратитесь к администратору';
+        } else if (simpleCampaign) {
+          userHint.style.display = '';
+          userHint.textContent = 'Запустите один раз — рассылка продолжится автоматически';
+        } else {
+          userHint.style.display = 'none';
+        }
+      }
       if (adminHint) adminHint.style.display = simpleCampaign ? 'none' : '';
       const banner = document.getElementById('serverBanner');
       if (banner) {
@@ -1563,7 +1593,10 @@
       const prog = s.campaign_progress || {};
       const wrap = document.getElementById('progressWrap');
       const progEl = document.getElementById('campaignProgress');
-      if (prog.total > 0) {
+      if (isUserRole()) {
+        wrap.style.display = 'none';
+        progEl.textContent = '';
+      } else if (prog.total > 0) {
         const pct = Math.min(100, (prog.sent / prog.total * 100)).toFixed(1);
         wrap.style.display = 'flex';
         document.getElementById('progressBar').style.width = pct + '%';
@@ -1580,7 +1613,7 @@
       const el = document.getElementById('campaignLog');
       el.innerHTML = renderLogLines(s.log || []);
       el.scrollTop = el.scrollHeight;
-      if (document.getElementById('campaign').classList.contains('active')) {
+      if (document.getElementById('campaign').classList.contains('active') && !isUserRole()) {
         renderDashProgress(s);
       }
       applyCampaignButtonState(s);
@@ -1589,6 +1622,10 @@
     function renderDashProgress(data) {
       const panel = document.getElementById('dashProgressPanel');
       if (!panel) return;
+      if (isUserRole()) {
+        panel.style.display = 'none';
+        return;
+      }
       const prog = (data && data.campaign_progress) || {};
       const running = !!(data && data.running);
       const autoRun = !!(data && data.auto_run);
@@ -1734,9 +1771,9 @@
       const pages = Math.ceil(d.total / d.limit) || 1;
       const cur = Math.floor(d.offset / d.limit) + 1;
       document.getElementById('sendLogPager').innerHTML = d.total > d.limit
-        ? `<button class="small" onclick="loadSendLog(${Math.max(0, offset - d.limit)})" ${offset <= 0 ? 'disabled' : ''}>←</button>
+        ? `<button class="small" aria-label="Предыдущая страница" onclick="loadSendLog(${Math.max(0, offset - d.limit)})" ${offset <= 0 ? 'disabled' : ''}>←</button>
            <span class="hint">${cur}/${pages} · ${d.total}</span>
-           <button class="small" onclick="loadSendLog(${offset + d.limit})" ${offset + d.limit >= d.total ? 'disabled' : ''}>→</button>`
+           <button class="small" aria-label="Следующая страница" onclick="loadSendLog(${offset + d.limit})" ${offset + d.limit >= d.total ? 'disabled' : ''}>→</button>`
         : (d.total ? `<span class="hint">${d.total} записей</span>` : '');
     }
 
@@ -1761,7 +1798,7 @@
       try {
         const d = await api('/dashboard');
         if (errEl) errEl.style.display = 'none';
-        renderDashProgress(d);
+        if (!isUserRole()) renderDashProgress(d);
         renderDashStats(d);
         if (isSimpleCampaignView()) return;
         const filter = (document.getElementById('dashFilter') || {}).value || '';
@@ -1801,7 +1838,7 @@
     async function startCampaign() {
       try {
         if (isUserRole() && !_subscriptionActive) {
-          toast('Для использования бота оформите подписку', 'error');
+          toast('Обратитесь к администратору', 'error');
           return;
         }
         if (!isSimpleCampaignView()) {
@@ -1828,7 +1865,12 @@
         refreshStatus();
         toast('Рассылка запущена', 'success');
       } catch (e) {
-        toast(e.message, 'error');
+        const msg = e.message || '';
+        if (isUserRole() && /загрузите файл сообщений/i.test(msg)) {
+          toast('Нет файла сообщений. Обратитесь к администратору.', 'error');
+        } else {
+          toast(msg || 'Ошибка', 'error');
+        }
       }
     }
     async function pauseCampaign() {
@@ -1842,6 +1884,7 @@
     }
     async function stopCampaign() {
       try {
+        if (!confirm('Остановить рассылку?\n\nАвтозапуск будет выключен, пока вы снова не нажмёте «Старт».')) return;
         await api('/campaign/stop', { method: 'POST' });
         refreshStatus();
         toast('Рассылка остановлена', 'success');
@@ -1980,18 +2023,37 @@
       if (!skipConfirm && !confirm('Заменить текущие сообщения?')) return;
       const fd = new FormData();
       fd.append('file', file);
-      await api('/messages/upload', { method: 'POST', body: fd });
-      toast('Сообщения загружены', 'success');
+      const r = await api('/messages/upload', { method: 'POST', body: fd });
+      const n = r && r.count != null ? r.count : 0;
+      toast('Загружено ' + n + ' сообщений', 'success');
       loadMessages();
+    }
+
+    function formatFileSize(n) {
+      if (n < 1024) return n + ' Б';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ';
+      return (n / (1024 * 1024)).toFixed(1) + ' МБ';
+    }
+
+    function onMsgFileChange() {
+      const input = document.getElementById('msgFile');
+      const status = document.getElementById('msgFileStatus');
+      const btn = document.getElementById('btnUploadMessages');
+      const f = input && input.files && input.files[0];
+      if (!f) {
+        if (status) status.textContent = 'Файл не выбран';
+        if (btn) btn.disabled = true;
+        return;
+      }
+      if (status) status.textContent = f.name + ' · ' + formatFileSize(f.size);
+      if (btn) btn.disabled = false;
     }
 
     async function uploadMessages() {
       const f = document.getElementById('msgFile').files[0];
-      try {
-        await uploadMessagesFile(f);
-      } catch (e) {
-        toast(e.message, 'error');
-      }
+      await uploadMessagesFile(f);
+      const input = document.getElementById('msgFile');
+      if (input) input.value = '';
     }
 
 
@@ -2073,7 +2135,7 @@
       const busy = ['connecting', 'waiting_sms', 'verifying_sms', 'waiting_cloud_password', 'verifying_password'].includes(p.auth_step);
       const loginFresh = isUserRole();
       return `
-        <button onclick="withLoading(this, () => loginProfile(${p.id}, ${loginFresh}, ${groupId}))" ${busy ? 'disabled' : ''}>Войти</button>
+        <button class="small" onclick="withLoading(this, () => loginProfile(${p.id}, ${loginFresh}, ${groupId}))" ${busy ? 'disabled' : ''}>Войти</button>
         ${isUserRole() ? '' : `<button class="small" onclick="withLoading(this, () => loginProfile(${p.id}, true, ${groupId}))" ${busy ? 'disabled' : ''}>Заново</button>`}
         ${busy ? `<button class="small" onclick="resetLogin(${p.id})">Сброс</button>` : ''}
         <button class="small danger" onclick="removeProfile(${groupId}, ${p.id})">Удалить</button>`;
@@ -2108,15 +2170,25 @@
 
     async function deleteGroup(id) {
       if (!confirm('Удалить группу? Профили без других групп тоже удалятся.')) return;
-      await api(`/groups/${id}`, { method: 'DELETE' });
-      if (openGroupId === id) openGroupId = null;
-      loadGroups(true);
+      try {
+        await api(`/groups/${id}`, { method: 'DELETE' });
+        if (openGroupId === id) openGroupId = null;
+        toast('Группа удалена', 'success');
+        loadGroups(true);
+      } catch (e) {
+        toast(e.message || 'Не удалось удалить группу', 'error');
+      }
     }
 
     async function removeProfile(groupId, profileId) {
       if (!confirm('Удалить профиль из группы?')) return;
-      await api(`/groups/${groupId}/profiles/${profileId}`, { method: 'DELETE' });
-      loadGroups(true);
+      try {
+        await api(`/groups/${groupId}/profiles/${profileId}`, { method: 'DELETE' });
+        toast('Профиль удалён', 'success');
+        loadGroups(true);
+      } catch (e) {
+        toast(e.message || 'Не удалось удалить профиль', 'error');
+      }
     }
 
     async function resetLogin(id) {
@@ -2132,7 +2204,17 @@
       const name = document.getElementById('groupName').value.trim();
       const link = document.getElementById('groupLink').value.trim();
       const btn = document.getElementById('btnCreateGroup');
-      if (btn) btn.disabled = !name || !link || !isValidInviteLink(link);
+      const hint = document.getElementById('createGroupHint');
+      const validLink = isValidInviteLink(link);
+      const ok = !!(name && link && validLink);
+      if (btn) btn.disabled = !ok;
+      if (hint) {
+        if (ok) hint.textContent = '';
+        else if (!name && !link) hint.textContent = 'Нужны название и ссылка, начинающаяся с https://';
+        else if (!name) hint.textContent = 'Укажите название группы';
+        else if (!link) hint.textContent = 'Укажите ссылку на группу (https://…)';
+        else hint.textContent = 'Ссылка должна начинаться с http:// или https://';
+      }
     }
 
     async function loginProfile(id, fresh = false, groupId = null) {
@@ -2158,8 +2240,7 @@
         if (!phoneRaw.trim()) return toast('Введите номер телефона', 'error');
         const phone = normalizePhone(phoneRaw);
 
-        const profData = await api(`/groups/${groupId}/profiles?offset=0&limit=500`);
-        let profile = (profData.items || []).find(p => normalizePhone(p.phone) === phone);
+        let profile = await lookupProfileByPhone(groupId, phone);
 
         if (!profile) {
           const r = await api(`/groups/${groupId}/profiles`, {
@@ -2174,6 +2255,25 @@
         await loginProfile(profile.id, fresh, groupId);
       } catch (e) {
         toast(e.message || 'Ошибка входа', 'error');
+      }
+    }
+
+    async function lookupProfileByPhone(groupId, phone) {
+      const matchIn = (items) => (items || []).find(p => normalizePhone(p.phone) === phone) || null;
+      try {
+        const q = encodeURIComponent(phone);
+        const data = await api(`/groups/${groupId}/profiles?phone=${q}`);
+        const items = data.items || (data.id ? [data] : []);
+        const match = matchIn(items);
+        if (match) return match;
+        if (items.length) {
+          const fallback = await api(`/groups/${groupId}/profiles?offset=0&limit=500`);
+          return matchIn(fallback.items);
+        }
+        return null;
+      } catch (_) {
+        const fallback = await api(`/groups/${groupId}/profiles?offset=0&limit=500`);
+        return matchIn(fallback.items);
       }
     }
 
@@ -2193,15 +2293,29 @@
       }
     }
 
+    async function toggleGroupActive(groupId, active) {
+      try {
+        await api(`/groups/${groupId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_active: active ? 1 : 0 }),
+        });
+        toast(active ? 'Группа включена в рассылку' : 'Группа выключена из рассылки', 'success');
+        loadGroups(true);
+      } catch (e) {
+        toast(e.message || 'Не удалось изменить группу', 'error');
+      }
+    }
+
     function profilePageControls(groupId, total) {
       const offset = groupProfilePages[groupId] || 0;
       const pages = Math.max(1, Math.ceil(total / PROFILE_PAGE));
       const cur = Math.floor(offset / PROFILE_PAGE) + 1;
       if (pages <= 1) return '';
       return `<div class="row">
-        <button class="small" onclick="changeProfilePage(${groupId}, -1)" ${offset <= 0 ? 'disabled' : ''}>←</button>
+        <button class="small" aria-label="Предыдущая страница" onclick="changeProfilePage(${groupId}, -1)" ${offset <= 0 ? 'disabled' : ''}>←</button>
         <span class="hint">Стр. ${cur}/${pages} (${total} проф.)</span>
-        <button class="small" onclick="changeProfilePage(${groupId}, 1)" ${offset + PROFILE_PAGE >= total ? 'disabled' : ''}>→</button>
+        <button class="small" aria-label="Следующая страница" onclick="changeProfilePage(${groupId}, 1)" ${offset + PROFILE_PAGE >= total ? 'disabled' : ''}>→</button>
       </div>`;
     }
 
@@ -2253,15 +2367,17 @@
             <td>${p.messages_sent_today || 0}${p.daily_limit != null ? '/'+p.daily_limit : ''}</td>
             <td>${profileActions(p, g.id)}</td>
           </tr>`).join('') : `<tr><td colspan="5" class="hint">Профилей нет — ${isUserRole() ? 'добавьте номер' : 'добавьте номер или импортируйте CSV'}</td></tr>`) : '';
+        const groupActive = g.is_active == null || Number(g.is_active) !== 0;
         return `
           <div class="group-card">
             <div class="group-head-row">
             <button type="button" class="group-head" aria-expanded="${open ? 'true' : 'false'}" onclick="toggleGroup(${g.id})">
               <span class="arrow">${open ? '▼' : '▶'}</span>
-              <span class="title">${esc(g.name)}</span>
+              <span class="title">${esc(g.name)}${groupActive ? '' : ' <span class="badge stop">неактивна</span>'}</span>
               <span class="meta">${g.profiles_count} проф.${g.active_count != null ? ' · ' + g.active_count + ' активных' : ''} · ${esc(g.invite_link || '—')}</span>
             </button>
               <span class="group-actions">
+                ${!isUserRole() ? `<button type="button" class="small" onclick="toggleGroupActive(${g.id}, ${groupActive ? 0 : 1})">${groupActive ? 'Выкл.' : 'Вкл.'}</button>` : ''}
                 <button type="button" class="small danger" onclick="deleteGroup(${g.id})">Удалить группу</button>
               </span>
             </div>

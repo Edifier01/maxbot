@@ -46,6 +46,12 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
 
 class ServerAuthMiddleware(BaseHTTPMiddleware):
     INTERNAL_POST_PATHS = frozenset({"/api/campaign/start", "/api/campaign/schedule"})
+    SUBSCRIPTION_POST_PATHS = frozenset({
+        "/api/campaign/start",
+        "/api/campaign/schedule",
+        "/api/campaign/retry_failed",
+        "/api/campaign/test",
+    })
     PUBLIC_PREFIXES = (
         "/static",
         "/api/health",
@@ -60,9 +66,14 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         "/api/auth/login",
         "/api/auth/restore-session",
     }
-    USER_WRITE_FORBIDDEN = (
+    USER_FORBIDDEN = (
         "/api/settings",
         "/api/messages",
+        "/api/campaign/pause",
+        "/api/campaign/reset",
+        "/api/campaign/test",
+        "/api/campaign/schedule",
+        "/api/campaign/retry_failed",
     )
     # Админ без tenant_id: глобальные и auth/admin API (не tenant-scoped)
     ADMIN_GLOBAL_PREFIXES = (
@@ -158,6 +169,11 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
                 )
 
         if path.startswith("/api/admin"):
+            if impersonating:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Недоступно в режиме impersonation"},
+                )
             if role != "admin":
                 return JSONResponse(status_code=403, content={"detail": "Только админ"})
             use_global = path.startswith("/api/admin/settings") or path.startswith(
@@ -214,15 +230,14 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         try:
             app_main._try_legacy_unlock()
 
-            if role == "user" and request.method != "GET":
-                if any(path.startswith(p) for p in self.USER_WRITE_FORBIDDEN):
-                    return JSONResponse(
-                        status_code=403,
-                        content={"detail": "Недоступно в личном кабинете"},
-                    )
+            if role == "user" and any(path.startswith(p) for p in self.USER_FORBIDDEN):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Недоступно в личном кабинете"},
+                )
 
             if (
-                path in ("/api/campaign/start", "/api/campaign/schedule")
+                path in self.SUBSCRIPTION_POST_PATHS
                 and request.method == "POST"
                 and role == "user"
                 and tenant_id

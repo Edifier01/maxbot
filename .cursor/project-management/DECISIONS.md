@@ -30,6 +30,10 @@ Tenant UI may set group `proxy` via `POST/PATCH /api/groups` in server mode. Val
 ## 2026-08-07: Specialist delegation gate
 After `/start-feature` + proceed, parent must implement via Task specialists per Agent Assignment (rule: `.cursor/rules/specialist-delegation.mdc`). Exceptions: explicit user override, LOW ≤2 files non-security, PM/docs-only.
 
+## 2026-08-13: Tenant cabinet stays minimal (FEATURE-UX-OPS-2026)
+
+Institution user (`role=user`) may only: create/delete groups, add phones + MAX login, start/stop, see `dashStats`. No pause, proxy, CSV, messages, settings, group `is_active`, pool preview, or progress bar. Admin/impersonation keeps full ops tools. Admin «Настройки рассылки» must actually apply to tenant workers (allowlisted pacing keys).
+
 ## 2026-08-07: SaaS UX — product decisions (Feature SaaS UX 2026)
 
 - **Banned status:** explicit `profiles.status = 'banned'` in per-tenant SQLite when ban detected (not UI-only heuristic).

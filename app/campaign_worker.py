@@ -593,6 +593,7 @@ async def scheduler_tick() -> None:
                 main.append_log(f"Расписание: пропуск — {e.detail}")
             else:
                 if main.load_message_pool() and main._has_sendable_profile():
+                    main.set_setting("auto_run", "1")
                     await start_worker(scheduled_for=row["start_at"])
                 else:
                     main.append_log("Расписание: нет сообщений или профилей — пропуск")
@@ -640,7 +641,8 @@ async def watchdog_loop() -> None:
                         reason="Перезапуск сторожем",
                         tenant_id=tid,
                     )
-                    await start_worker(record_campaign=False)
+                    if main._auto_run_enabled():
+                        await start_worker(record_campaign=False)
                 finally:
                     clear_context()
             else:
@@ -649,7 +651,8 @@ async def watchdog_loop() -> None:
                     reason="Перезапуск сторожем",
                     tenant_id=tid,
                 )
-                await start_worker(record_campaign=False)
+                if main._auto_run_enabled():
+                    await start_worker(record_campaign=False)
 
 async def start_worker(
     *,
@@ -724,12 +727,17 @@ async def stop_worker(
     with main._conn() as c:
         c.execute("UPDATE queue_state SET running=0 WHERE id=1")
     if rt.worker_task:
-        rt.worker_task.cancel()
-        try:
-            await rt.worker_task
-        except asyncio.CancelledError:
-            pass
-        rt.worker_task = None
+        current = asyncio.current_task()
+        if current is rt.worker_task:
+            rt.worker_task.cancel()
+            rt.worker_task = None
+        else:
+            rt.worker_task.cancel()
+            try:
+                await rt.worker_task
+            except asyncio.CancelledError:
+                pass
+            rt.worker_task = None
     for t in list(rt.pool_tasks):
         t.cancel()
     rt.pool_tasks = []

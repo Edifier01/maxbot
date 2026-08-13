@@ -6,7 +6,12 @@ from fastapi import APIRouter
 
 from app.routes_models import SettingsIn
 from app.runtime import main as m
-from app.tenant import is_admin
+from app.settings_scope import (
+    GLOBAL_PACING_SETTING_KEYS,
+    filter_pacing_updates,
+    propagate_global_pacing_settings,
+)
+from app.tenant import is_admin, use_global_data
 
 router = APIRouter(tags=["settings"])
 
@@ -56,6 +61,20 @@ async def update_settings(body: SettingsIn):
             qs_mi = int(row["message_idx"] if row else 0)
         if qs_mi == 0:
             m._rebuild_message_bag()
+    if m._is_server_mode() and use_global_data():
+        to_copy = filter_pacing_updates(data)
+        if (
+            "daily_limit_max" in data
+            and "max_msgs_per_profile_day" not in data
+            and "max_msgs_per_profile_day" in GLOBAL_PACING_SETTING_KEYS
+        ):
+            to_copy["max_msgs_per_profile_day"] = str(data["daily_limit_max"])
+        if to_copy:
+            n = propagate_global_pacing_settings(to_copy)
+            if n:
+                m.append_log(
+                    f"Админ: настройки рассылки скопированы в {n} учреждений"
+                )
     return {"ok": True}
 
 

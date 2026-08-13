@@ -18,7 +18,7 @@ docker compose stop app celery-worker 2>/dev/null || docker compose stop app
 
 echo "Восстановление PostgreSQL…"
 docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner \
-  < "$SRC/pg.dump" || true
+  < "$SRC/pg.dump"
 
 echo "Восстановление data volume…"
 docker compose run --rm --no-deps \
