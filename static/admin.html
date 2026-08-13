@@ -25,9 +25,11 @@
       --shadow: 0 12px 40px rgba(0,0,0,.35);
       --font: "Manrope", system-ui, sans-serif;
       --mono: "JetBrains Mono", ui-monospace, monospace;
+      --touch-min: 44px;
     }
     * { box-sizing: border-box; }
-    html { color-scheme: dark; }
+    html { color-scheme: dark; overflow-x: hidden; max-width: 100%; }
+    button, a, .link, .btn, nav button, input, select, textarea { touch-action: manipulation; }
     button:focus-visible,
     nav button:focus-visible,
     input:focus-visible,
@@ -49,12 +51,23 @@
     body {
       font-family: var(--font);
       background: var(--bg); color: var(--text); margin: 0;
+      overflow-x: hidden; max-width: 100%;
+      padding-left: env(safe-area-inset-left, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
     }
-    header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+    header {
+      padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
+      display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+      padding-top: max(1rem, env(safe-area-inset-top, 0px));
+    }
     main { padding: 1rem 1.25rem; max-width: 1100px; margin: 0 auto; }
     h1 { margin: 0; font-size: 1.2rem; }
     .hint { color: var(--muted); font-size: .85rem; }
-    a, button.link { color: var(--accent); background: none; border: none; cursor: pointer; font: inherit; }
+    a, button.link {
+      color: var(--accent); background: none; border: none; cursor: pointer; font: inherit;
+      display: inline-flex; align-items: center; min-height: var(--touch-min); padding: .35rem .25rem;
+    }
     table { width: 100%; border-collapse: collapse; font-size: .9rem; margin-top: 1rem; }
     th, td { text-align: left; padding: .55rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
     th { color: var(--muted); font-weight: 600; }
@@ -113,7 +126,9 @@
     }
     .preview li { padding: .35rem 0; border-bottom: 1px solid var(--line); font-size: .85rem; color: var(--muted); word-break: break-word; }
     #toast-container {
-      position: fixed; bottom: 1.25rem; right: 1.25rem;
+      position: fixed;
+      bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));
+      right: max(1.25rem, env(safe-area-inset-right, 0px));
       display: flex; flex-direction: column; gap: .5rem; z-index: 200;
     }
     .toast {
@@ -124,16 +139,41 @@
     .toast.success { border-color: rgba(62,207,142,.45); }
     .toast.error { border-color: rgba(239,95,95,.45); }
     @media (max-width: 720px) {
-      header { padding: .85rem 1rem; }
+      header {
+        padding: .85rem 1rem;
+        padding-top: max(.85rem, env(safe-area-inset-top, 0px));
+      }
       main { padding: .85rem 1rem 2rem; }
       h1 { font-size: 1.05rem; }
       header .row { width: 100%; margin-left: 0 !important; justify-content: flex-start; }
       .panel { padding: .85rem; }
       nav { padding: 0 1rem .65rem; gap: .25rem; }
-      .global-groups-panel .btn { flex: 1 1 100%; min-height: 44px; }
+      nav button { min-height: var(--touch-min); padding: .5rem .75rem; }
+      input, select, textarea { font-size: 16px; max-width: 100%; }
+      .settings-row { grid-template-columns: 1fr; }
+      .settings-row .controls { width: 100%; }
+      .settings-row .controls input,
+      .settings-row .controls select { max-width: 100%; width: 100%; }
+      .settings-row input[type="number"], .settings-row select { max-width: 100%; }
+      button.btn, .row .btn { min-height: var(--touch-min); }
+      .global-groups-panel .btn { flex: 1 1 100%; min-height: var(--touch-min); }
       td .row { flex-direction: column; align-items: stretch; }
       td .row .btn { width: 100%; }
       td .row .btn.primary { order: -1; }
+      #toast-container {
+        left: 1rem; right: 1rem;
+        bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+        align-items: stretch;
+      }
+      .toast { width: 100%; max-width: none; }
+      #globalSettingsPanel > .row,
+      #globalMessagesPanel > .row {
+        flex-direction: column; align-items: stretch;
+      }
+      #btnSaveSettings,
+      #btnUploadMessages { width: 100%; min-height: var(--touch-min); }
+      #msgFile { width: 100%; max-width: none; }
+      button.link { min-height: var(--touch-min); }
     }
   </style>
 </head>
@@ -167,12 +207,14 @@
         <button class="btn" onclick="loadExpiring()">Обновить</button>
       </div>
       <p class="hint" id="expiringHint">—</p>
+      <div class="table-scroll">
       <table id="expiringTable" style="display:none">
         <thead>
           <tr><th>Учреждение</th><th>Email</th><th>До</th><th>Осталось</th></tr>
         </thead>
         <tbody id="expiringBody"></tbody>
       </table>
+      </div>
     </div>
     <div class="panel">
       <div class="row" style="justify-content:space-between">

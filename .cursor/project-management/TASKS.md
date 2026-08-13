@@ -1,12 +1,19 @@
 # Tasks
 
+## In progress
+_(none)_
+
 ## Backlog
 - Decide later whether to extract shared code into a package; do not do this without a Feature Plan.
 - Optional: further `main.py` worker/core extraction (ADR 003 — deferred).
 - Optional: `asyncio.to_thread` for SQLite in non-admin routes (M-5 started with `routes_admin` only).
 - Optional: CI install from `*.lock` (today lockfiles are Docker-only; CI uses `requirements*.txt`).
+- Optional (from full review): impersonation block `/api/admin` when `imp`; cookie-only/CSP; deploy auto-backup.
+- Optional: deprecate/gate unused `/api/vault/setup|unlock` (security note after FEATURE-VAULT-CI-2026).
 
 ## Done
+- **FEATURE-VAULT-CI-2026** (2026-08-09): vault hot-path isolation + CI Postgres on smoke; ADR-006; HOW-IT-WORKS `.app_key` threat model. Verifier + security PASS WITH NOTES; parent pytest 110 passed, 13 skipped.
+- **FEATURE-MOBILE-2026** (2026-08-08): mobile polish `@media 720px` on tenant/admin/auth static panels (touch 44px, safe-area, admin form/table/toast parity). Verifier PASS WITH NOTES; pytest 108 passed, 13 skipped. P2 badge chrome deferred.
 - **FEATURE-SAAS-UX-2026** (2026-08-07): subscription UX, `banned` status, ban→stop-all, summary on campaign tab, admin global settings/messages, per-user `worker_pool_size`, delete user hardening. ADR 004/005. Tests: 100 passed + `test_saas_ux_static.py`. Verifier: [PASS](d8a3d3bc-87f9-4d19-b73b-044bf82b4239).
 - Split project into `desktop/` and `server/`.
 - Added a common AI agent system for both versions.

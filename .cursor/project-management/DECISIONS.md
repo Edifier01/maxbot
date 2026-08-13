@@ -21,6 +21,12 @@ Tenant UI may set group `proxy` via `POST/PATCH /api/groups` in server mode. Val
 ## 2026-08-07: Lockfiles for Docker only
 `requirements.lock` / `requirements-server.lock` pin Docker installs. CI continues to install from `requirements*.txt` ranges unless flaky CI forces parity.
 
+## 2026-08-09: Vault hot-path + CI PG (FEATURE-VAULT-CI-2026)
+
+- **Hot path:** session/vault crypto must use per-`data_dir` state (`app.vault` / `vault_store`), not process-global `_fernet` / `SESSIONS`, under server mode.
+- **At-rest:** keep per-tenant `.app_key` auto-unlock; document volume-theft threat model; **no** PIN/Scrypt unlock restore in this feature.
+- **CI:** Postgres on `server-smoke` (or equivalent) so `DATABASE_URL` skipif modules cannot silently skip. Lockfile CI install remains out of scope (G-4).
+
 ## 2026-08-07: Specialist delegation gate
 After `/start-feature` + proceed, parent must implement via Task specialists per Agent Assignment (rule: `.cursor/rules/specialist-delegation.mdc`). Exceptions: explicit user override, LOW ≤2 files non-security, PM/docs-only.
 

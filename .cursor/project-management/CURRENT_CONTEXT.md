@@ -9,6 +9,7 @@ MAX Sender is a Python/FastAPI app for controlled MAX messenger text sending wit
 - `.cursor/`: AI system (skills, agents, project-management).
 
 ## Current State
+- **FEATURE-VAULT-CI-2026** complete — vault hot-path per-`data_dir` (`main`→`app.vault`), ADR-006, HOW-IT-WORKS `.app_key` threat model, CI Postgres on `server-smoke`, `test_vault_hot_path_isolation.py`. Verifier + security PASS WITH NOTES; parent pytest **110 passed, 13 skipped**. Plan: `FEATURE-VAULT-CI-2026.md`.
 - SERVER-REVIEW-FIX-PLAN (P0–P3) done; P3-3 main.py split is PARTIAL (ADR 003).
 - AGENT-FIX-PLAN-2026 (C-1…L-3) done.
 - Follow-up G-2: tenant may set group `proxy` via PATCH/CREATE in server mode (aligned with `static/index.html`).
@@ -16,6 +17,7 @@ MAX Sender is a Python/FastAPI app for controlled MAX messenger text sending wit
 - **FEATURE-SAAS-UX-2026** complete (verifier PASS). Plan: `FEATURE-SAAS-UX-2026.md`.
 - **Remember Me (persistent login)** complete — HttpOnly cookie + restore-session; checkbox default ON.
 - **Admin/User panel UX follow-up** complete — admin tabs (учреждения/настройки/пул), delete-user delegation fix, +30d confirm, user dashCards on «Рассылка». Tests: 105 passed, 13 skipped.
+- **FEATURE-MOBILE-2026** complete — mobile polish `@media 720px` on `static/index.html`, `admin.html`, `auth.html` (44px touch, safe-area, admin parity). Verifier PASS WITH NOTES + parent pytest **108 passed, 13 skipped**.
 
 ## AI System
 Skills and agent routing — see `AGENTS.md` and `.cursor/rules/ai-skills-system.mdc`.

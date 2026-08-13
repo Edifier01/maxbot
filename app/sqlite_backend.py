@@ -102,10 +102,13 @@ def _conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    from app import paths
+
     m = _main()
-    m.DATA.mkdir(parents=True, exist_ok=True)
-    m.SESSIONS.mkdir(parents=True, exist_ok=True)
-    m.MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = m._resolve_data_dir()
+    data.mkdir(parents=True, exist_ok=True)
+    paths.sessions_root(data).mkdir(parents=True, exist_ok=True)
+    paths.messages_file(data).parent.mkdir(parents=True, exist_ok=True)
     with _conn() as c:
         c.executescript(
             """

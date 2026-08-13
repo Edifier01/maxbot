@@ -25,9 +25,11 @@
       --shadow: 0 12px 40px rgba(0,0,0,.35);
       --font: "Manrope", system-ui, sans-serif;
       --mono: "JetBrains Mono", ui-monospace, monospace;
+      --touch-min: 44px;
     }
     * { box-sizing: border-box; }
     html { color-scheme: dark; }
+    button, a, .link, .btn, input { touch-action: manipulation; }
     button:focus-visible,
     input:focus-visible,
     .btn:focus-visible,
@@ -45,7 +47,11 @@
     body {
       font-family: var(--font);
       background: var(--bg); color: var(--text); margin: 0; min-height: 100vh;
-      display: flex; align-items: center; justify-content: center; padding: 1rem;
+      display: flex; align-items: center; justify-content: center;
+      padding: max(1rem, env(safe-area-inset-top, 0px))
+               max(1rem, env(safe-area-inset-right, 0px))
+               max(1rem, env(safe-area-inset-bottom, 0px))
+               max(1rem, env(safe-area-inset-left, 0px));
     }
     .card {
       width: 100%; max-width: 420px; background: var(--bg-soft);
@@ -78,6 +84,7 @@
     .panel.active { display: block; }
     .remember-row {
       display: flex; align-items: center; gap: .5rem; margin-top: .75rem;
+      min-height: var(--touch-min); padding: .25rem 0;
     }
     .remember-row input[type="checkbox"] {
       width: auto; margin: 0; min-height: unset; accent-color: var(--accent);
@@ -86,11 +93,18 @@
       margin: 0; font-size: .85rem; color: var(--muted); cursor: pointer;
     }
     @media (max-width: 720px) {
-      body { align-items: flex-start; padding: .75rem; padding-top: 1.25rem; }
+      body {
+        align-items: flex-start;
+        padding: max(.75rem, env(safe-area-inset-top, 0px))
+                 max(.75rem, env(safe-area-inset-right, 0px))
+                 max(.75rem, env(safe-area-inset-bottom, 0px))
+                 max(.75rem, env(safe-area-inset-left, 0px));
+        padding-top: max(1.25rem, env(safe-area-inset-top, 0px));
+      }
       .card { padding: 1.15rem; border-radius: 10px; }
       h1 { font-size: 1.2rem; }
-      input, button { font-size: 16px; min-height: 44px; }
-      .tabs button { min-height: 44px; }
+      input, button { font-size: 16px; min-height: var(--touch-min); }
+      .tabs button { min-height: var(--touch-min); }
     }
   </style>
 </head>
@@ -114,7 +128,7 @@
       <label for="loginPass">Пароль</label>
       <input id="loginPass" name="password" type="password" autocomplete="current-password">
       <button type="button" id="btnLogin" onclick="doLogin()">Войти</button>
-      <p class="err" id="loginErr"></p>
+      <p class="err" id="loginErr" aria-live="polite"></p>
     </div>
 
     <div id="panelRegister" class="panel" role="tabpanel" aria-labelledby="tabRegister">
@@ -127,7 +141,7 @@
       <label for="regPass2">Повтор пароля</label>
       <input id="regPass2" name="password_confirm" type="password" autocomplete="new-password">
       <button type="button" id="btnRegister" onclick="doRegister()">Зарегистрироваться</button>
-      <p class="err" id="regErr"></p>
+      <p class="err" id="regErr" aria-live="polite"></p>
     </div>
   </div>
   <script>

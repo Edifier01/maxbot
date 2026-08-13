@@ -28,9 +28,6 @@ from urllib.error import URLError, HTTPError
 from urllib.request import Request, urlopen
 
 import uvicorn
-from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -77,7 +74,6 @@ MAX_CONSECUTIVE_ERRORS = 5
 CIRCUIT_BREAK_MINUTES = 30
 WORKER_TIMEOUT = 300
 PIN_HASH_PREFIX = "scrypt:"
-VAULT_MAGIC = b"max-sender-v1"
 BACKUP_KEEP = 10
 SECRET_SETTING_KEYS = frozenset({"api_pin", "telegram_bot_token"})
 DB_BACKEND = (
@@ -253,18 +249,14 @@ _login_tasks: dict[Any, asyncio.Task] = {}
 _settings_cache: dict = {}
 _settings_cache_lock = threading.Lock()
 _rate_counters: dict[str, list[float]] = defaultdict(list)
-_fernet: Fernet | None = None
-_vault_unlocked = False
 
 
 def reset_test_runtime() -> None:
     """Сброс in-memory состояния между pytest-тестами (MAX_TEST=1)."""
-    global _fernet, _vault_unlocked
-    from app import sqlite_backend
+    from app import sqlite_backend, vault as vault_mod
 
     sqlite_backend.reset_connections()
-    _fernet = None
-    _vault_unlocked = False
+    vault_mod.clear_cache()
     REGISTRY.reset_test()
     with _settings_cache_lock:
         _settings_cache.clear()
@@ -674,157 +666,74 @@ def _self_check_round_robin() -> None:
 
 
 def _session_dir(profile_id: int) -> Path:
-    d = SESSIONS / str(profile_id)
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    from app import vault as vault_mod
 
-
-def _derive_fernet(password: str, salt: bytes) -> Fernet:
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=480_000,
-    )
-    key = base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
-    return Fernet(key)
+    return vault_mod.session_dir(_resolve_data_dir(), profile_id)
 
 
 def vault_status() -> dict[str, Any]:
-    _ensure_vault_unlocked()
-    has_legacy = _APP_KEY_PATH.exists()
-    return {
-        "unlocked": bool(_vault_unlocked and _fernet is not None),
-        "protected": False,
-        "legacy": has_legacy,
-        "needs_setup": False,
-    }
+    from app import vault as vault_mod
+
+    return vault_mod.status(_resolve_data_dir())
 
 
 def _ensure_vault_unlocked() -> None:
-    """Auto-unlock via .app_key; no user password in server/desktop panel."""
-    global _fernet, _vault_unlocked
-    if _vault_unlocked and _fernet is not None:
-        return
-    DATA.mkdir(parents=True, exist_ok=True)
-    SESSIONS.mkdir(parents=True, exist_ok=True)
-    if _APP_SALT_PATH.exists():
-        _APP_SALT_PATH.unlink(missing_ok=True)
-        _APP_VAULT_PATH.unlink(missing_ok=True)
-        append_log("Хранилище: режим с паролем отключён, используется .app_key")
-    if not _APP_KEY_PATH.exists():
-        _APP_KEY_PATH.write_bytes(Fernet.generate_key())
-    try:
-        _fernet = Fernet(_APP_KEY_PATH.read_bytes())
-        _vault_unlocked = True
-    except Exception as e:
-        append_log(f"Хранилище: не удалось загрузить .app_key: {e}")
+    """Auto-unlock via .app_key for current data_dir (per-tenant in server mode)."""
+    from app import vault as vault_mod
+
+    vault_mod.ensure_vault_unlocked(_resolve_data_dir(), log=append_log)
 
 
 def _try_legacy_unlock() -> None:
-    _ensure_vault_unlocked()
+    from app import vault as vault_mod
+
+    vault_mod.try_legacy_unlock(_resolve_data_dir(), log=append_log)
 
 
-def _get_fernet() -> Fernet:
-    if _fernet is None or not _vault_unlocked:
-        raise RuntimeError("Хранилище сессий заблокировано — введите пароль")
-    return _fernet
+def _get_fernet():
+    from app import vault as vault_mod
 
-
-def _reencrypt_all_sessions(old_f: Fernet, new_f: Fernet) -> int:
-    """Перешифровать все session.db.enc со старого ключа на новый."""
-    n = 0
-    if not SESSIONS.exists():
-        return 0
-    for d in SESSIONS.iterdir():
-        if not d.is_dir():
-            continue
-        enc = d / "session.db.enc"
-        db = d / "session.db"
-        if db.exists() and not enc.exists():
-            try:
-                enc.write_bytes(old_f.encrypt(db.read_bytes()))
-                db.unlink(missing_ok=True)
-            except Exception:
-                continue
-        if not enc.exists():
-            continue
-        try:
-            plain = old_f.decrypt(enc.read_bytes())
-            enc.write_bytes(new_f.encrypt(plain))
-            n += 1
-        except InvalidToken:
-            continue
-        except OSError:
-            continue
-    return n
+    return vault_mod.get_fernet(_resolve_data_dir())
 
 
 def setup_vault(password: str) -> dict[str, Any]:
-    """Первичная установка или миграция с legacy .app_key на PBKDF2."""
-    global _fernet, _vault_unlocked
-    if len(password) < 6:
-        raise ValueError("Пароль хранилища должен быть не короче 6 символов")
-    if _APP_SALT_PATH.exists():
-        raise ValueError("Хранилище уже защищено — используйте разблокировку")
+    """Legacy password-vault setup API (PBKDF2); panel uses .app_key auto-unlock."""
+    from app import vault as vault_mod
 
-    DATA.mkdir(parents=True, exist_ok=True)
-    salt = os.urandom(16)
-    new_f = _derive_fernet(password, salt)
-    migrated = 0
-    if _APP_KEY_PATH.exists():
-        old_f = Fernet(_APP_KEY_PATH.read_bytes())
-        migrated = _reencrypt_all_sessions(old_f, new_f)
-        _APP_KEY_PATH.unlink(missing_ok=True)
-
-    _APP_SALT_PATH.write_bytes(salt)
-    _APP_VAULT_PATH.write_bytes(new_f.encrypt(VAULT_MAGIC))
-    _fernet = new_f
-    _vault_unlocked = True
-    append_log(
-        f"Хранилище защищено паролем"
-        + (f" (перешифровано сессий: {migrated})" if migrated else "")
-    )
-    return {"ok": True, "migrated_sessions": migrated}
+    return vault_mod.setup(_resolve_data_dir(), password, log=append_log)
 
 
 def unlock_vault(password: str) -> None:
-    global _fernet, _vault_unlocked
-    if not _APP_SALT_PATH.exists():
-        raise ValueError("Сначала задайте пароль хранилища")
-    salt = _APP_SALT_PATH.read_bytes()
-    candidate = _derive_fernet(password, salt)
-    if not _APP_VAULT_PATH.exists():
-        raise ValueError("Повреждён файл хранилища (.app_vault)")
-    try:
-        magic = candidate.decrypt(_APP_VAULT_PATH.read_bytes())
-    except InvalidToken as e:
-        raise ValueError("Неверный пароль хранилища") from e
-    if magic != VAULT_MAGIC:
-        raise ValueError("Неверный пароль хранилища")
-    _fernet = candidate
-    _vault_unlocked = True
-    append_log("Хранилище разблокировано")
+    from app import vault as vault_mod
+
+    vault_mod.unlock(_resolve_data_dir(), password, log=append_log)
 
 
 def lock_vault() -> None:
-    global _fernet, _vault_unlocked
-    if _vault_unlocked:
-        _encrypt_all_sessions()
-    _fernet = None
-    _vault_unlocked = False
-    append_log("Хранилище заблокировано")
+    from app import vault as vault_mod
+
+    data_dir = _resolve_data_dir()
+
+    def _enc_current() -> None:
+        _encrypt_sessions_for_data_dir(data_dir)
+
+    vault_mod.lock(data_dir, encrypt_sessions=_enc_current, log=append_log)
 
 
 def _require_vault_unlocked() -> None:
-    _ensure_vault_unlocked()
-    if not (_vault_unlocked and _fernet is not None):
+    from app import vault as vault_mod
+
+    data_dir = _resolve_data_dir()
+    vault_mod.ensure_vault_unlocked(data_dir, log=append_log)
+    fernet, unlocked = vault_mod.get_state(data_dir)
+    if not (unlocked and fernet is not None):
         raise HTTPException(423, "Хранилище сессий недоступно")
 
 
 def _vault_ready_for_send() -> bool:
-    st = vault_status()
-    return not st["needs_setup"] and bool(st["unlocked"])
+    from app import vault as vault_mod
+
+    return vault_mod.ready_for_send(_resolve_data_dir())
 
 
 def _auto_run_enabled() -> bool:
@@ -877,33 +786,15 @@ async def _try_auto_resume(*, log_prefix: str = "Автовозобновлен�
 
 
 def _decrypt_session(profile_id: int) -> None:
-    d = _session_dir(profile_id)
-    db, enc = d / "session.db", d / "session.db.enc"
-    if not enc.exists() or db.exists():
-        return
-    try:
-        db.write_bytes(_get_fernet().decrypt(enc.read_bytes()))
-    except InvalidToken:
-        enc.unlink(missing_ok=True)
-        append_log(f"Профиль #{profile_id}: не удалось расшифровать сессию — войдите заново")
-    except RuntimeError as e:
-        append_log(f"Профиль #{profile_id}: {e}")
-        raise
+    from app import vault as vault_mod
+
+    vault_mod.decrypt_session_file(_resolve_data_dir(), profile_id, log=append_log)
 
 
 def _encrypt_session(profile_id: int) -> None:
-    d = _session_dir(profile_id)
-    db, enc = d / "session.db", d / "session.db.enc"
-    if not db.exists():
-        return
-    try:
-        enc.write_bytes(_get_fernet().encrypt(db.read_bytes()))
-        db.unlink()
-    except RuntimeError:
-        # при shutdown без unlock — не трогаем plaintext (лучше чем потерять)
-        pass
-    except OSError as e:
-        append_log(f"Профиль #{profile_id}: ошибка шифрования сессии: {e}")
+    from app import vault as vault_mod
+
+    vault_mod.encrypt_session_file(_resolve_data_dir(), profile_id, log=append_log)
 
 
 def _clear_session(profile_id: int) -> None:
@@ -2697,23 +2588,55 @@ async def lifespan(_app: FastAPI):
         _encrypt_all_sessions()
 
 
-def _encrypt_all_sessions() -> None:
-    for key in list(_auth_sessions.keys()):
-        profile_id = key[1] if isinstance(key, tuple) else key
+def _encrypt_sessions_for_data_dir(data_dir: Path) -> None:
+    """Encrypt plaintext sessions under one data_dir with that dir's vault key."""
+    from app import paths, vault as vault_mod
+
+    vault_mod.ensure_vault_unlocked(data_dir, log=append_log)
+    sessions = paths.sessions_root(data_dir)
+    if not sessions.exists():
+        return
+    for d in sessions.iterdir():
+        if not d.is_dir() or not (d / "session.db").exists():
+            continue
         try:
-            _encrypt_session(profile_id)
+            vault_mod.encrypt_session_file(data_dir, int(d.name), log=append_log)
+        except (ValueError, OSError):
+            pass
+
+
+def _encrypt_all_sessions() -> None:
+    """Shutdown/signal: encrypt each tenant (and global) with its own key."""
+    if not _is_server_mode():
+        _encrypt_sessions_for_data_dir(_resolve_data_dir())
+        return
+
+    from app.tenant import tenant_scope
+
+    tenants_root = ROOT / "data" / "tenants"
+    if tenants_root.exists():
+        for td in tenants_root.iterdir():
+            if not td.is_dir() or not td.name.isdigit():
+                continue
+            try:
+                with tenant_scope(tenant_id=int(td.name), role="user"):
+                    _encrypt_sessions_for_data_dir(_resolve_data_dir())
+            except Exception:
+                pass
+    global_dir = ROOT / "data" / "global"
+    if global_dir.exists():
+        try:
+            with tenant_scope(use_global_data=True, role="admin"):
+                _encrypt_sessions_for_data_dir(_resolve_data_dir())
         except Exception:
             pass
-    try:
-        if SESSIONS.exists():
-            for d in SESSIONS.iterdir():
-                if d.is_dir() and (d / "session.db").exists():
-                    try:
-                        _encrypt_session(int(d.name))
-                    except (ValueError, OSError):
-                        pass
-    except OSError:
-        pass
+    # Legacy shared data/ (no tenant context) — only if present
+    shared = ROOT / "data"
+    if shared.is_dir() and (shared / "sessions").exists():
+        try:
+            _encrypt_sessions_for_data_dir(shared)
+        except Exception:
+            pass
 
 
 app = FastAPI(title="MAX Sender", lifespan=lifespan)

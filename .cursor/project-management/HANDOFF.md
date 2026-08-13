@@ -10,7 +10,13 @@
 7. Use `/start-feature ...` for non-trivial changes.
 8. Update these project-management files after meaningful work.
 
-## Latest (2026-08-07)
+## Latest (2026-08-09)
+- **FEATURE-VAULT-CI-2026 COMPLETE** — vault hot-path `main`→`app.vault` per-`data_dir`; shutdown encrypt per tenant; ADR-006 + HOW-IT-WORKS `.app_key` threat model; CI `server-smoke` + Postgres/`DATABASE_URL`; `tests/test_vault_hot_path_isolation.py`. Agents: security ADR [e3cb7f15](e3cb7f15-7181-4370-9671-63046d3d1166), devops [15b477e9](15b477e9-5f4a-4f40-a546-6623ef020be6), backend [ce6c2f60](ce6c2f60-8a20-4345-894f-2d71774d0b43), qa [4b9a2ee9](4b9a2ee9-9ba9-4911-bdfe-7a9b3649e378), verifier [56c95f7b](56c95f7b-5643-4db8-842f-ffea53ed94e4) PASS WITH NOTES, security spot-check [4da280c8](4da280c8-fcc5-4f8c-aca5-74ef3ece34dd) PASS WITH NOTES. Parent pytest: **110 passed, 13 skipped**.
+
+## Prior (2026-08-08)
+- **FEATURE-MOBILE-2026 COMPLETE** — P0/P1 mobile polish on `static/index.html`, `admin.html`, `auth.html`: `--touch-min: 44px`, `touch-action: manipulation`, safe-area insets, admin 16px inputs + settings-row stack + toast stretch + `#expiringTable` in `.table-scroll`, index modal-actions column-reverse / settings save full-width. P2 badge chrome deferred. Agents: ui-designer `21298e8b…`, frontend `45a7aaa9…`, qa `137129fd…`, verifier `4f903300…` (PASS WITH NOTES). Parent pytest: **108 passed, 13 skipped**.
+
+## Prior (2026-08-07)
 - **Admin/User panel UX follow-up COMPLETE** — `static/admin.html`: 3 tabs + hash; delete-user via `data-action` delegation (fix option A: broken inline onclick); subscription +30d with confirm; removed days-group. `static/index.html`: dashStats/dashCards visible to tenant users; removed `adminGlobalMode` bridge. Pytest: 105 passed, 13 skipped.
 - **Remember Me (persistent login) COMPLETE** — `remember_me` default true; HttpOnly `max_token` cookie; `POST /api/auth/restore-session`; UI checkbox in `auth.html`; boot restore in `index.html`/`admin.html`. Pytest: 104 passed, 13 skipped.
 - **FEATURE-SAAS-UX-2026 COMPLETE** — verifier PASS. Pytest: 100 passed, 7 skipped.

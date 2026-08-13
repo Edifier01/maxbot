@@ -92,7 +92,7 @@ def try_legacy_unlock(data_dir: Path, log: LogFn | None = None) -> None:
 def get_fernet(data_dir: Path) -> Fernet:
     fernet, unlocked = get_state(data_dir)
     if fernet is None or not unlocked:
-        raise RuntimeError("Хранилище сессий заблокировано — введите пароль")
+        raise RuntimeError("Хранилище сессий недоступно — не удалось загрузить .app_key")
     return fernet
 
 
@@ -127,7 +127,7 @@ def reencrypt_all_sessions(data_dir: Path, old_f: Fernet, new_f: Fernet) -> int:
 
 
 def setup(data_dir: Path, password: str, log: LogFn | None = None) -> dict[str, Any]:
-    """Первичная установка или миграция с legacy .app_key на PBKDF2."""
+    """Legacy password-vault setup API (PBKDF2); panel uses .app_key auto-unlock."""
     if len(password) < 6:
         raise ValueError("Пароль хранилища должен быть не короче 6 символов")
     if paths.app_salt_path(data_dir).exists():

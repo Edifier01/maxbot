@@ -66,9 +66,14 @@
       --shadow: 0 12px 40px rgba(0,0,0,.35);
       --font: "Manrope", system-ui, sans-serif;
       --mono: "JetBrains Mono", ui-monospace, monospace;
+      --touch-min: 44px;
     }
     * { box-sizing: border-box; }
     html { color-scheme: dark; scroll-behavior: smooth; overflow-x: hidden; }
+    button, a, .link, .btn, nav button, input, select, textarea,
+    button.small, button.primary, button.danger, .group-head {
+      touch-action: manipulation;
+    }
     button:focus-visible,
     nav button:focus-visible,
     input:focus-visible,
@@ -109,12 +114,16 @@
         radial-gradient(900px 500px at 100% 0%, rgba(62,207,142,.06), transparent 45%),
         var(--bg);
       background-attachment: fixed;
+      padding-left: env(safe-area-inset-left, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
     }
     .topbar {
       position: sticky; top: 0; z-index: 50;
       backdrop-filter: blur(14px);
       background: rgba(12,14,20,.82);
       border-bottom: 1px solid var(--line-soft);
+      padding-top: env(safe-area-inset-top, 0px);
     }
     header {
       padding: .85rem 1.5rem;
@@ -344,7 +353,9 @@
     .modal input { max-width: none; width: 100%; margin-bottom: 1rem; }
     .modal-actions { display: flex; gap: .5rem; justify-content: flex-end; }
     #toast-container {
-      position: fixed; bottom: 1.5rem; right: 1.5rem;
+      position: fixed;
+      bottom: max(1.5rem, env(safe-area-inset-bottom, 0px));
+      right: max(1.5rem, env(safe-area-inset-right, 0px));
       display: flex; flex-direction: column; gap: .5rem; z-index: 200;
     }
     .toast {
@@ -422,6 +433,8 @@
     .dash-stat .n { font-size: 1.35rem; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
     .tabular-nums { font-variant-numeric: tabular-nums; }
     #dashProgressLabel, #campaignProgress { font-variant-numeric: tabular-nums; }
+    #campaignProgress { white-space: nowrap; }
+    #dashProgressLabel { white-space: nowrap; min-width: 160px; text-align: right; }
     .dash-stat .l { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; margin-top: .15rem; }
     .tip { border-bottom: 1px dotted var(--faint); cursor: help; }
     .btn-ico { display: inline-flex; align-items: center; gap: .4rem; }
@@ -482,7 +495,7 @@
       #btnLogout { margin-left: 0; align-self: flex-start; }
       #progressWrap { max-width: 100%; width: 100%; order: 10; }
       nav { padding-bottom: .65rem; gap: .25rem; }
-      nav button { padding: .5rem .75rem; min-height: 40px; }
+      nav button { padding: .5rem .75rem; min-height: var(--touch-min); }
       input, select, textarea { max-width: 100%; font-size: 16px; }
       .panel .row { flex-direction: column; align-items: stretch; }
       .panel .row input, .panel .row button { width: 100%; max-width: none; }
@@ -495,10 +508,10 @@
       .group-body input, .group-body textarea, .group-body button { max-width: none; width: 100%; }
       .group-body td:last-child button { width: 100%; margin-bottom: .35rem; }
       .group-actions { flex-direction: column; width: 100%; }
-      .group-actions button { width: 100%; min-height: 40px; }
+      .group-actions button { width: 100%; min-height: var(--touch-min); }
       .toolbar { flex-direction: column; align-items: stretch; }
       .toolbar button, .toolbar .primary, .toolbar .danger, .toolbar .small {
-        width: 100%; justify-content: center; min-height: 44px;
+        width: 100%; justify-content: center; min-height: var(--touch-min);
       }
       .section-head { flex-direction: column; align-items: flex-start; gap: .35rem; }
       .dash-cards { grid-template-columns: 1fr; }
@@ -506,12 +519,23 @@
       .data-table { font-size: .82rem; min-width: 520px; }
       .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
       #toast-container {
-        left: 1rem; right: 1rem; bottom: 1rem; align-items: stretch;
+        left: 1rem; right: 1rem;
+        bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+        align-items: stretch;
       }
       .toast { max-width: none; width: 100%; }
       .modal { width: min(380px, 94vw); margin: 1rem; }
+      .modal-actions {
+        flex-direction: column-reverse; align-items: stretch;
+      }
+      .modal-actions button { width: 100%; min-height: var(--touch-min); }
+      .settings-actions button.primary { width: 100%; min-height: var(--touch-min); }
       .phone-cell { flex-direction: column; align-items: flex-start; }
-      button.small { min-height: 36px; }
+      button.small { min-height: var(--touch-min); }
+      #dashProgressLabel {
+        white-space: normal; min-width: 0; text-align: left;
+      }
+      #campaignProgress { white-space: normal; }
     }
     /* Hide shell until role UI applied — avoids full-layout flash for tenant users on refresh */
     body:not(.ui-ready) .topbar,
@@ -537,7 +561,7 @@
       <span id="msgCount" class="hint header-user-hide" style="margin:0"></span>
       <div id="progressWrap">
         <div id="progressTrack"><div id="progressBar"></div></div>
-        <span id="campaignProgress" class="hint" style="white-space:nowrap;margin:0"></span>
+        <span id="campaignProgress" class="hint" style="margin:0"></span>
       </div>
     </div>
   </header>
@@ -624,7 +648,7 @@
           <div id="dashProgressTrack" style="flex:1;height:10px;background:var(--bg-soft);border-radius:999px;overflow:hidden">
             <div id="dashProgressBar" style="height:100%;width:0;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:999px;transition:width .5s ease"></div>
           </div>
-          <span id="dashProgressLabel" class="hint" style="margin:0;white-space:nowrap;min-width:160px;text-align:right"></span>
+          <span id="dashProgressLabel" class="hint" style="margin:0"></span>
         </div>
       </div>
       <div id="adminSummarySlot"></div>

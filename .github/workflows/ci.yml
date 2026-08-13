@@ -6,8 +6,24 @@ on:
   pull_request:
 
 jobs:
+  # Full suite with Postgres so DATABASE_URL skipif modules cannot silently skip.
+  # server-e2e kept as a focused e2e gate (acceptable duplicate cost for now).
   server-smoke:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: maxsender
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: maxsender
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U maxsender -d maxsender"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,9 +35,13 @@ jobs:
           pip install pytest httpx
       - name: Server tests
         env:
+          DATABASE_URL: postgresql://maxsender:testpass@localhost:5432/maxsender
           MAX_TEST: "1"
           MAX_SERVER_MODE: "1"
           JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: CiAdminPass123!
+          INTERNAL_SERVICE_TOKEN: ci-internal-token
         run: python -m pytest tests/ -q
 
   compose-config:
