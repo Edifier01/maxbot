@@ -11,9 +11,11 @@ from fastapi import APIRouter, HTTPException
 
 from app.routes_models import CodeIn, ProfilePatchIn
 from app.runtime import main as m
-from app.tenant import clear_context, restore_context, snapshot_context
+from app.tenant import clear_context, is_cabinet_user, restore_context, snapshot_context
 
 router = APIRouter(tags=["profiles"])
+
+_CABINET_DENIED = "Недоступно в личном кабинете"
 
 
 @router.get("/api/profiles")
@@ -60,6 +62,8 @@ async def patch_profile(profile_id: int, body: ProfilePatchIn):
     data = body.model_dump(exclude_unset=True)
     if not data:
         raise HTTPException(400, "Нечего обновлять")
+    if is_cabinet_user() and "proxy" in data:
+        raise HTTPException(403, _CABINET_DENIED)
     with m._conn() as c:
         p = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
         if not p:

@@ -6,15 +6,11 @@ from fastapi import APIRouter, HTTPException
 
 from app.routes_models import BulkProfilesIn, GroupIn, GroupPatchIn, ProfileIn
 from app.runtime import main as m
-from app.tenant import get_user_role, is_impersonating
+from app.tenant import is_cabinet_user
 
 router = APIRouter(tags=["groups"])
 
 _CABINET_DENIED = "Недоступно в личном кабинете"
-
-
-def _is_cabinet_user() -> bool:
-    return get_user_role() == "user" and not is_impersonating()
 
 
 @router.get("/api/groups")
@@ -93,7 +89,7 @@ async def add_group(body: GroupIn):
     if not invite:
         raise HTTPException(400, "Укажите пригласительную ссылку группы")
     proxy = (body.proxy or "").strip()
-    if _is_cabinet_user():
+    if is_cabinet_user():
         if proxy:
             raise HTTPException(403, _CABINET_DENIED)
         proxy = ""
@@ -117,7 +113,7 @@ async def patch_group(group_id: int, body: GroupPatchIn):
     data = body.model_dump(exclude_unset=True)
     if not data:
         raise HTTPException(400, "Нечего обновлять")
-    if _is_cabinet_user() and ("proxy" in data or "is_active" in data):
+    if is_cabinet_user() and ("proxy" in data or "is_active" in data):
         raise HTTPException(403, _CABINET_DENIED)
     if "max_chat_id" in data:
         data.pop("max_chat_id")
@@ -161,6 +157,8 @@ async def patch_group(group_id: int, body: GroupPatchIn):
 async def add_group_profile(group_id: int, body: ProfileIn):
 
     phone = m._normalize_phone(body.phone)
+    if is_cabinet_user() and (body.proxy or "").strip():
+        raise HTTPException(403, _CABINET_DENIED)
     with m._conn() as c:
         g = c.execute("SELECT id FROM groups WHERE id=?", (group_id,)).fetchone()
         if not g:
@@ -210,7 +208,7 @@ async def add_group_profile(group_id: int, body: ProfileIn):
 async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
 
     """Импорт phone,label. Пропускает уже существующие в группе."""
-    if _is_cabinet_user():
+    if is_cabinet_user():
         raise HTTPException(403, _CABINET_DENIED)
     if not body.profiles:
         raise HTTPException(400, "Список профилей пуст")

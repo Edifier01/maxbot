@@ -107,6 +107,10 @@ def is_impersonating() -> bool:
     return _impersonating.get()
 
 
+def is_cabinet_user() -> bool:
+    return get_user_role() == "user" and not is_impersonating()
+
+
 def use_global_data() -> bool:
     return _use_global_data.get()
 

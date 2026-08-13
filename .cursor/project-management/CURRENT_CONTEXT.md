@@ -9,7 +9,7 @@ MAX Sender is a Python/FastAPI app for controlled MAX messenger text sending wit
 - `.cursor/`: AI system (skills, agents, project-management).
 
 ## Current State
-- **FEATURE-REVIEW-FIX-2026** wave 1 COMPLETE — cabinet AuthZ on API, imp blocks `/api/admin`, Compose `REGISTRATION_OPEN=0`, `stop_worker`/watchdog/reset, deploy backup + restore fail-closed. Verifier PASS WITH NOTES; pytest **148 passed, 19 skipped**. Residual: profile-level proxy still writable by user. Out of scope: cookie-only CSP, vault 410, CI skipif, delay floor. Plan: `FEATURE-REVIEW-FIX-2026.md`.
+- **FEATURE-REVIEW-FIX-2026** wave 2 COMPLETE — profile proxy 403 for cabinet, vault setup/unlock/lock 410 in server mode, `delay_min_sec` API floor 5. Verifier PASS WITH NOTES; pytest **155 passed, 19 skipped**. Wave 1 commit `7c1e526`. Residual: cookie-only CSP, CI skipif 15. Plan: `FEATURE-REVIEW-FIX-2026.md`.
 - **FEATURE-UX-OPS-2026** complete — pause holds, admin pacing copies to tenants (ADR 007), subscription extend/revoke, UI polish; tenant cabinet: groups + start/stop + stats, progress removed. Verifier PASS WITH NOTES; parent pytest **131 passed, 19 skipped**. Plan: `FEATURE-UX-OPS-2026.md`.
 - **FEATURE-VAULT-CI-2026** complete — vault hot-path per-`data_dir` (`main`→`app.vault`), ADR-006, HOW-IT-WORKS `.app_key` threat model, CI Postgres on `server-smoke`, `test_vault_hot_path_isolation.py`. Verifier + security PASS WITH NOTES; parent pytest **110 passed, 13 skipped**. Plan: `FEATURE-VAULT-CI-2026.md`.
 - SERVER-REVIEW-FIX-PLAN (P0–P3) done; P3-3 main.py split is PARTIAL (ADR 003).

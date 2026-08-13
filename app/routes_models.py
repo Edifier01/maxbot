@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 import antiban_core
 
@@ -72,7 +72,7 @@ class GroupPatchIn(BaseModel):
 
 
 class SettingsIn(BaseModel):
-    delay_min_sec: int | None = None
+    delay_min_sec: int | None = Field(default=None, ge=5)
     delay_max_sec: int | None = None
     max_msgs_per_profile_day: int | None = None
     daily_limit_min: int | None = None

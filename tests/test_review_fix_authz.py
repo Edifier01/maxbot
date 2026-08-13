@@ -241,3 +241,138 @@ def test_admin_imp_can_patch_group_proxy(tmp_path, monkeypatch):
         assert row["proxy"] == proxy
         off = asyncio.run(patch_group(gid, GroupPatchIn(is_active=0)))
         assert off["is_active"] == 0
+
+
+def test_is_cabinet_user_role_and_impersonation():
+    from app.tenant import is_cabinet_user
+
+    with tenant_scope(user_id=1, tenant_id=2, role="user"):
+        assert is_cabinet_user()
+    with tenant_scope(user_id=1, tenant_id=2, role="user", impersonating=True):
+        assert not is_cabinet_user()
+    with tenant_scope(user_id=9, role="admin"):
+        assert not is_cabinet_user()
+
+
+def test_user_cannot_patch_profile_proxy(tmp_path, monkeypatch):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_models import ProfilePatchIn
+    from app.routes_profiles import patch_profile
+
+    with tenant_scope(tenant_id=1, role="user"):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as c:
+            cur = c.execute(
+                "INSERT INTO profiles (phone, label, status, proxy) VALUES (?, ?, ?, ?)",
+                ("+79001234567", "A", m.ProfileStatus.PENDING, ""),
+            )
+            pid = int(cur.lastrowid)
+
+        with pytest.raises(HTTPException) as ei_proxy:
+            asyncio.run(
+                patch_profile(
+                    pid,
+                    ProfilePatchIn(proxy="socks5://user:pass@203.0.113.10:1080"),
+                )
+            )
+        assert ei_proxy.value.status_code == 403
+        assert "личном кабинете" in str(ei_proxy.value.detail)
+
+        renamed = asyncio.run(patch_profile(pid, ProfilePatchIn(label="Renamed")))
+        assert renamed["label"] == "Renamed"
+        assert renamed["proxy"] == ""
+
+
+def test_user_cannot_add_phone_with_proxy(tmp_path, monkeypatch):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_groups import add_group, add_group_profile
+    from app.routes_models import GroupIn, ProfileIn
+
+    with tenant_scope(tenant_id=1, role="user"):
+        if not m._db_path().exists():
+            m.init_db()
+        created = asyncio.run(
+            add_group(GroupIn(name="G1", invite_link="https://max.ru/join/abc"))
+        )
+        gid = int(created["id"])
+
+        with pytest.raises(HTTPException) as ei_proxy:
+            asyncio.run(
+                add_group_profile(
+                    gid,
+                    ProfileIn(
+                        phone="+79001234567",
+                        proxy="socks5://user:pass@203.0.113.10:1080",
+                    ),
+                )
+            )
+        assert ei_proxy.value.status_code == 403
+        assert "личном кабинете" in str(ei_proxy.value.detail)
+
+        added = asyncio.run(
+            add_group_profile(gid, ProfileIn(phone="+79001234567", label="A"))
+        )
+        assert added["id"]
+        assert added["phone"] == "+79001234567"
+        with m._conn() as c:
+            row = c.execute(
+                "SELECT proxy FROM profiles WHERE id=?", (added["id"],)
+            ).fetchone()
+        assert row["proxy"] == ""
+
+
+def test_admin_imp_can_patch_profile_proxy(tmp_path, monkeypatch):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_models import ProfilePatchIn
+    from app.routes_profiles import patch_profile
+
+    with tenant_scope(tenant_id=1, role="admin", impersonating=True):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as c:
+            cur = c.execute(
+                "INSERT INTO profiles (phone, label, status, proxy) VALUES (?, ?, ?, ?)",
+                ("+79001234567", "A", m.ProfileStatus.PENDING, ""),
+            )
+            pid = int(cur.lastrowid)
+        proxy = "socks5://user:pass@203.0.113.10:1080"
+        row = asyncio.run(patch_profile(pid, ProfilePatchIn(proxy=proxy)))
+        assert row["proxy"] == proxy
+
+
+def test_server_mode_vault_password_endpoints_gone(tmp_path, monkeypatch):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_vault import (
+        VaultPasswordIn,
+        api_vault_lock,
+        api_vault_setup,
+        api_vault_status,
+        api_vault_unlock,
+    )
+
+    with tenant_scope(tenant_id=1, role="admin"):
+        st = asyncio.run(api_vault_status())
+        assert isinstance(st, dict)
+        assert "unlocked" in st
+
+        body = VaultPasswordIn(password="test-password")
+        for coro in (
+            api_vault_setup(body),
+            api_vault_unlock(body),
+            api_vault_lock(),
+        ):
+            with pytest.raises(HTTPException) as ei:
+                asyncio.run(coro)
+            assert ei.value.status_code == 410
+            assert ".app_key" in str(ei.value.detail)
+
+
+def test_desktop_vault_setup_not_gone(monkeypatch):
+    from app.routes_vault import VaultPasswordIn, api_vault_setup
+    from app.runtime import main as rv_main
+
+    monkeypatch.setattr(rv_main, "_is_server_mode", lambda: False)
+    monkeypatch.setattr(rv_main, "setup_vault", lambda password: {"ok": True})
+    result = asyncio.run(api_vault_setup(VaultPasswordIn(password="desktop-pass")))
+    assert result == {"ok": True}

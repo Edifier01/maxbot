@@ -7,6 +7,7 @@ import importlib
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.settings_scope import (
     GLOBAL_PACING_NEVER_COPY,
@@ -45,6 +46,14 @@ def _init_tenant(m, tenant_id: int) -> None:
     from app.tenant_init import init_tenant_db
 
     init_tenant_db(m, tenant_id)
+
+
+def test_settings_in_delay_min_floor():
+    from app.routes_models import SettingsIn
+
+    with pytest.raises(ValidationError):
+        SettingsIn(delay_min_sec=1)
+    assert SettingsIn(delay_min_sec=5).delay_min_sec == 5
 
 
 def test_allowlist_classifies_every_default_key():

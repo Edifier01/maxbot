@@ -75,3 +75,28 @@ MAX_TEST=1 MAX_SERVER_MODE=1 python -m pytest tests/ -q
 ```
 
 Compose: `docker compose config -q` with required env including `REGISTRATION_OPEN=0`.
+
+---
+
+## Wave 2 (COMPLETE — verifier PASS WITH NOTES; pytest 155 passed, 19 skipped)
+
+**Complexity:** MEDIUM  
+**ADR:** NO
+
+### In scope
+1. Cabinet user cannot set **profile** proxy (PATCH `/api/profiles/{id}`, POST add-phone with `proxy`). Reuse `_is_cabinet_user` — prefer `is_cabinet_user()` on `app/tenant.py`.
+2. Server mode: `/api/vault/setup`, `/unlock`, `/lock` return **410**. GET `/api/vault/status` stays. Desktop/local mode unchanged.
+3. Admin pacing: `delay_min_sec` cannot be saved below **5** (ADR 002). Do not lower DEFAULTS. Do not change warmup/other knobs.
+
+### Out of scope
+Cookie-only JWT/CSP; CI Postgres skipif 15; `main.py` split.
+
+### Agents
+- security-engineer → profile proxy + vault 410 + tests
+- campaign-antiban → SettingsIn delay_min floor 5 + test (no pacing weaken)
+
+### Verification
+```
+MAX_TEST=1 MAX_SERVER_MODE=1 python -m pytest tests/ -q
+```
+
