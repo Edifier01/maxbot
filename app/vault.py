@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import os
+import sqlite3
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -199,6 +201,42 @@ def session_dir(data_dir: Path, profile_id: int) -> Path:
     return d
 
 
+def sqlite_has_auth_token(db: Path) -> bool:
+    """True if session.db has a non-empty PyMax auth token row."""
+    if not db.is_file() or db.stat().st_size == 0:
+        return False
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(str(db))
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
+        ).fetchone()
+        if not row:
+            return False
+        tok = conn.execute(
+            "SELECT 1 FROM sessions WHERE token IS NOT NULL AND token != '' LIMIT 1"
+        ).fetchone()
+        return tok is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _unlink_retry(path: Path) -> None:
+    last: OSError | None = None
+    for _ in range(8):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except OSError as e:
+            last = e
+            time.sleep(0.05)
+    if last:
+        raise last
+
+
 def decrypt_session_file(data_dir: Path, profile_id: int, log: LogFn | None = None) -> None:
     d = session_dir(data_dir, profile_id)
     db, enc = d / "session.db", d / "session.db.enc"
@@ -206,10 +244,12 @@ def decrypt_session_file(data_dir: Path, profile_id: int, log: LogFn | None = No
         return
     try:
         db.write_bytes(get_fernet(data_dir).decrypt(enc.read_bytes()))
-    except InvalidToken:
-        enc.unlink(missing_ok=True)
+    except InvalidToken as e:
         if log:
             log(f"Профиль #{profile_id}: не удалось расшифровать сессию — войдите заново")
+        raise RuntimeError(
+            f"Профиль #{profile_id}: не удалось расшифровать сессию — войдите заново"
+        ) from e
     except RuntimeError as e:
         if log:
             log(f"Профиль #{profile_id}: {e}")
@@ -220,6 +260,12 @@ def encrypt_session_file(data_dir: Path, profile_id: int, log: LogFn | None = No
     d = session_dir(data_dir, profile_id)
     db, enc = d / "session.db", d / "session.db.enc"
     if not db.exists():
+        return
+    # Failed/empty Client.start() must not overwrite a good encrypted session.
+    if enc.exists() and not sqlite_has_auth_token(db):
+        _unlink_retry(db)
+        if log:
+            log(f"Профиль #{profile_id}: пустая сессия не записана, оставлен прежний файл")
         return
     try:
         enc.write_bytes(get_fernet(data_dir).encrypt(db.read_bytes()))

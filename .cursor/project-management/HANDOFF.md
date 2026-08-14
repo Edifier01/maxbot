@@ -10,6 +10,9 @@
 7. Use `/start-feature ...` for non-trivial changes.
 8. Update these project-management files after meaningful work.
 
+## Latest (2026-08-14)
+- **Hotfix: campaign must not request MAX OTP** — send/presence `_with_client` no longer attaches `sms_code_provider`. Missing/empty session raises instead of `request_code`. Vault decrypt InvalidToken no longer deletes `.enc`; empty plaintext cannot clobber a good encrypted session. Pytest **160 passed, 19 skipped**.
+
 ## Latest (2026-08-13)
 - **FEATURE-REVIEW-FIX-2026 wave 2 COMPLETE** — cabinet cannot write profile proxy; server vault setup/unlock/lock → 410; `delay_min_sec` API floor 5. Verifier [PASS WITH NOTES](990a477f-5db3-45f2-a238-8741b73e58ab); QA [PASS](e0a0054d-cc73-4821-bc56-bc7b9bcc85b9). Parent pytest **155 passed, 19 skipped**. Residual: cookie-only CSP, CI skipif. Uncommitted until asked.
 - **FEATURE-REVIEW-FIX-2026 wave 1 COMPLETE** — API cabinet lock (pause/reset/test/schedule/retry/settings/messages/group proxy/`is_active`/bulk 403 for `role=user`); impersonation 403 on `/api/admin`; Compose `REGISTRATION_OPEN=0`; `stop_worker` no self-await; watchdog respects `auto_run`; reset re-exported; backup before upgrade; restore fail-closed. Verifier [PASS WITH NOTES](5a1474e2-4f02-48c1-8bb0-44e49c1ad2d2); QA [PASS](db0cab57-e8b4-42ef-add7-00032226ebe1). Parent pytest **148 passed, 19 skipped**. Commit `7c1e526`.

@@ -9,7 +9,8 @@ MAX Sender is a Python/FastAPI app for controlled MAX messenger text sending wit
 - `.cursor/`: AI system (skills, agents, project-management).
 
 ## Current State
-- **FEATURE-REVIEW-FIX-2026** wave 2 COMPLETE — profile proxy 403 for cabinet, vault setup/unlock/lock 410 in server mode, `delay_min_sec` API floor 5. Verifier PASS WITH NOTES; pytest **155 passed, 19 skipped**. Wave 1 commit `7c1e526`. Residual: cookie-only CSP, CI skipif 15. Plan: `FEATURE-REVIEW-FIX-2026.md`.
+- **Hotfix:** campaign/send no longer requests MAX SMS. `_with_client(login_mode=False)` uses `_SessionOnlyAuthFlow`; missing session fails instead of `request_code`. Vault: InvalidToken keeps `.enc`; empty `session.db` does not overwrite a good encrypted session. Pytest **160 passed, 19 skipped**.
+- **FEATURE-REVIEW-FIX-2026** wave 2 COMPLETE — profile proxy 403 for cabinet, vault setup/unlock/lock 410 in server mode, `delay_min_sec` API floor 5. Verifier PASS WITH NOTES. Residual: cookie-only CSP, CI skipif 15. Plan: `FEATURE-REVIEW-FIX-2026.md`.
 - **FEATURE-UX-OPS-2026** complete — pause holds, admin pacing copies to tenants (ADR 007), subscription extend/revoke, UI polish; tenant cabinet: groups + start/stop + stats, progress removed. Verifier PASS WITH NOTES; parent pytest **131 passed, 19 skipped**. Plan: `FEATURE-UX-OPS-2026.md`.
 - **FEATURE-VAULT-CI-2026** complete — vault hot-path per-`data_dir` (`main`→`app.vault`), ADR-006, HOW-IT-WORKS `.app_key` threat model, CI Postgres on `server-smoke`, `test_vault_hot_path_isolation.py`. Verifier + security PASS WITH NOTES; parent pytest **110 passed, 13 skipped**. Plan: `FEATURE-VAULT-CI-2026.md`.
 - SERVER-REVIEW-FIX-PLAN (P0–P3) done; P3-3 main.py split is PARTIAL (ADR 003).

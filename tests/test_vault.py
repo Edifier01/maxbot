@@ -62,3 +62,32 @@ def test_per_tenant_state_isolation(tmp_path):
     fernet_a, unlocked_a = vault.get_state(d1)
     assert unlocked_a
     assert fernet_a.decrypt(Fernet(key_a).encrypt(b"x")) == b"x"
+
+
+def test_decrypt_invalid_token_keeps_enc(tmp_path):
+    import pytest
+
+    data_dir = tmp_path / "tenant"
+    vault.clear_cache()
+    vault.ensure_vault_unlocked(data_dir)
+    d = vault.session_dir(data_dir, 3)
+    enc = d / "session.db.enc"
+    enc.write_bytes(b"not-a-fernet-token")
+    with pytest.raises(RuntimeError, match="расшифровать"):
+        vault.decrypt_session_file(data_dir, 3)
+    assert enc.is_file()
+    assert not (d / "session.db").exists()
+
+
+def test_encrypt_skips_empty_db_when_enc_exists(tmp_path):
+    data_dir = tmp_path / "tenant"
+    vault.clear_cache()
+    vault.ensure_vault_unlocked(data_dir)
+    d = vault.session_dir(data_dir, 4)
+    db, enc = d / "session.db", d / "session.db.enc"
+    good = b"keep-me-encrypted"
+    enc.write_bytes(vault.get_fernet(data_dir).encrypt(good))
+    db.write_bytes(b"not-a-sqlite-session")
+    vault.encrypt_session_file(data_dir, 4)
+    assert not db.exists()
+    assert vault.get_fernet(data_dir).decrypt(enc.read_bytes()) == good

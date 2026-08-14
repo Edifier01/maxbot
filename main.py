@@ -246,6 +246,7 @@ _log: list[str] = []
 _log_lock = threading.Lock()
 _auth_sessions: dict[Any, dict[str, Any]] = {}
 _login_tasks: dict[Any, asyncio.Task] = {}
+_profile_client_locks: dict[Any, asyncio.Lock] = {}
 _settings_cache: dict = {}
 _settings_cache_lock = threading.Lock()
 _rate_counters: dict[str, list[float]] = defaultdict(list)
@@ -264,6 +265,7 @@ def reset_test_runtime() -> None:
         _log.clear()
     _auth_sessions.clear()
     _login_tasks.clear()
+    _profile_client_locks.clear()
     _rate_counters.clear()
     _metrics.update(
         {
@@ -827,10 +829,44 @@ def _encrypt_session(profile_id: int) -> None:
 
 def _clear_session(profile_id: int) -> None:
     d = _session_dir(profile_id)
-    for name in ("session.db", "session.db.enc"):
+    for name in ("session.db", "session.db.enc", "session.db-wal", "session.db-shm"):
         p = d / name
         if p.exists():
             p.unlink()
+
+
+def _session_db_has_token(profile_id: int) -> bool:
+    from app import vault as vault_mod
+
+    return vault_mod.sqlite_has_auth_token(_session_dir(profile_id) / "session.db")
+
+
+def _session_device_fields(profile_id: int) -> tuple[str | None, str | None]:
+    db = _session_dir(profile_id) / "session.db"
+    if not db.is_file():
+        return None, None
+    try:
+        with sqlite3.connect(str(db)) as conn:
+            row = conn.execute(
+                "SELECT device_id, mt_instance_id FROM sessions "
+                "WHERE token IS NOT NULL AND token != '' LIMIT 1"
+            ).fetchone()
+    except sqlite3.Error:
+        return None, None
+    if not row:
+        return None, None
+    device_id = (row[0] or "").strip() or None
+    mt_id = (row[1] or "").strip() or None
+    return device_id, mt_id
+
+
+def _profile_client_lock(profile_id: int) -> asyncio.Lock:
+    key = _auth_session_key(profile_id)
+    lock = _profile_client_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _profile_client_locks[key] = lock
+    return lock
 
 
 def _normalize_phone(phone: str) -> str:
@@ -927,6 +963,17 @@ class _QueuePasswordProvider:
             return await asyncio.wait_for(self._q.get(), timeout=300)
         except TimeoutError as e:
             raise TimeoutError("Облачный пароль не получен за 5 минут") from e
+
+
+class _SessionOnlyAuthFlow:
+    """Send/reconnect: never call MAX request_code (OTP)."""
+
+    async def authenticate(self, app) -> Any:
+        _ = app
+        raise RuntimeError(
+            "Сессия MAX отсутствует — нажмите «Войти» у профиля. "
+            "Рассылка не запрашивает SMS."
+        )
 
 
 class _AppSmsAuthFlow:
@@ -1099,16 +1146,48 @@ async def _with_client(
     group_id: int | None = None,
     proxy: str | None = None,
 ):
+    async with _profile_client_lock(profile_id):
+        return await _with_client_unlocked(
+            profile_id,
+            phone,
+            fn,
+            connect_timeout,
+            auth_timeout,
+            login_mode=login_mode,
+            group_id=group_id,
+            proxy=proxy,
+        )
+
+
+async def _with_client_unlocked(
+    profile_id: int,
+    phone: str,
+    fn,
+    connect_timeout: float = 90,
+    auth_timeout: float = 600,
+    *,
+    login_mode: bool = False,
+    group_id: int | None = None,
+    proxy: str | None = None,
+):
     from pymax import Client, ExtraConfig
 
     sess = _ensure_auth_session(profile_id)
     _set_auth_step(profile_id, "connecting")
     _decrypt_session(profile_id)
-    sms = _QueueSmsProvider(sess["sms_q"], profile_id)
-    pwd = _QueuePasswordProvider(sess["pwd_q"], profile_id)
+    if not login_mode and not _session_db_has_token(profile_id):
+        raise RuntimeError(
+            "Сессия MAX отсутствует — нажмите «Войти» у профиля. "
+            "Рассылка не запрашивает SMS."
+        )
     if proxy is None and group_id is not None:
         proxy = _group_proxy(group_id, profile_id)
     extra_kwargs: dict[str, Any] = {"reconnect": False, "log_level": "WARNING"}
+    device_id, mt_instance_id = _session_device_fields(profile_id)
+    if device_id:
+        extra_kwargs["device_id"] = device_id
+    if mt_instance_id:
+        extra_kwargs["mt_instance_id"] = mt_instance_id
     if proxy:
         extra_kwargs["proxy"] = proxy
         host = proxy.split("@")[-1]
@@ -1118,8 +1197,9 @@ async def _with_client(
     try:
         extra = ExtraConfig(**extra_kwargs)
     except TypeError:
-        # старая версия pymax без proxy в ExtraConfig
         extra_kwargs.pop("proxy", None)
+        extra_kwargs.pop("device_id", None)
+        extra_kwargs.pop("mt_instance_id", None)
         extra = ExtraConfig(**extra_kwargs)
         if proxy:
             append_log("Внимание: клиент MAX не поддерживает прокси в этой конфигурации — работаем без него")
@@ -1130,14 +1210,15 @@ async def _with_client(
         "extra_config": extra,
     }
     if login_mode:
+        sms = _QueueSmsProvider(sess["sms_q"], profile_id)
+        pwd = _QueuePasswordProvider(sess["pwd_q"], profile_id)
         client = Client(
             auth_flow=_AppSmsAuthFlow(sms, pwd, profile_id),
             **client_kwargs,
         )
     else:
         client = Client(
-            sms_code_provider=sms,
-            password_provider=pwd,
+            auth_flow=_SessionOnlyAuthFlow(),
             **client_kwargs,
         )
     box: dict[str, Any] = {"err": None, "result": None}
