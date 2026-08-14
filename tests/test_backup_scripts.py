@@ -16,3 +16,10 @@ def test_backup_restore_do_not_compose_run_alpine():
     assert "app czf - -C /app/data" in backup
     assert "--entrypoint python" in restore
     assert 'tarfile.open("/backup/data.tar.gz")' in restore
+
+
+def test_deploy_ssh_timeout_covers_image_build():
+    deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+    assert "command_timeout: 30m" in deploy
+    assert "docker compose build --no-cache" not in deploy
+    assert "docker compose build app" in deploy

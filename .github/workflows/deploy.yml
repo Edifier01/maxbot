@@ -44,6 +44,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script_stop: true
+          command_timeout: 30m
           script: |
             set -euo pipefail
             cd "${{ secrets.DEPLOY_PATH }}"
@@ -68,6 +69,6 @@ jobs:
               echo "First deploy (postgres not running) — skipping volume backup"
             fi
             docker compose pull redis caddy postgres 2>/dev/null || true
-            docker compose build --no-cache app
+            docker compose build app
             docker compose up -d
             CHECK_HTTPS=0 bash scripts/verify_deploy.sh
