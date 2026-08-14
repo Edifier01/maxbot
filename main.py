@@ -1159,6 +1159,40 @@ async def _with_client(
         )
 
 
+def _preferred_max_app_versions() -> tuple[tuple[str, int], ...] | None:
+    try:
+        from pymax.config import PREFERRED_VERSION
+
+        return tuple(PREFERRED_VERSION)
+    except Exception:
+        return None
+
+
+def _prefer_current_max_user_agent(extra: Any) -> None:
+    """Pin a current MAX app_version.
+
+    ponytail: PyMax 2.4.0 still rolls ~10% LEGACY_VERSIONS; MAX rejects those
+    with client.unsupported-version. Drop this once PyMax samples only current builds.
+    """
+    if getattr(extra, "user_agent", None) is not None:
+        return
+    generate = getattr(extra, "generate_user_agent", None)
+    if not callable(generate):
+        return
+    ua = generate()
+    preferred = _preferred_max_app_versions()
+    if preferred:
+        try:
+            app_version, build_number = preferred[0]
+            extra.user_agent = ua.model_copy(
+                update={"app_version": app_version, "build_number": build_number}
+            )
+            return
+        except Exception:
+            pass
+    extra.user_agent = ua
+
+
 async def _with_client_unlocked(
     profile_id: int,
     phone: str,
@@ -1203,6 +1237,7 @@ async def _with_client_unlocked(
         extra = ExtraConfig(**extra_kwargs)
         if proxy:
             append_log("Внимание: клиент MAX не поддерживает прокси в этой конфигурации — работаем без него")
+    _prefer_current_max_user_agent(extra)
     client_kwargs: dict[str, Any] = {
         "phone": phone,
         "work_dir": str(_session_dir(profile_id)),

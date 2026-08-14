@@ -11,6 +11,7 @@ _(none)_
 - Optional: CI install from `*.lock` (today lockfiles are Docker-only; CI uses `requirements*.txt`).
 
 ## Done
+- **Hotfix MAX client version** (2026-08-14): `maxapi-python==2.4.0` + pin preferred app_version; pytest 163 passed, 19 skipped.
 - **FEATURE-REVIEW-FIX-2026 wave 2** (2026-08-13): profile proxy cabinet 403, vault password APIs 410 in server mode, delay_min_sec ≥ 5. Verifier [PASS WITH NOTES](990a477f-5db3-45f2-a238-8741b73e58ab). Pytest 155 passed, 19 skipped.
 - **FEATURE-REVIEW-FIX-2026 wave 1** (2026-08-13): AuthZ cabinet lock + impersonation `/api/admin` 403 + Compose `REGISTRATION_OPEN=0` + `stop_worker`/watchdog/`reset` + deploy backup/restore fail-closed. Verifier [PASS WITH NOTES](5a1474e2-4f02-48c1-8bb0-44e49c1ad2d2). Pytest 148 passed, 19 skipped.
 - **FEATURE-UX-OPS-2026** (2026-08-13): pause vs auto_run, admin pacing → tenants (ADR 007), subscription extend/revoke, groups `is_active` + phone lookup, admin/auth UI; tenant cabinet stays groups/start-stop/stats, progress removed. Verifier PASS WITH NOTES; pytest 131 passed, 19 skipped.
