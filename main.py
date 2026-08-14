@@ -1118,7 +1118,8 @@ async def _wait_login_done(
             limit = connect_timeout
         left = limit - (time.monotonic() - t0)
         if left <= 0:
-            _set_auth_step(profile_id, "error")
+            if login_mode:
+                _set_auth_step(profile_id, "error")
             raise TimeoutError(
                 "Таймаут входа. Нажмите «Войти заново», дождитесь SMS → код → OK. "
                 "Облачный пароль — только если MAX запросит (☁)."
@@ -1193,6 +1194,14 @@ def _prefer_current_max_user_agent(extra: Any) -> None:
     extra.user_agent = ua
 
 
+def _clear_stale_connecting_step(profile_id: int) -> None:
+    """Send/presence must not leave the UI stuck on «Подключение…»."""
+    sess = _auth_sessions.get(_auth_session_key(profile_id))
+    if sess and sess.get("step") == "connecting":
+        sess["step"] = "idle"
+        sess["hint"] = ""
+
+
 async def _with_client_unlocked(
     profile_id: int,
     phone: str,
@@ -1207,7 +1216,10 @@ async def _with_client_unlocked(
     from pymax import Client, ExtraConfig
 
     sess = _ensure_auth_session(profile_id)
-    _set_auth_step(profile_id, "connecting")
+    if login_mode:
+        _set_auth_step(profile_id, "connecting")
+    else:
+        _clear_stale_connecting_step(profile_id)
     _decrypt_session(profile_id)
     if not login_mode and not _session_db_has_token(profile_id):
         raise RuntimeError(
@@ -1292,6 +1304,8 @@ async def _with_client_unlocked(
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+        if not login_mode:
+            _clear_stale_connecting_step(profile_id)
 
     if box.get("err") and box.get("result") is None:
         raise box["err"]

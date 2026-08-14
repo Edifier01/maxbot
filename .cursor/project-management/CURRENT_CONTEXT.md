@@ -9,7 +9,7 @@ MAX Sender is a Python/FastAPI app for controlled MAX messenger text sending wit
 - `.cursor/`: AI system (skills, agents, project-management).
 
 ## Current State
-- **Hotfix:** MAX login `client.unsupported-version` — pin `maxapi-python==2.4.0` (app versions through 26.25.0) and pin ExtraConfig to PyMax `PREFERRED_VERSION[0]` so handshake does not sample leftover 26.14.x. Pytest **163 passed, 19 skipped**. Redeploy Docker, then «Войти» on the profile.
+- **Hotfix:** MAX login `client.unsupported-version` — pin `maxapi-python==2.4.0` (app versions through 26.25.0) and pin ExtraConfig to PyMax `PREFERRED_VERSION[0]` so handshake does not sample leftover 26.14.x. Send/presence no longer leaves UI `auth_step=connecting`. Pytest **163 passed, 19 skipped**. Redeploy Docker, then «Войти» on the profile.
 - **Hotfix:** campaign/send no longer requests MAX SMS. `_with_client(login_mode=False)` uses `_SessionOnlyAuthFlow`; missing session fails instead of `request_code`. Vault: InvalidToken keeps `.enc`; empty `session.db` does not overwrite a good encrypted session.
 - **FEATURE-REVIEW-FIX-2026** wave 2 COMPLETE — profile proxy 403 for cabinet, vault setup/unlock/lock 410 in server mode, `delay_min_sec` API floor 5. Verifier PASS WITH NOTES. Residual: cookie-only CSP, CI skipif 15. Plan: `FEATURE-REVIEW-FIX-2026.md`.
 - **FEATURE-UX-OPS-2026** complete — pause holds, admin pacing copies to tenants (ADR 007), subscription extend/revoke, UI polish; tenant cabinet: groups + start/stop + stats, progress removed. Verifier PASS WITH NOTES; parent pytest **131 passed, 19 skipped**. Plan: `FEATURE-UX-OPS-2026.md`.

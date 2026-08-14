@@ -11,7 +11,7 @@
 8. Update these project-management files after meaningful work.
 
 ## Latest (2026-08-14)
-- **Hotfix: MAX client.unsupported-version** — `maxapi-python` 2.3.1→2.4.0; handshake pins current `PREFERRED_VERSION`. Pytest **163 passed, 19 skipped**. Needs Docker rebuild, then profile «Войти».
+- **Hotfix: MAX client.unsupported-version** — `maxapi-python` 2.3.1→2.4.0; handshake pins current `PREFERRED_VERSION`; send no longer sticks UI on «Подключение…». Needs Docker rebuild.
 - **Hotfix: campaign must not request MAX OTP** — send/presence `_with_client` no longer attaches `sms_code_provider`. Missing/empty session raises instead of `request_code`. Vault decrypt InvalidToken no longer deletes `.enc`; empty plaintext cannot clobber a good encrypted session. Pytest **160 passed, 19 skipped**.
 
 ## Latest (2026-08-13)
