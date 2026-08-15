@@ -35,7 +35,7 @@ def reg_client(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_TEST", "1")
     monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "rollback-jwt-secret-min-32-chars")
-    monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@rollback.test")
+    monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")
     monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "rollback-internal-token")
 
@@ -69,7 +69,7 @@ def reg_client(tmp_path, monkeypatch):
 
 def test_register_rollback_on_init_failure(reg_client):
     client, main_mod, uid = reg_client
-    email = f"fail-{uid}@rollback.test"
+    email = f"fail-{uid}@example.com"
 
     with patch("app.tenant_init.init_tenant_db", side_effect=RuntimeError("boom")):
         r = client.post(
