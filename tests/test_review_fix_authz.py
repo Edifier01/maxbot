@@ -28,8 +28,8 @@ def _request(path: str, method: str = "GET") -> MagicMock:
     req = MagicMock()
     req.method = method
     req.url.path = path
-    req.headers = {"Authorization": "Bearer jwt-token"}
-    req.cookies = {}
+    req.headers = {}
+    req.cookies = {"max_token": "jwt-token"}
     req.client = MagicMock()
     req.client.host = "10.0.0.1"
     return req

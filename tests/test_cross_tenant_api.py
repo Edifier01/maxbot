@@ -45,6 +45,7 @@ def cross_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "cross-tenant-jwt-secret-min-32-chars")
     monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "cross-internal-token")
 
@@ -81,11 +82,11 @@ def test_tenant_profiles_isolated(cross_client):
     a = _register(client, uid, 1)
     b = _register(client, uid, 2)
 
-    headers_a = {"Authorization": f"Bearer {a['token']}"}
-    headers_b = {"Authorization": f"Bearer {b['token']}"}
+    cookies_a = {"max_token": a["token"]}
+    cookies_b = {"max_token": b["token"]}
 
-    ra = client.get("/api/profiles", headers=headers_a)
-    rb = client.get("/api/profiles", headers=headers_b)
+    ra = client.get("/api/profiles", cookies=cookies_a)
+    rb = client.get("/api/profiles", cookies=cookies_b)
     assert ra.status_code == 200
     assert rb.status_code == 200
     assert ra.json().get("items") == []
@@ -99,24 +100,24 @@ def test_tenant_profiles_isolated(cross_client):
     assert dir_b.is_dir()
     assert dir_a != dir_b
 
-    r_admin = client.get("/api/admin/users", headers=headers_b)
+    r_admin = client.get("/api/admin/users", cookies=cookies_b)
     assert r_admin.status_code == 403
 
     delete_other = client.delete(
         f"/api/admin/users/{a['tenant_id']}",
-        headers=headers_b,
+        cookies=cookies_b,
     )
     assert delete_other.status_code == 403
 
     settings_other = client.get(
         f"/api/admin/tenants/{a['tenant_id']}/settings",
-        headers=headers_b,
+        cookies=cookies_b,
     )
     assert settings_other.status_code == 403
 
     settings_put_other = client.put(
         f"/api/admin/tenants/{a['tenant_id']}/settings",
-        headers=headers_b,
+        cookies=cookies_b,
         json={"worker_pool_size": 2},
     )
     assert settings_put_other.status_code == 403

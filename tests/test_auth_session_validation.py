@@ -23,8 +23,8 @@ def _authed_request(token: str = "jwt-token") -> MagicMock:
     req = MagicMock()
     req.method = "GET"
     req.url.path = "/api/status"
-    req.headers = {"Authorization": f"Bearer {token}"}
-    req.cookies = {}
+    req.headers = {}
+    req.cookies = {"max_token": token}
     req.client = MagicMock()
     req.client.host = "10.0.0.1"
     return req

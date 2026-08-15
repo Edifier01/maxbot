@@ -179,7 +179,7 @@ curl -s -H "Authorization: Bearer $INTERNAL_SERVICE_TOKEN" https://$DOMAIN/metri
 
 ### WebSocket status
 
-`WS /ws/status` — auth первым сообщением после connect: `{"type":"auth","token":"<JWT>"}` (server) или `{"type":"auth","pin":"..."}` (desktop). Query `?token=` больше не используется.
+`WS /ws/status` — server: handshake cookie `max_token` + первое сообщение `{"type":"auth"}` (JSON `token` только если cookie нет). Desktop: `{"type":"auth","pin":"..."}`. Query `?token=` не используется.
 
 ### Telegram ops (server mode)
 
@@ -214,6 +214,7 @@ Dedupe: 15 мин на тип алерта.
 ```bash
 curl -s https://$DOMAIN/api/health | python3 -m json.tool
 curl -s https://$DOMAIN/metrics | rg 'max_sender_(pg_up|redis_up|subscriptions)'
-curl -s -H "Authorization: Bearer $ADMIN_JWT" \
+# Admin panel uses HttpOnly cookie max_token (not Bearer).
+curl -s -b "max_token=$ADMIN_JWT" \
   "https://$DOMAIN/api/admin/subscriptions/expiring?days=7" | python3 -m json.tool
 ```

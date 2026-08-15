@@ -17,7 +17,7 @@ _WS_AUTH_TIMEOUT = 5.0
 
 
 async def _authenticate_ws(ws: WebSocket) -> bool:
-    """First-message auth. Caller must accept() before this."""
+    """First-message auth. Server: cookie max_token (JSON token fallback). Desktop: pin."""
 
     from app.auth import cached_validate_token_session, decode_token
     from app.config import is_server_mode
@@ -36,7 +36,9 @@ async def _authenticate_ws(ws: WebSocket) -> bool:
         return False
 
     if is_server_mode():
-        token = (data.get("token") or "").strip()
+        cookie_token = (ws.cookies.get("max_token") or "").strip()
+        json_token = (data.get("token") or "").strip()
+        token = cookie_token or json_token
         if not token:
             return False
         try:
@@ -193,7 +195,7 @@ async def status():
 
 @router.websocket("/ws/status")
 async def ws_status(ws: WebSocket):
-    """Пуш статуса ~1/с. Server: first message {type,token}. Local: {type,pin}."""
+    """Пуш статуса ~1/с. Server: cookie max_token + {type:auth}. Local: {type,pin}."""
 
     from app.config import is_server_mode
     from app.tenant import clear_context

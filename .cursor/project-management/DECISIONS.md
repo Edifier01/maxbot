@@ -47,8 +47,21 @@ Plan: `.cursor/project-management/FEATURE-SAAS-UX-2026.md`
 
 - **Default:** checkbox «Запомнить меня» **включён** на login/register.
 - **Persistence:** HttpOnly cookie `max_token`, `Max-Age = JWT_EXPIRE_HOURS` (168 h default); отдельный `JWT_REMEMBER_HOURS` не нужен.
-- **Session tab:** JWT в `sessionStorage` для Bearer/WS; cookie восстанавливается через `POST /api/auth/restore-session`.
-- **Impersonation:** persistent cookie **не** ставится; restore отклоняет `imp=true`.
+- **Session tab (superseded 2026-08-15 ADR 008):** user JWT is cookie-only; JS does not store Bearer. `remember_me=false` still sets a session cookie. Restore via `POST /api/auth/restore-session`.
+- **Impersonation (ADR 008):** session `max_token` + backup `max_admin_token`; `POST /api/auth/exit-impersonation`; restore отклоняет `imp=true`.
+
+## 2026-08-15: Cookie-only JWT (ADR 008)
+
+- User JWT only from HttpOnly `max_token`. `Authorization: Bearer` is `INTERNAL_SERVICE_TOKEN` only.
+- Caddy `script-src 'self'` (no script `'unsafe-inline'`). `style-src` still `'unsafe-inline'`.
+- Plan: `.cursor/project-management/FEATURE-RESIDUALS-2026.md`
+
+## 2026-08-15: Knowlange DX — facades + review commands, not new stack
+
+- **Add** thin `maxserver-*` facade skills so agent routing paths exist on disk (gap from 2026-08-07 audit).
+- **Add** `/ponytail-review` (overengineering only) and `/audit-harness` (ABP distilled, no 19-file skill dump).
+- **Add** NameThatUI as a lookup in `/improve-ui`, not a component library.
+- **Do not** adopt Railway, Supabase BaaS, n8n, ECC runtime, Agency 270, DeerFlow, Shepherd, or agentmemory. VPS + Compose + JWT/ContextVar + per-tenant SQLite stay.
 
 ## 2026-08-07: UI improvement workflow (Knowlange)
 

@@ -12,7 +12,7 @@
 - Session validation cache TTL 30s; logout/delete-tenant must invalidate (implemented).
 
 ## Verification Baseline
-- `MAX_TEST=1 MAX_SERVER_MODE=1 python -m pytest tests/ -q` — green after Agent Fix 2026 + G-2.
+- `MAX_TEST=1 MAX_SERVER_MODE=1 python -m pytest tests/ -q` — **181 passed, 19 skipped** (2026-08-15, no `DATABASE_URL`). 19 skips are PG skipifs; CI `server-smoke` runs the 15 skipif modules + e2e in **separate** processes with `DATABASE_URL`.
 - `docker compose config -q` passes when required env vars are supplied.
 - Docker image pins `python:3.12-slim@sha256:…` and installs from `requirements.lock` + `requirements-server.lock`.
 - CI installs from `requirements*.txt` (ranges); lockfiles are for reproducible Docker builds.

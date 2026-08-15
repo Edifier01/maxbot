@@ -30,8 +30,8 @@ def _truncate_saas() -> None:
         )
 
 
-def _bearer(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+def _tok(token: str) -> dict[str, str]:
+    return {"max_token": token}
 
 
 @pytest.fixture
@@ -39,6 +39,7 @@ def e2e_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "e2e-jwt-secret-min-32-characters-long")
     monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")
@@ -109,7 +110,7 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
     tenant_b = reg_b.json()["tenant_id"]
     assert tenant_a != tenant_b
 
-    me_a = client.get("/api/auth/me", headers=_bearer(token_a))
+    me_a = client.get("/api/auth/me", cookies=_tok(token_a))
     assert me_a.status_code == 200
     assert me_a.json()["tenant_id"] == tenant_a
     assert me_a.json()["subscription"]["active"] is False
@@ -127,42 +128,42 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
     assert admin_login.status_code == 200
     admin_token = admin_login.json()["token"]
 
-    users = client.get("/api/admin/users", headers=_bearer(admin_token))
+    users = client.get("/api/admin/users", cookies=_tok(admin_token))
     assert users.status_code == 200
     emails = {row["email"] for row in users.json()["items"]}
     assert f"user-a-{uid}@example.com" in emails
     assert f"user-b-{uid}@example.com" in emails
 
-    profiles_as_admin = client.get("/api/profiles", headers=_bearer(admin_token))
+    profiles_as_admin = client.get("/api/profiles", cookies=_tok(admin_token))
     assert profiles_as_admin.status_code == 403
 
     grant = client.post(
         f"/api/admin/users/{tenant_a}/subscription",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
         json={"days": 30},
     )
     assert grant.status_code == 200
 
-    me_a2 = client.get("/api/auth/me", headers=_bearer(token_a))
+    me_a2 = client.get("/api/auth/me", cookies=_tok(token_a))
     assert me_a2.json()["subscription"]["active"] is True
 
-    no_sub_campaign = client.post("/api/campaign/start", headers=_bearer(token_b))
+    no_sub_campaign = client.post("/api/campaign/start", cookies=_tok(token_b))
     assert no_sub_campaign.status_code == 403
     assert "Подписка" in no_sub_campaign.json()["detail"]
 
     imp = client.post(
         f"/api/admin/impersonate/{tenant_a}",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert imp.status_code == 200
     imp_token = imp.json()["token"]
 
-    status_imp = client.get("/api/status", headers=_bearer(imp_token))
+    status_imp = client.get("/api/status", cookies=_tok(imp_token))
     assert status_imp.status_code == 200
 
     deleted = client.delete(
         f"/api/admin/users/{tenant_b}",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert deleted.status_code == 200
     assert deleted.json().get("ok") is True
@@ -175,18 +176,18 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
     assert db_pg.get_tenant(tenant_b) is None
     assert db_pg.get_user_by_email(f"user-b-{uid}@example.com") is None
 
-    users_after = client.get("/api/admin/users", headers=_bearer(admin_token))
+    users_after = client.get("/api/admin/users", cookies=_tok(admin_token))
     assert users_after.status_code == 200
     emails_after = {row["email"] for row in users_after.json()["items"]}
     assert f"user-b-{uid}@example.com" not in emails_after
 
-    me_b = client.get("/api/auth/me", headers=_bearer(token_b))
+    me_b = client.get("/api/auth/me", cookies=_tok(token_b))
     assert me_b.status_code == 401
 
-    logout = client.post("/api/auth/logout", headers=_bearer(imp_token))
+    logout = client.post("/api/auth/logout", cookies=_tok(imp_token))
     assert logout.status_code == 200
 
-    after_logout = client.get("/api/status", headers=_bearer(imp_token))
+    after_logout = client.get("/api/status", cookies=_tok(imp_token))
     assert after_logout.status_code == 401
 
 
@@ -207,7 +208,7 @@ def test_tenant_token_bump_revokes_session(e2e_client):
     token = reg.json()["token"]
     tenant_id = reg.json()["tenant_id"]
 
-    me_ok = client.get("/api/auth/me", headers=_bearer(token))
+    me_ok = client.get("/api/auth/me", cookies=_tok(token))
     assert me_ok.status_code == 200
 
     from app import auth, db_pg
@@ -215,7 +216,7 @@ def test_tenant_token_bump_revokes_session(e2e_client):
     db_pg.bump_tenant_token_version(tenant_id)
     auth.clear_session_cache()
 
-    me_revoked = client.get("/api/auth/me", headers=_bearer(token))
+    me_revoked = client.get("/api/auth/me", cookies=_tok(token))
     assert me_revoked.status_code == 401
     assert "отозвана" in me_revoked.json()["detail"].lower()
 
@@ -246,14 +247,14 @@ def test_admin_tenant_worker_pool_settings(e2e_client):
 
     default_settings = client.get(
         f"/api/admin/tenants/{tenant_id}/settings",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert default_settings.status_code == 200
     assert default_settings.json()["worker_pool_size"] == 1
 
     set_pool = client.put(
         f"/api/admin/tenants/{tenant_id}/settings",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
         json={"worker_pool_size": 4},
     )
     assert set_pool.status_code == 200, set_pool.text
@@ -264,31 +265,31 @@ def test_admin_tenant_worker_pool_settings(e2e_client):
 
     updated = client.get(
         f"/api/admin/tenants/{tenant_id}/settings",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert updated.status_code == 200
     assert updated.json()["worker_pool_size"] == 4
 
-    user_settings = client.get("/api/settings", headers=_bearer(token_user))
+    user_settings = client.get("/api/settings", cookies=_tok(token_user))
     assert user_settings.status_code == 403
 
     blocked = client.put(
         "/api/settings",
-        headers=_bearer(token_user),
+        cookies=_tok(token_user),
         json={"worker_pool_size": 8},
     )
     assert blocked.status_code == 403
 
     still_four = client.get(
         f"/api/admin/tenants/{tenant_id}/settings",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert still_four.status_code == 200
     assert still_four.json()["worker_pool_size"] == 4
 
     out_of_range = client.put(
         f"/api/admin/tenants/{tenant_id}/settings",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
         json={"worker_pool_size": 64},
     )
     assert out_of_range.status_code == 422
@@ -313,7 +314,7 @@ def test_admin_subscription_extend_and_revoke(e2e_client):
     token_user = reg.json()["token"]
     tenant_id = reg.json()["tenant_id"]
 
-    me0 = client.get("/api/auth/me", headers=_bearer(token_user))
+    me0 = client.get("/api/auth/me", cookies=_tok(token_user))
     assert me0.json()["subscription"] == {"active": False, "expires_at": None}
 
     admin_login = client.post(
@@ -325,13 +326,13 @@ def test_admin_subscription_extend_and_revoke(e2e_client):
 
     missing = client.post(
         "/api/admin/users/999999/subscription/revoke",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert missing.status_code == 404
 
     first = client.post(
         f"/api/admin/users/{tenant_id}/subscription",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
         json={"days": 5},
     )
     assert first.status_code == 200
@@ -339,31 +340,31 @@ def test_admin_subscription_extend_and_revoke(e2e_client):
 
     second = client.post(
         f"/api/admin/users/{tenant_id}/subscription/month",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert second.status_code == 200
     exp2 = datetime.fromisoformat(second.json()["expires_at"])
     assert exp2 - exp1 >= timedelta(days=29, hours=23)
     assert exp2 - datetime.now(timezone.utc) > timedelta(days=30)
 
-    me_active = client.get("/api/auth/me", headers=_bearer(token_user))
+    me_active = client.get("/api/auth/me", cookies=_tok(token_user))
     assert me_active.json()["subscription"]["active"] is True
 
     revoked = client.post(
         f"/api/admin/users/{tenant_id}/subscription/revoke",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert revoked.status_code == 200
     assert revoked.json()["ok"] is True
     assert revoked.json()["active"] is False
     assert revoked.json()["expires_at"] is not None
 
-    me_revoked = client.get("/api/auth/me", headers=_bearer(token_user))
+    me_revoked = client.get("/api/auth/me", cookies=_tok(token_user))
     sub = me_revoked.json()["subscription"]
     assert sub["active"] is False
     assert sub["expires_at"] is not None
 
-    blocked = client.post("/api/campaign/start", headers=_bearer(token_user))
+    blocked = client.post("/api/campaign/start", cookies=_tok(token_user))
     assert blocked.status_code == 403
     assert "Подписка" in blocked.json()["detail"]
 

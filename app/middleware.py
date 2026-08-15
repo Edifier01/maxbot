@@ -65,6 +65,7 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         "/api/auth/register",
         "/api/auth/login",
         "/api/auth/restore-session",
+        "/api/auth/exit-impersonation",
     }
     USER_FORBIDDEN = (
         "/api/settings",
@@ -93,16 +94,16 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
 
-        token = ""
+        bearer = ""
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
-            token = auth[7:]
-        if not token:
-            token = request.cookies.get("max_token", "")
+            bearer = auth[7:].strip()
+
+        internal = INTERNAL_SERVICE_TOKEN
+        service_bearer = bool(internal and bearer == internal)
 
         if path == "/metrics":
-            internal = INTERNAL_SERVICE_TOKEN
-            if internal and token == internal:
+            if service_bearer:
                 return await call_next(request)
             return JSONResponse(
                 status_code=401,
@@ -114,10 +115,8 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
-        internal = INTERNAL_SERVICE_TOKEN
         if (
-            internal
-            and token == internal
+            service_bearer
             and request.method == "POST"
             and path in self.INTERNAL_POST_PATHS
         ):
@@ -143,6 +142,7 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
             finally:
                 clear_context()
 
+        token = request.cookies.get("max_token", "")
         if not token:
             return JSONResponse(status_code=401, content={"detail": "Требуется вход"})
 

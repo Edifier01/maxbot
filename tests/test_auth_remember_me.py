@@ -28,8 +28,16 @@ def _truncate_saas() -> None:
         )
 
 
-def _bearer(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+def _tok(token: str) -> dict[str, str]:
+    return {"max_token": token}
+
+
+def _set_cookie_headers(resp) -> list[str]:
+    headers = resp.headers
+    if hasattr(headers, "get_list"):
+        return headers.get_list("set-cookie")
+    raw = headers.get("set-cookie", "")
+    return [raw] if raw else []
 
 
 @pytest.fixture
@@ -37,6 +45,7 @@ def auth_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "remember-me-jwt-secret-min-32-chars")
     monkeypatch.setenv("JWT_EXPIRE_HOURS", "168")
     monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
@@ -117,8 +126,10 @@ def test_login_remember_me_false_no_persistent_cookie(auth_client):
         },
     )
     assert login.status_code == 200
-    set_cookie = login.headers.get("set-cookie", "")
-    assert "max_token=" not in set_cookie
+    set_cookie = "\n".join(_set_cookie_headers(login))
+    assert "max_token=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Max-Age" not in set_cookie
 
 
 def test_restore_session_with_valid_cookie(auth_client):
@@ -163,12 +174,11 @@ def test_logout_clears_cookie(auth_client):
         },
     )
     assert login.status_code == 200
-    token = login.json()["token"]
     assert "max_token=" in login.headers.get("set-cookie", "")
 
-    logout = client.post("/api/auth/logout", headers=_bearer(token))
+    logout = client.post("/api/auth/logout")
     assert logout.status_code == 200
-    set_cookie = logout.headers.get("set-cookie", "")
+    set_cookie = "\n".join(_set_cookie_headers(logout))
     assert re.search(r"max_token=.*Max-Age=0|max_token=;\s*Max-Age=0", set_cookie)
 
     restore = client.post("/api/auth/restore-session")
@@ -190,8 +200,31 @@ def test_impersonate_does_not_set_persistent_cookie(auth_client):
 
     imp = client.post(
         f"/api/admin/impersonate/{tenant_id}",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert imp.status_code == 200
-    set_cookie = imp.headers.get("set-cookie", "")
-    assert "max_token=" not in set_cookie
+    headers = _set_cookie_headers(imp)
+    joined = "\n".join(headers)
+    assert "max_token=" in joined
+    max_token_hdr = next(h for h in headers if h.startswith("max_token="))
+    assert "HttpOnly" in max_token_hdr
+    assert "Max-Age" not in max_token_hdr
+    assert "max_admin_token=" in joined
+    admin_hdr = next(h for h in headers if h.startswith("max_admin_token="))
+    assert "HttpOnly" in admin_hdr
+    assert "Max-Age" not in admin_hdr
+
+    restore_imp = client.post("/api/auth/restore-session")
+    assert restore_imp.status_code == 401
+
+    exited = client.post("/api/auth/exit-impersonation")
+    assert exited.status_code == 200
+    assert exited.json()["email"] == admin_email
+    assert exited.json()["role"] == "admin"
+    exit_joined = "\n".join(_set_cookie_headers(exited))
+    assert "max_token=" in exit_joined
+    assert re.search(r"max_admin_token=.*Max-Age=0|max_admin_token=;\s*Max-Age=0", exit_joined)
+
+    restore_admin = client.post("/api/auth/restore-session")
+    assert restore_admin.status_code == 200
+    assert restore_admin.json()["email"] == admin_email

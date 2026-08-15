@@ -9,7 +9,11 @@ from pydantic import BaseModel, EmailStr, Field
 from starlette.responses import JSONResponse
 
 from app import auth, db_pg
-from app.auth_cookies import clear_auth_cookie, set_auth_cookie
+from app.auth_cookies import (
+    clear_admin_backup_cookie,
+    clear_auth_cookie,
+    set_auth_cookie,
+)
 from app.config import is_server_mode
 from app.runtime import main as app_main
 
@@ -61,8 +65,7 @@ def _auth_json_response(
     remember_me: bool,
 ) -> JSONResponse:
     response = JSONResponse(content=data)
-    if remember_me:
-        set_auth_cookie(response, data["token"], remember_me=True, request=request)
+    set_auth_cookie(response, data["token"], remember_me=remember_me, request=request)
     return response
 
 
@@ -70,7 +73,7 @@ def _auth_json_response(
 async def register(body: RegisterIn, request: Request):
     if not is_server_mode():
         raise HTTPException(400, "Регистрация доступна только на сервере")
-    if os.environ.get("REGISTRATION_OPEN", "1").strip().lower() not in (
+    if os.environ.get("REGISTRATION_OPEN", "0").strip().lower() not in (
         "1",
         "true",
         "yes",
@@ -145,11 +148,34 @@ async def restore_session(request: Request):
     return _session_payload(user, token)
 
 
-def _bearer_token(request: Request) -> str:
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        return auth_header[7:]
-    return request.cookies.get("max_token", "")
+def _user_cookie_token(request: Request) -> str:
+    return (request.cookies.get("max_token") or "").strip()
+
+
+@router.post("/exit-impersonation")
+async def exit_impersonation(request: Request):
+    if not is_server_mode():
+        raise HTTPException(400, "Выход из impersonation доступен только на сервере")
+    admin_token = (request.cookies.get("max_admin_token") or "").strip()
+    if not admin_token:
+        raise HTTPException(401, "Требуется вход")
+    try:
+        payload = auth.decode_token(admin_token)
+    except Exception as e:
+        raise HTTPException(401, "Сессия истекла") from e
+    if payload.get("imp"):
+        raise HTTPException(401, "Сессия недоступна")
+    session_err = auth.validate_token_session(payload)
+    if session_err:
+        raise HTTPException(401, session_err)
+    user = db_pg.get_user_by_id(int(payload["sub"]))
+    if not user:
+        raise HTTPException(401, "Пользователь не найден")
+    data = _session_payload(user, admin_token)
+    response = JSONResponse(content=data)
+    set_auth_cookie(response, admin_token, remember_me=False, request=request)
+    clear_admin_backup_cookie(response, request)
+    return response
 
 
 @router.post("/logout")
@@ -157,8 +183,9 @@ async def logout(request: Request):
     if not is_server_mode():
         response = JSONResponse(content={"ok": True})
         clear_auth_cookie(response, request)
+        clear_admin_backup_cookie(response, request)
         return response
-    token = _bearer_token(request)
+    token = _user_cookie_token(request)
     if not token:
         raise HTTPException(401, "Требуется вход")
     try:
@@ -171,6 +198,7 @@ async def logout(request: Request):
         auth.invalidate_session_cache(jti)
     response = JSONResponse(content={"ok": True})
     clear_auth_cookie(response, request)
+    clear_admin_backup_cookie(response, request)
     return response
 
 

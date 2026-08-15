@@ -4,13 +4,15 @@
 _(none)_
 
 ## Backlog
-- Optional (review residual): cookie-only JWT/CSP; CI Postgres for 15 skipped skipif modules.
 - Decide later whether to extract shared code into a package; do not do this without a Feature Plan.
 - Optional: further `main.py` worker/core extraction (ADR 003 — deferred).
 - Optional: `asyncio.to_thread` for SQLite in non-admin routes (M-5 started with `routes_admin` only).
 - Optional: CI install from `*.lock` (today lockfiles are Docker-only; CI uses `requirements*.txt`).
 
 ## Done
+- **FEATURE-RESIDUALS-2026** (2026-08-15): REGISTRATION_OPEN fail-closed 0; CI 15 skipif isolated; cookie-only JWT (ADR 008) + CSP `script-src 'self'`; UI toast/progressWrap/skip-link; Celery empty-token fail-closed. Verifier [PASS WITH NOTES](f200e084-1724-4e7a-bc06-566254c425f0). Pytest **181 passed, 19 skipped**.
+- **Plan vs Reality Review 2026-08-15:** verifier PASS WITH NOTES. Pytest **165 passed, 19 skipped**. Audits refreshed. In-scope residuals closed by FEATURE-RESIDUALS-2026.
+- **Harness DX 2026-08-15:** `maxserver-*` facades on disk + `/ponytail-review` + `/audit-harness` + NameThatUI in UI workflow. No product runtime change.
 - **Hotfix MAX client version** (2026-08-14): `maxapi-python==2.4.0` + pin preferred app_version; pytest 163 passed, 19 skipped.
 - **FEATURE-REVIEW-FIX-2026 wave 2** (2026-08-13): profile proxy cabinet 403, vault password APIs 410 in server mode, delay_min_sec ≥ 5. Verifier [PASS WITH NOTES](990a477f-5db3-45f2-a238-8741b73e58ab). Pytest 155 passed, 19 skipped.
 - **FEATURE-REVIEW-FIX-2026 wave 1** (2026-08-13): AuthZ cabinet lock + impersonation `/api/admin` 403 + Compose `REGISTRATION_OPEN=0` + `stop_worker`/watchdog/`reset` + deploy backup/restore fail-closed. Verifier [PASS WITH NOTES](5a1474e2-4f02-48c1-8bb0-44e49c1ad2d2). Pytest 148 passed, 19 skipped.

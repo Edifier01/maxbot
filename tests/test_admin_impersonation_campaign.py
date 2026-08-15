@@ -27,8 +27,8 @@ def _truncate_saas() -> None:
         )
 
 
-def _bearer(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+def _tok(token: str) -> dict[str, str]:
+    return {"max_token": token}
 
 
 @pytest.fixture
@@ -36,6 +36,7 @@ def imp_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "imp-jwt-secret-min-32-characters-long")
     monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")
@@ -95,45 +96,45 @@ def test_impersonation_me_email_and_campaign_history(imp_client):
 
     client.post(
         f"/api/admin/users/{tenant_id}/subscription",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
         json={"days": 30},
     )
 
     imp = client.post(
         f"/api/admin/impersonate/{tenant_id}",
-        headers=_bearer(admin_token),
+        cookies=_tok(admin_token),
     )
     assert imp.status_code == 200
     imp_token = imp.json()["token"]
 
-    me = client.get("/api/auth/me", headers=_bearer(imp_token))
+    me = client.get("/api/auth/me", cookies=_tok(imp_token))
     assert me.status_code == 200
     body = me.json()
     assert body["impersonating"] is True
     assert body["email"] == user_email
     assert body["actor_email"] == admin_email
 
-    admin_me = client.get("/api/auth/me", headers=_bearer(admin_token))
+    admin_me = client.get("/api/auth/me", cookies=_tok(admin_token))
     assert admin_me.json()["email"] == admin_email
     assert "actor_email" not in admin_me.json()
 
-    status = client.get("/api/status", headers=_bearer(imp_token))
+    status = client.get("/api/status", cookies=_tok(imp_token))
     assert status.status_code == 200
     assert "log" in status.json()
 
-    campaigns = client.get("/api/campaigns?limit=10", headers=_bearer(imp_token))
+    campaigns = client.get("/api/campaigns?limit=10", cookies=_tok(imp_token))
     assert campaigns.status_code == 200
     assert "items" in campaigns.json()
 
-    send_log = client.get("/api/send_log?limit=10", headers=_bearer(imp_token))
+    send_log = client.get("/api/send_log?limit=10", cookies=_tok(imp_token))
     assert send_log.status_code == 200
     assert "items" in send_log.json()
 
-    stop = client.post("/api/campaign/stop", headers=_bearer(imp_token))
+    stop = client.post("/api/campaign/stop", cookies=_tok(imp_token))
     assert stop.status_code == 200
     assert stop.json()["ok"] is True
 
-    start = client.post("/api/campaign/start", headers=_bearer(imp_token))
+    start = client.post("/api/campaign/start", cookies=_tok(imp_token))
     assert start.status_code == 400
     assert start.status_code != 403
     detail = start.json()["detail"]

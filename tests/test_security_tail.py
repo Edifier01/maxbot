@@ -27,7 +27,13 @@ def auth_mw(monkeypatch):
     return ServerAuthMiddleware(app=MagicMock())
 
 
-def _request(path: str, token: str = "", method: str = "GET") -> MagicMock:
+def _request(
+    path: str,
+    token: str = "",
+    method: str = "GET",
+    *,
+    cookie: str = "",
+) -> MagicMock:
     req = MagicMock()
     req.method = method
     req.url.path = path
@@ -35,7 +41,7 @@ def _request(path: str, token: str = "", method: str = "GET") -> MagicMock:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req.headers = headers
-    req.cookies = {}
+    req.cookies = {"max_token": cookie} if cookie else {}
     req.client = MagicMock()
     req.client.host = "10.0.0.1"
     return req
@@ -93,7 +99,7 @@ def test_token_version_mismatch_rejected(auth_mw):
             "app.middleware.db_pg.subscription_active", return_value=True
         ):
             resp = await auth_mw.dispatch(
-                _request("/api/status", token="jwt"), call_next
+                _request("/api/status", cookie="jwt"), call_next
             )
             assert resp.status_code == 401
             assert "отозвана" in resp.body.decode()
@@ -130,6 +136,7 @@ def test_ws_auth_rejects_missing_type():
     from app.routes_monitor import _authenticate_ws
 
     ws = AsyncMock()
+    ws.cookies = {}
     ws.receive_text = AsyncMock(return_value=json.dumps({"token": "x"}))
 
     async def run():
@@ -139,27 +146,93 @@ def test_ws_auth_rejects_missing_type():
     asyncio.run(run())
 
 
-def test_ws_auth_accepts_valid_token(monkeypatch):
+def test_ws_auth_accepts_valid_cookie(monkeypatch):
     from app.routes_monitor import _authenticate_ws
 
     monkeypatch.setattr("app.config.is_server_mode", lambda: True)
     payload = {"sub": "1", "role": "user", "tenant_id": 2, "jti": "j", "tv": 0}
 
     ws = AsyncMock()
-    ws.receive_text = AsyncMock(
-        return_value=json.dumps({"type": "auth", "token": "good-jwt"})
-    )
+    ws.cookies = {"max_token": "good-jwt"}
+    ws.receive_text = AsyncMock(return_value=json.dumps({"type": "auth"}))
 
     fake_main = MagicMock()
     fake_main._try_legacy_unlock = MagicMock()
     monkeypatch.setitem(sys.modules, "main", fake_main)
 
     async def run():
-        with patch("app.auth.decode_token", return_value=payload), patch(
+        with patch("app.auth.decode_token", return_value=payload) as dec, patch(
             "app.auth.cached_validate_token_session", return_value=None
         ), patch("app.tenant.set_context") as set_ctx:
             ok = await _authenticate_ws(ws)
             assert ok is True
+            dec.assert_called_once_with("good-jwt")
             set_ctx.assert_called_once()
+
+    asyncio.run(run())
+
+
+def test_ws_auth_cookie_wins_over_json_token(monkeypatch):
+    from app.routes_monitor import _authenticate_ws
+
+    monkeypatch.setattr("app.config.is_server_mode", lambda: True)
+    payload = {"sub": "1", "role": "user", "tenant_id": 2, "jti": "j", "tv": 0}
+
+    ws = AsyncMock()
+    ws.cookies = {"max_token": "cookie-jwt"}
+    ws.receive_text = AsyncMock(
+        return_value=json.dumps({"type": "auth", "token": "json-jwt"})
+    )
+
+    async def run():
+        with patch("app.auth.decode_token", return_value=payload) as dec, patch(
+            "app.auth.cached_validate_token_session", return_value=None
+        ), patch("app.tenant.set_context"):
+            ok = await _authenticate_ws(ws)
+            assert ok is True
+            dec.assert_called_once_with("cookie-jwt")
+
+    asyncio.run(run())
+
+
+def test_ws_auth_rejects_server_without_cookie_or_token(monkeypatch):
+    from app.routes_monitor import _authenticate_ws
+
+    monkeypatch.setattr("app.config.is_server_mode", lambda: True)
+    ws = AsyncMock()
+    ws.cookies = {}
+    ws.receive_text = AsyncMock(return_value=json.dumps({"type": "auth"}))
+
+    async def run():
+        ok = await _authenticate_ws(ws)
+        assert ok is False
+
+    asyncio.run(run())
+
+
+def test_user_jwt_bearer_without_cookie_401(auth_mw):
+    async def run():
+        call_next = AsyncMock(return_value="ok")
+        resp = await auth_mw.dispatch(_request("/api/status", token="user-jwt"), call_next)
+        assert resp.status_code == 401
+        call_next.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_user_jwt_cookie_used_not_bearer(auth_mw):
+    payload = {"sub": "1", "role": "user", "tenant_id": 2, "jti": "x", "tv": 0}
+
+    async def run():
+        call_next = AsyncMock(return_value="ok")
+        with patch("app.middleware.decode_token", return_value=payload) as dec, patch(
+            "app.middleware.cached_validate_token_session", return_value=None
+        ):
+            resp = await auth_mw.dispatch(
+                _request("/api/status", token="attacker-jwt", cookie="cookie-jwt"),
+                call_next,
+            )
+            assert resp == "ok"
+            dec.assert_called_once_with("cookie-jwt")
 
     asyncio.run(run())

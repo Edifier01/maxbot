@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  # SQLite suite without DATABASE_URL. Postgres e2e skipif runs after so those
-  # modules cannot silently skip; other PG skipif files stay on server-e2e follow-up.
+  # SQLite suite without DATABASE_URL. Separate Postgres processes then run
+  # skipif modules (remaining PG files + e2e) so they cannot silently skip.
   server-smoke:
     runs-on: ubuntu-latest
     services:
@@ -41,9 +41,19 @@ jobs:
           MAX_SERVER_MODE: "1"
           JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
         run: python -m pytest tests/ -q
-      # Extra skipif modules (remember-me / cross-tenant / rollback / impersonation)
-      # still need per-process isolation; they fail when enabled on this job.
-      # server-e2e remains the Postgres gate; this step proves skipif would run.
+      # Remaining PG skipif modules in their own process (not the full suite).
+      # DATABASE_URL here must not leak into the SQLite job above.
+      - name: Postgres skipif modules
+        env:
+          DATABASE_URL: postgresql://maxsender:testpass@localhost:5432/maxsender
+          MAX_TEST: "1"
+          MAX_SERVER_MODE: "1"
+          JWT_SECRET: ci-jwt-secret-at-least-32-characters-long
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: CiAdminPass123!
+          INTERNAL_SERVICE_TOKEN: ci-internal-token
+          REGISTRATION_OPEN: "1"
+        run: python -m pytest -q --tb=short tests/test_auth_remember_me.py tests/test_cross_tenant_api.py tests/test_register_rollback.py tests/test_admin_impersonation_campaign.py tests/test_db_pg_helpers.py
       - name: Postgres e2e skipif
         env:
           DATABASE_URL: postgresql://maxsender:testpass@localhost:5432/maxsender
@@ -53,6 +63,7 @@ jobs:
           ADMIN_EMAIL: admin@example.com
           ADMIN_PASSWORD: CiAdminPass123!
           INTERNAL_SERVICE_TOKEN: ci-internal-token
+          REGISTRATION_OPEN: "1"
         run: python -m pytest -q --tb=short tests/test_e2e_server.py
 
   compose-config:
@@ -105,4 +116,5 @@ jobs:
           ADMIN_EMAIL: admin@example.com
           ADMIN_PASSWORD: CiAdminPass123!
           INTERNAL_SERVICE_TOKEN: ci-internal-token
+          REGISTRATION_OPEN: "1"
         run: python -m pytest tests/test_e2e_server.py -q

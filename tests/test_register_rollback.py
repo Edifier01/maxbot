@@ -33,6 +33,7 @@ def reg_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "rollback-jwt-secret-min-32-chars")
     monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@rollback.test")
     monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")

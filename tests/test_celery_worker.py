@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -41,7 +42,23 @@ def test_service_auth_header_empty_without_token(monkeypatch):
 
     from celery_worker import _service_auth_header
 
-    assert _service_auth_header() == {}
+    with pytest.raises(RuntimeError, match="INTERNAL_SERVICE_TOKEN"):
+        _service_auth_header()
+
+
+def test_enqueue_campaign_start_fails_closed_without_token(monkeypatch):
+    monkeypatch.delenv("INTERNAL_SERVICE_TOKEN", raising=False)
+    import urllib.request
+
+    mock_urlopen = MagicMock()
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    from celery_worker import enqueue_campaign_start
+
+    with pytest.raises(RuntimeError, match="INTERNAL_SERVICE_TOKEN"):
+        enqueue_campaign_start(1)
+
+    mock_urlopen.assert_not_called()
 
 
 def test_compose_celery_profile_env():

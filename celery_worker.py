@@ -23,9 +23,12 @@ if not REDIS_URL:
 
 
 def _service_auth_header() -> dict[str, str]:
+    # Fail closed here so enqueue never POSTs /api/campaign/start without a token.
     token = os.environ.get("INTERNAL_SERVICE_TOKEN", "").strip()
     if not token:
-        return {}
+        raise RuntimeError(
+            "INTERNAL_SERVICE_TOKEN не задан. Celery не запускает кампанию без service token."
+        )
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -58,13 +61,14 @@ def enqueue_campaign_start(tenant_id: int) -> dict:
     import json
     from urllib.request import Request, urlopen
 
+    auth = _service_auth_header()
     host = os.environ.get("MAX_HOST", "127.0.0.1")
     port = os.environ.get("MAX_PORT", "8765")
     url = f"http://{host}:{port}/api/campaign/start"
     req = Request(url, data=b"{}", method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("X-Tenant-Id", str(tenant_id))
-    for key, value in _service_auth_header().items():
+    for key, value in auth.items():
         req.add_header(key, value)
     with urlopen(req, timeout=30) as resp:
         body = resp.read().decode()

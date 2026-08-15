@@ -10,11 +10,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from starlette.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 import antiban_core
 from app import auth, db_pg
+from app.auth_cookies import set_admin_backup_cookie, set_auth_cookie
 from app.tenant import get_user_id, is_admin, is_impersonating
 from app.tenant_sqlite import tenant_conn
 from app.runtime import main as app_main
@@ -211,13 +213,12 @@ async def delete_user(tenant_id: int):
 
 
 @router.post("/impersonate/{tenant_id}")
-async def impersonate(tenant_id: int):
+async def impersonate(tenant_id: int, request: Request):
     admin_id = _require_admin()
     tenant = db_pg.get_tenant(tenant_id)
     if not tenant:
         raise HTTPException(404, "Учреждение не найдено")
     db_pg.log_impersonation(admin_id, tenant_id)
-
 
     from app.tenant_init import init_tenant_db
 
@@ -235,12 +236,18 @@ async def impersonate(tenant_id: int):
         impersonating=True,
         impersonator_id=admin_id,
     )
-    return {
+    data = {
         "token": token,
         "tenant_id": tenant_id,
         "institution_name": tenant["institution_name"],
         "email": user_row["email"] if user_row else None,
     }
+    response = JSONResponse(content=data)
+    set_auth_cookie(response, token, remember_me=False, request=request)
+    admin_token = (request.cookies.get("max_token") or "").strip()
+    if admin_token:
+        set_admin_backup_cookie(response, admin_token, request=request)
+    return response
 
 
 @router.put("/tenants/{tenant_id}/groups/{group_id}/proxy")
