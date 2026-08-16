@@ -9,7 +9,7 @@ description: Vanilla HTML/CSS/JS panels for MAX Sender server and desktop. Use w
 
 | File | Purpose |
 |------|---------|
-| `static/index.html` | Tenant campaign panel (groups, messages, settings, campaign) |
+| `static/index.html` | Tenant: groups + start/stop + stats; admin/impersonation sees full ops |
 | `static/admin.html` | Admin SaaS (users, subscriptions, global settings/messages) |
 | `static/auth.html` | Login / register |
 

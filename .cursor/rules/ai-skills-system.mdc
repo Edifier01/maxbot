@@ -30,6 +30,7 @@ alwaysApply: true
 | Smoke/regression/deploy verify | `maxserver-testing` + deploy checklist | `qa-engineer` |
 | Campaign/pacing/sessions | `maxserver-campaign` | `campaign-specialist` |
 | Планирование, Feature Plan | `start-feature`, `context-loading` | `project-orchestrator` |
+| Harness (agents/skills paths) | `maxserver-harness` | orchestrator (`/audit-harness`) |
 | Финальная проверка | `maxserver-testing` + skills домена | `verifier` |
 
 ## Обязательные правила
@@ -49,5 +50,7 @@ alwaysApply: true
 - `/start-feature [описание]` → orchestrator + Feature Plan (см. `.cursor/commands/start-feature.md`).
 - `/improve-ui [scope]` → ui-designer audit + brief → frontend-engineer (см. `.cursor/commands/improve-ui.md`, skill `maxserver-ui-workflow`).
 - `/deploy-server [описание]` → devops-engineer + `maxserver-server-deploy`.
+- `/ponytail-review` → оверинжиниринг текущего diff (не баги).
+- `/audit-harness` → `maxserver-harness` (пути skills/agents, без нового рантайма).
 - Полный индекс skills: `.cursor/skills/README.md`.
 - Workflow: `docs/MASTER-AI-WORKFLOW.md`, `.cursor/workflows/feature-lifecycle.md`.

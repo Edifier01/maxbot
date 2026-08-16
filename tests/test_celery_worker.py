@@ -14,12 +14,14 @@ def _redis_url(monkeypatch):
 
 
 def test_celery_ping_task():
+    pytest.importorskip("celery")
     from celery_worker import ping
 
     assert ping() == {"ok": True, "service": "max_sender"}
 
 
 def test_celery_app_registered_tasks():
+    pytest.importorskip("celery")
     from celery_worker import app
 
     names = set(app.tasks.keys())
@@ -28,6 +30,7 @@ def test_celery_app_registered_tasks():
 
 
 def test_service_auth_header_prefers_internal_token(monkeypatch):
+    pytest.importorskip("celery")
     monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "svc-tok")
     monkeypatch.delenv("MAX_API_PIN", raising=False)
 
@@ -37,6 +40,7 @@ def test_service_auth_header_prefers_internal_token(monkeypatch):
 
 
 def test_service_auth_header_empty_without_token(monkeypatch):
+    pytest.importorskip("celery")
     monkeypatch.delenv("INTERNAL_SERVICE_TOKEN", raising=False)
     monkeypatch.delenv("MAX_API_PIN", raising=False)
 
@@ -47,6 +51,7 @@ def test_service_auth_header_empty_without_token(monkeypatch):
 
 
 def test_enqueue_campaign_start_fails_closed_without_token(monkeypatch):
+    pytest.importorskip("celery")
     monkeypatch.delenv("INTERNAL_SERVICE_TOKEN", raising=False)
     import urllib.request
 

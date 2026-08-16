@@ -167,6 +167,57 @@ def test_admin_stats_subscription_extend_and_empty_users():
     assert "применяется ко всем учреждениям" in ADMIN
 
 
+def _admin_save_global_body() -> str:
+    m = re.search(
+        r"async function saveGlobalSettings\(\) \{.*?const body = \{([^}]+)\}",
+        ADMIN_JS,
+        re.S,
+    )
+    assert m, "saveGlobalSettings body object not found"
+    return m.group(1)
+
+
+def test_admin_global_pacing_form_covers_allowlist():
+    from app.settings_scope import GLOBAL_PACING_NEVER_COPY, GLOBAL_PACING_SETTING_KEYS
+
+    assert "windowsWeekday" in ADMIN
+    assert "human_rhythm" in ADMIN_ALL
+    assert "presenceOn" in ADMIN
+    assert "circuitMins" in ADMIN
+    assert "send_windows_weekday" in ADMIN_JS
+    assert "human_presence_enabled" in ADMIN_JS
+    assert "circuit_break_minutes" in ADMIN_JS
+
+    body = _admin_save_global_body()
+    for key in GLOBAL_PACING_SETTING_KEYS:
+        assert key in body, key
+    for key in GLOBAL_PACING_NEVER_COPY:
+        assert key not in body, key
+    assert "worker_pool_size" not in body
+    assert "worker_pool_size" in ADMIN_JS
+    assert 'id="pool-' in ADMIN_JS or "pool-" in ADMIN_JS
+    assert "api_pin" not in ADMIN
+    assert "webhookUrl" not in ADMIN
+    assert "auto_run" not in body
+
+
+def test_index_cabinet_activity_journal_not_admin_only():
+    assert 'id="userActivityLog"' in INDEX
+    assert 'id="userActivityBlock"' in INDEX
+    block = INDEX[INDEX.index('id="userActivityBlock"') : INDEX.index('id="userActivityLog"') + 50]
+    assert "campaign-user-only" in block
+    assert "campaign-admin-only" not in block
+    assert 'id="campaignLog"' in INDEX
+    camp = INDEX.index('id="campaignLog"')
+    assert "campaign-admin-only" in INDEX[max(0, camp - 200) : camp]
+    assert "renderUserActivity" in INDEX_JS
+    assert "kind === 'failed'" in INDEX_JS
+    assert "kind === 'fail'" not in INDEX_JS
+    assert "s.activity" in INDEX_JS
+    assert "Пока нет событий" in INDEX_ALL
+    assert "userActivityLog" in INDEX_JS
+
+
 def test_admin_auth_skip_link_and_main_content():
     assert 'class="skip-link"' in ADMIN
     assert 'id="main-content"' in ADMIN

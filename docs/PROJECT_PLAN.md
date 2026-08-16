@@ -8,7 +8,7 @@ Multi-tenant SaaS для controlled массовой рассылки в мес�
 
 | Role | Доступ |
 |------|--------|
-| **User (tenant)** | Свой кабинет: профили, группы, сообщения, кампании (при активной подписке) |
+| **User (tenant)** | Кабинет: группы, номера MAX, start/stop, stats (при активной подписке). Сообщения, настройки, pause, proxy — admin/impersonation (FEATURE-UX-OPS) |
 | **Admin** | Пользователи, подписки, impersonation, глобальные настройки, stats |
 | **Service (Celery)** | `INTERNAL_SERVICE_TOKEN` → campaign start/schedule |
 
@@ -61,7 +61,7 @@ Multi-tenant SaaS для controlled массовой рассылки в мес�
 - [x] Monitoring/alerting beyond health + metrics
 - [x] Automated subscription lifecycle (manual billing)
 - [x] User UI: subscription expiry date
-- [x] Reduce `main.py` monolith (worker extraction phase 1–2 — ADR 003)
+- [x] Reduce `main.py` monolith (worker extraction phase 1–2 — ADR 003). Further split **PARTIAL** (~2845 lines remain; P3-3)
 - ~~Core sync with desktop~~ — out of scope this epic
 
 ## Release Gates
@@ -79,7 +79,7 @@ Before production deploy:
 | Risk | Mitigation |
 |------|------------|
 | Неофициальный MAX API | Anti-ban pacing, warmup, circuit breaker; campaign-specialist review |
-| Monolith `main.py` ~3700 строк | Scoped changes; Feature Plan for refactors |
+| Monolith `main.py` ~2845 строк | Scoped changes; Feature Plan for further extract (ADR 003) |
 | Hybrid PG + SQLite | Tenant paths documented; backup both volume + PG |
 | Desktop/server code duplication | `check_core_sync.py`; mirror fixes when shared |
 | Account bans | Campaign safeguards; no removal without approval |

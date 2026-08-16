@@ -7,6 +7,8 @@ import importlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 
 def _setup_db(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_TEST", "1")
@@ -25,24 +27,31 @@ def _setup_db(tmp_path, monkeypatch):
 
 def test_submit_cloud_password_api(tmp_path, monkeypatch):
     m = _setup_db(tmp_path, monkeypatch)
-    with m._conn() as c:
-        c.execute(
-            "INSERT INTO profiles (phone, label, status) VALUES (?, ?, ?)",
-            ("+79991112233", "t", m.ProfileStatus.PENDING),
-        )
-        pid = c.execute("SELECT id FROM profiles WHERE phone=?", ("+79991112233",)).fetchone()["id"]
+    try:
+        with m._conn() as c:
+            c.execute(
+                "INSERT INTO profiles (phone, label, status) VALUES (?, ?, ?)",
+                ("+79991112233", "t", m.ProfileStatus.PENDING),
+            )
+            pid = c.execute("SELECT id FROM profiles WHERE phone=?", ("+79991112233",)).fetchone()["id"]
 
-    from starlette.testclient import TestClient
+        from starlette.testclient import TestClient
 
-    with TestClient(m.app) as client:
-        sess = m._ensure_auth_session(pid)
-        m._set_auth_step(pid, "waiting_cloud_password", "hint123")
-        r = client.post(f"/api/profiles/{pid}/password", json={"code": "secret-cloud"})
-        assert r.status_code == 200
-        assert r.json()["ok"] is True
+        with TestClient(m.app) as client:
+            sess = m._ensure_auth_session(pid)
+            m._set_auth_step(pid, "waiting_cloud_password", "hint123")
+            r = client.post(f"/api/profiles/{pid}/password", json={"code": "secret-cloud"})
+            assert r.status_code == 200
+            assert r.json()["ok"] is True
 
-    assert sess["pwd_q"].get_nowait() == "secret-cloud"
-    assert m._auth_sessions[m._auth_session_key(pid)]["step"] == "verifying_password"
+        assert sess["pwd_q"].get_nowait() == "secret-cloud"
+        assert m._auth_sessions[m._auth_session_key(pid)]["step"] == "verifying_password"
+    finally:
+        monkeypatch.undo()
+        import app.config as cfg
+
+        importlib.reload(cfg)
+        importlib.reload(m)
 
 
 def test_sms_auth_flow_password_challenge(monkeypatch):
@@ -81,6 +90,7 @@ def test_sms_auth_flow_password_challenge(monkeypatch):
         await pwd_q.put("cloud-pass")
         return await flow.authenticate(app)
 
+    pytest.importorskip("pymax")
     from pymax.auth.models import AuthResult
 
     result = asyncio.run(_run())

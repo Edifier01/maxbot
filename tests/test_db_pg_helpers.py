@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 
-import pytest
+from conftest import requires_postgres as _PG
 
 from app import db_pg
-
-_PG = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"),
-    reason="DATABASE_URL required (PostgreSQL)",
-)
 
 
 def test_subscription_info_from_expires_active():

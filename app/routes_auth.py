@@ -34,13 +34,12 @@ class LoginIn(BaseModel):
     remember_me: bool = True
 
 
-def _session_payload(user: dict, token: str) -> dict:
+def _session_payload(user: dict) -> dict:
     sub = db_pg.subscription_info(user.get("tenant_id"))
     tenant = None
     if user.get("tenant_id"):
         tenant = db_pg.get_tenant(user["tenant_id"])
     return {
-        "token": token,
         "role": user["role"],
         "email": user["email"],
         "tenant_id": user.get("tenant_id"),
@@ -49,13 +48,13 @@ def _session_payload(user: dict, token: str) -> dict:
     }
 
 
-def _token_response(user: dict) -> dict:
+def _token_response(user: dict) -> tuple[dict, str]:
     token = auth.create_token(
         user["id"],
         tenant_id=user.get("tenant_id"),
         role=user["role"],
     )
-    return _session_payload(user, token)
+    return _session_payload(user), token
 
 
 def _auth_json_response(
@@ -63,9 +62,10 @@ def _auth_json_response(
     request: Request,
     *,
     remember_me: bool,
+    token: str,
 ) -> JSONResponse:
     response = JSONResponse(content=data)
-    set_auth_cookie(response, data["token"], remember_me=remember_me, request=request)
+    set_auth_cookie(response, token, remember_me=remember_me, request=request)
     return response
 
 
@@ -101,8 +101,8 @@ async def register(body: RegisterIn, request: Request):
     user = db_pg.get_user_by_id(info["user_id"])
     if not user:
         raise HTTPException(500, "Не удалось создать пользователя")
-    data = _token_response(user)
-    return _auth_json_response(data, request, remember_me=body.remember_me)
+    data, token = _token_response(user)
+    return _auth_json_response(data, request, remember_me=body.remember_me, token=token)
 
 
 @router.post("/login")
@@ -118,8 +118,8 @@ async def login(body: LoginIn, request: Request):
 
         init_tenant_db(app_main, user["tenant_id"])
 
-    data = _token_response(user)
-    return _auth_json_response(data, request, remember_me=body.remember_me)
+    data, token = _token_response(user)
+    return _auth_json_response(data, request, remember_me=body.remember_me, token=token)
 
 
 @router.post("/restore-session")
@@ -145,7 +145,7 @@ async def restore_session(request: Request):
         from app.tenant_init import init_tenant_db
 
         init_tenant_db(app_main, user["tenant_id"])
-    return _session_payload(user, token)
+    return _session_payload(user)
 
 
 def _user_cookie_token(request: Request) -> str:
@@ -171,7 +171,7 @@ async def exit_impersonation(request: Request):
     user = db_pg.get_user_by_id(int(payload["sub"]))
     if not user:
         raise HTTPException(401, "Пользователь не найден")
-    data = _session_payload(user, admin_token)
+    data = _session_payload(user)
     response = JSONResponse(content=data)
     set_auth_cookie(response, admin_token, remember_me=False, request=request)
     clear_admin_backup_cookie(response, request)

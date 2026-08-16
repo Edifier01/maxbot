@@ -11,10 +11,16 @@ def before_start() -> None:
         return
 
     from app import auth, db_pg
-    from app.config import ADMIN_EMAIL, ADMIN_PASSWORD, require_jwt_secret
+    from app.config import (
+        ADMIN_EMAIL,
+        ADMIN_PASSWORD,
+        require_jwt_secret,
+        require_production_secrets,
+    )
     from app.tenant_init import init_global_db
 
     require_jwt_secret()
+    require_production_secrets()
     db_pg.init_schema()
 
     init_global_db(app_main)

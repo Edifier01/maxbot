@@ -33,6 +33,7 @@ async def campaign_start():
             400,
             "Некому отправлять: все профили исчерпали дневной лимит или не авторизованы",
         )
+    await m._preflight_group_proxies()
     m.set_setting("auto_run", "1")
     await m._start_worker()
     return {"ok": True, "campaign_id": m.RUNTIME.current_campaign_id}
@@ -131,6 +132,7 @@ async def campaign_retry_failed():
     m.append_log(f"Повтор ошибок: продолжение с индекса={mi}")
     if not m._has_sendable_profile():
         raise HTTPException(400, "Нет доступных профилей для отправки")
+    await m._preflight_group_proxies()
     m.set_setting("auto_run", "1")
     await m._start_worker()
     return {"ok": True, "message_idx": mi, "campaign_id": m.RUNTIME.current_campaign_id}
@@ -140,6 +142,8 @@ async def campaign_retry_failed():
 async def campaign_test():
 
     m._require_vault_unlocked()
+    if m.RUNTIME.worker_busy():
+        raise HTTPException(409, "кампания идёт")
     messages = m.load_message_pool()
     if not messages:
         raise HTTPException(400, "Нет сообщений")
@@ -161,7 +165,10 @@ async def campaign_test():
     if not profile or not group:
         raise HTTPException(400, "Нет активного профиля для теста")
     text = messages[0]
-    ok = await m._send_with_retry(profile, group, text, 0, 0, 0, 0)
+    await m._preflight_group_proxies()
+    ok = await m._send_with_retry(
+        profile, group, text, 0, 0, 0, 0, advance_queue=False
+    )
     if not ok:
         raise HTTPException(502, "Тест не удался — смотрите лог / нужен повторный вход")
     m.append_log(f"Тест отправки успешен #{profile['id']} → «{group['name']}»")

@@ -53,7 +53,10 @@ def test_settings_in_delay_min_floor():
 
     with pytest.raises(ValidationError):
         SettingsIn(delay_min_sec=1)
+    with pytest.raises(ValidationError):
+        SettingsIn(delay_max_sec=1)
     assert SettingsIn(delay_min_sec=5).delay_min_sec == 5
+    assert SettingsIn(delay_max_sec=5).delay_max_sec == 5
 
 
 def test_allowlist_classifies_every_default_key():

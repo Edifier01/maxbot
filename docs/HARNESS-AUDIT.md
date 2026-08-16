@@ -1,40 +1,39 @@
 # Harness Audit — MAX Sender Server
 
-**Mode:** `/audit-project` phase 2 (refreshed)  
+**Mode:** Plan vs Reality Review refresh  
 **Target:** `C:\Users\Maga\Documents\Projects\server`  
-**Generated:** 2026-08-07 (evening refresh)  
-**Baseline:** bootstrap mandatory core + on-disk harness inventory  
+**Generated:** 2026-08-15  
+**Previous:** 2026-08-07 (0/7 facades — **obsolete**)  
+**Verifier:** [PASS WITH NOTES](e20e90ee-a96c-47d7-9730-bb32a334795c)
 
 ---
 
 ## 1. Inventory vs bootstrap mandatory core
 
-| Artifact | Bootstrap expectation | Present? | Notes |
-|----------|----------------------|----------|-------|
-| `AGENTS.md` | Mandatory | **Yes** | Entry map; references missing `maxserver-*` skills |
-| `.cursor/agents/project-orchestrator.md` | Mandatory | **Yes** | `readonly: true` |
-| `.cursor/agents/verifier.md` | Mandatory | **Yes** | `readonly: true`; references missing skills |
-| `.cursor/agents/README.md` | Expected | **Yes** | Lists 7 specialists; 11 extra agents unwired |
-| Domain agents | Quality-driven | **Partial** | 18 total; routing table covers 7 only |
-| `.cursor/skills/context-loading/` | Mandatory | **Yes** | References missing `maxserver-*` paths |
-| `.cursor/skills/start-feature/` | Mandatory | **Yes** | Feature Plan template present |
-| `.cursor/skills/subagent-orchestrator/` | Mandatory | **Yes** | Multi-domain routing |
-| Domain skills (`maxserver-*`) | Required for this product | **No** | **0/7 on disk** — critical break |
-| Generic domain skills | Optional fallback | **Yes** | 15 skills (fastapi-patterns, tenant-isolation-max, …) |
-| `.cursor/skills/README.md` | Expected index | **No** | Referenced in `ai-skills-system.mdc` |
-| `.cursor/rules/*.mdc` | Thin always/glob rules | **Yes** | 14 rules (incl. ponytail, delegation gate) |
-| `.cursor/hooks.json` | Optional | **Yes** | Secret-scan + CI-weakening warnings |
-| `.cursor/mcp.json` | Optional | **Yes** | Present |
-| `.cursor/project-management/*` | Mandatory | **Yes** | CONTEXT, TASKS, DECISIONS, HANDOFF, fix plans |
-| `.cursor/workflows/feature-lifecycle.md` | Mandatory | **Yes** | Proceed gate + domain gates |
-| `.cursor/commands/` | Expected | **Yes** | start-feature, deploy-server |
-| `docs/PROJECT_PLAN.md` | Mandatory | **Yes** | |
-| `docs/MASTER-AI-WORKFLOW.md` | Mandatory | **Yes** | References missing skills |
-| `docs/adr/` | Phase 1 memory | **Yes** | 001–003 |
-| `skills/` vendored library | Referenced in AGENTS | **No** | Not on disk in this workspace |
-| `knowledge-catalog/` | Meta audit output | **No** | Created by this audit run |
+| Artifact | Present? | Notes |
+|----------|----------|-------|
+| `AGENTS.md` | **Yes** | Points at facades that now exist |
+| `.cursor/agents/project-orchestrator.md` | **Yes** | `readonly: true` |
+| `.cursor/agents/verifier.md` | **Yes** | `readonly: true` |
+| `.cursor/agents/README.md` | **Yes** | Core 7 + ui-designer wired; extra personas unwired |
+| Domain agents | **Partial** | 18 files; routing covers core 7 + orchestrator/verifier/ui-designer |
+| `context-loading`, `start-feature`, `subagent-orchestrator` | **Yes** | Root detection (no forced `maxserverapp/` prefix) |
+| Domain skills (`maxserver-*`) | **Yes** | 7 facades + `maxserver-harness` + `maxserver-ui-workflow` |
+| Generic domain skills | **Yes** | Composed from facades; do not load wholesale |
+| `.cursor/skills/README.md` | **Yes** | Index + compose map |
+| `.cursor/rules/*.mdc` | **Yes** | Incl. ponytail, delegation gate |
+| `.cursor/hooks.json` | **Yes** | |
+| `.cursor/mcp.json` | **Yes** | |
+| `.cursor/project-management/*` | **Yes** | |
+| `.cursor/workflows/feature-lifecycle.md` | **Yes** | |
+| `.cursor/commands/` | **Yes** | start-feature, deploy-server, improve-ui, ponytail-review, audit-harness |
+| `docs/PROJECT_PLAN.md` | **Yes** | |
+| `docs/MASTER-AI-WORKFLOW.md` | **Yes** | |
+| `docs/adr/` | **Yes** | 001–007 |
+| `skills/` vendored library | **No** | Do not load; not required |
+| `knowledge-catalog/` | **Yes** | `sources.json` + this gap report |
 
-**Coverage estimate:** mandatory core shell ~**85%** installed; **domain skill layer 0%** (broken references).
+**Coverage:** shell + domain facades **operational**. Remaining harness gap = extra-agent P1 (do not expand roster without `/audit-harness`).
 
 ---
 
@@ -42,56 +41,53 @@
 
 ### Critical
 
-1. **Broken skill routing** — `AGENTS.md`, `ai-skills-system.mdc`, every specialist agent, `context-loading`, `feature-lifecycle`, and `verifier` point at seven `maxserver-*` skill paths that **do not exist**. Agents instructed to read skills will fail silently or skip checklists.
+None. Facade paths exist on disk.
 
 ### High
 
-2. **Agent roster bloat vs routing** — 18 agent files; `ai-skills-system.mdc` and `agents/README.md` wire only 7. Extra personas (`appsec-engineer`, `identity-access`, `backend-architect`, `database-reliability`, `devops-automator`, `api-tester`, `campaign-antiban`, `secrets-credential`) have no routing table entries.
-3. **Stale audit docs** — earlier `docs/CODEBASE-AUDIT.md` / this file claimed harness absent; harness was added since then.
-4. **Path prefix drift** — multiple files reference `maxserverapp/` canonical root while workspace **is** `server/`; `server-workspace.mdc` globs `{server/**,maxserverapp/server/**}`.
+1. **Agent roster bloat vs routing** — extra files (`appsec-engineer`, `identity-access`, `backend-architect`, `database-reliability`, `devops-automator`, `api-tester`, `campaign-antiban`, `secrets-credential`) still unwired. Intentional until a Feature Plan wires or merges them. Do not claim P1 roster expansion done.
 
 ### Medium
 
-5. **Missing skills index** — `.cursor/skills/README.md` referenced but absent.
-6. **Dual naming** — on-disk skills use generic names (`fastapi-patterns`); harness docs use product names (`maxserver-fastapi-backend`); no mapping file bridges them.
-7. **desktop-workspace rule** — present but `desktop/` folder not in this workspace (server-only root).
-8. **Vendored `skills/` library** — AGENTS.md says do not load wholesale; directory absent here.
+2. **Path prefix** — some older docs still say `maxserverapp/`; `context-loading` now detects server-as-root.
+3. **`desktop-workspace.mdc`** — N/A when this tree is the Cursor root.
+4. **No vendored `skills/`** — AGENTS.md must not claim a root library exists.
 
 ### Good (keep)
 
-- Proceed gate via `/start-feature` + `specialist-delegation.mdc`
-- Verifier + orchestrator marked readonly
-- Mechanical commands in `mechanical-commands.mdc`
-- Security hooks (secret pattern detection, sensitive file read warning)
-- PM state populated (fix plans marked done, DECISIONS indexed)
-- Product docs strong — harness should link, not replace
+- `/start-feature` + specialist-delegation proceed gate
+- Readonly orchestrator/verifier
+- Mechanical commands
+- Secret-scan hooks
+- Knowlange DX: `/ponytail-review`, `/audit-harness`, NameThatUI lookup — no Railway/Supabase/n8n
 
 ---
 
-## 3. Agent ↔ skill wiring (current)
+## 3. Agent ↔ skill wiring
 
-| Agent | Declared skill path | Skill exists? |
-|-------|---------------------|---------------|
-| backend-engineer | `maxserver-fastapi-backend` | **No** |
-| frontend-engineer | `maxserver-static-ui` | **No** |
-| database-engineer | `maxserver-postgresql` | **No** |
-| devops-engineer | `maxserver-server-deploy` | **No** |
-| security-engineer | `maxserver-auth-security` | **No** |
-| campaign-specialist | `maxserver-campaign` | **No** |
-| qa-engineer / verifier | `maxserver-testing` | **No** |
-| (unwired extras) | various / none | partial generic skills exist |
+| Agent | Skill | On disk? |
+|-------|-------|----------|
+| backend-engineer | `maxserver-fastapi-backend` | **Yes** |
+| frontend-engineer | `maxserver-static-ui` | **Yes** |
+| ui-designer | `maxserver-ui-workflow` | **Yes** |
+| database-engineer | `maxserver-postgresql` | **Yes** |
+| devops-engineer | `maxserver-server-deploy` | **Yes** |
+| security-engineer | `maxserver-auth-security` | **Yes** |
+| campaign-specialist | `maxserver-campaign` | **Yes** |
+| qa-engineer / verifier | `maxserver-testing` | **Yes** |
 
-Nearest on-disk substitutes: `fastapi-patterns`, `postgres-patterns`+`database-migrations`, `deployment-patterns`+`docker-patterns`, `security-review`+`tenant-isolation-max`+`vault-fernet-sessions`, `antiban-campaign-safety`, `python-testing`.
+Facades compose generics (see `.cursor/skills/README.md`). Load facade first.
 
 ---
 
-## 4. Harness audit verdict
+## 4. Verdict
 
-Bootstrap **shell is present** but **not operational** until the seven `maxserver-*` project skills are created (distilled wrappers) **or** all routing/docs are rewritten to the 18 generic skill names. Prefer **Add** distilled `maxserver-*` skills that compose existing generic skills + MAX Sender paths/checklists — smallest change to 20+ referencing files.
+Harness is **operational**. The 2026-08-07 “0% domain skill layer” finding is closed (2026-08-15 facades). Remaining work is optional roster hygiene, not a blocker.
 
 ---
 
 ## Related
 
-- Codebase audit: `docs/CODEBASE-AUDIT.md`
-- Gap Report: `knowledge-catalog/reports/max-sender-gap.md`
+- Gap report: `knowledge-catalog/reports/max-sender-gap.md`
+- Knowlange index: `knowledge-catalog/sources.json`
+- Codebase audit: `docs/CODEBASE-AUDIT.md` (product snapshot 2026-08-07; not re-run this pass)

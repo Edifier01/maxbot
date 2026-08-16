@@ -269,38 +269,42 @@ def _claim_next_job_sync() -> dict[str, Any] | str | None:
                     return "DONE"
                 return "STOP"
 
-        group = groups[gi % len(groups)]
-        profiles = main._active_profiles_for_group(group["id"])
-        if not profiles:
+        n_groups = len(groups)
+        in_flight = RUNTIME.groups_in_flight
+        profile = None
+        group = None
+        picked_gidx = gi % n_groups
+        for offset in range(n_groups):
+            gidx = (gi + offset) % n_groups
+            cand_group = groups[gidx]
+            gid = int(cand_group["id"])
+            if gid in in_flight:
+                continue
+            profiles = main._active_profiles_for_group(gid)
+            if not profiles:
+                continue
+            attempts = 0
+            while attempts < len(profiles):
+                cand = profiles[pi % len(profiles)]
+                pi = main.next_index(pi, len(profiles))
+                attempts += 1
+                if main._is_circuit_open(cand["id"]):
+                    continue
+                if not main._can_send_in_group(cand, gid):
+                    continue
+                profile = cand
+                break
+            if profile is not None:
+                group = cand_group
+                picked_gidx = gidx
+                break
+
+        if profile is None or group is None:
             if not main._has_active_profiles():
                 if not RUNTIME.pool_done_announced:
                     RUNTIME.pool_done_announced = True
                     return "NO_PROFILES"
                 return "STOP"
-            c.execute(
-                "UPDATE queue_state SET group_idx=? WHERE id=1",
-                (main.next_index(gi, len(groups)),),
-            )
-            return None
-
-        profile = None
-        attempts = 0
-        while attempts < len(profiles):
-            cand = profiles[pi % len(profiles)]
-            pi = main.next_index(pi, len(profiles))
-            attempts += 1
-            if main._is_circuit_open(cand["id"]):
-                continue
-            if not main._can_send_in_group(cand, group["id"]):
-                continue
-            profile = cand
-            break
-
-        if profile is None:
-            c.execute(
-                "UPDATE queue_state SET profile_idx=?, group_idx=? WHERE id=1",
-                (pi, main.next_index(gi, len(groups))),
-            )
             return None
 
         picked = main._pick_next_message(c, messages, mi)
@@ -311,7 +315,7 @@ def _claim_next_job_sync() -> dict[str, Any] | str | None:
             return "STOP"
 
         text, pool_idx, progress_next, bag_mode = picked
-        gi_next = main.next_index(gi, len(groups))
+        gi_next = main.next_index(picked_gidx, n_groups)
         if bag_mode:
             c.execute(
                 "UPDATE queue_state SET profile_idx=?, group_idx=? WHERE id=1",
@@ -340,10 +344,13 @@ async def claim_next_job() -> dict[str, Any] | str | None:
       dict — задача
       \"DONE\" — очередь исчерпана (первый воркер должен завершить кампанию)
       \"STOP\" — running=0 или уже объявлен DONE
-      None — временно нечего делать (нет профилей и т.п.)
+      None — временно нечего делать (группа занята другим воркером, нет профилей и т.п.)
     """
-    async with main._claim_lock:
-        return await asyncio.to_thread(_claim_next_job_sync)
+    async with RUNTIME.claim_lock:
+        job = await asyncio.to_thread(_claim_next_job_sync)
+        if isinstance(job, dict):
+            RUNTIME.groups_in_flight.add(int(job["group"]["id"]))
+        return job
 
 
 async def poolworker_loop(worker_id: int) -> None:
@@ -397,16 +404,20 @@ async def poolworker_loop(worker_id: int) -> None:
             await asyncio.sleep(2)
             continue
 
-        sent = await send_with_retry(
-            job["profile"],
-            job["group"],
-            job["text"],
-            job["mi"],
-            job["pi"],
-            job["gi_next"],
-            job["mi_next"],
-            advance_queue=False,
-        )
+        group_id = int(job["group"]["id"])
+        try:
+            sent = await send_with_retry(
+                job["profile"],
+                job["group"],
+                job["text"],
+                job["mi"],
+                job["pi"],
+                job["gi_next"],
+                job["mi_next"],
+                advance_queue=False,
+            )
+        finally:
+            RUNTIME.groups_in_flight.discard(group_id)
         if not sent:
             main._return_to_message_bag(job["mi"])
             await asyncio.sleep(3)
@@ -497,16 +508,21 @@ async def worker_loop() -> None:
                 return
             text, pool_idx, progress_next, bag_mode = picked
             gi_next = main.next_index(gi, len(groups))
-            sent = await send_with_retry(
-                profile,
-                group,
-                text,
-                pool_idx,
-                pi,
-                gi_next,
-                progress_next,
-                advance_queue=not bag_mode,
-            )
+            gid = int(group["id"])
+            RUNTIME.groups_in_flight.add(gid)
+            try:
+                sent = await send_with_retry(
+                    profile,
+                    group,
+                    text,
+                    pool_idx,
+                    pi,
+                    gi_next,
+                    progress_next,
+                    advance_queue=not bag_mode,
+                )
+            finally:
+                RUNTIME.groups_in_flight.discard(gid)
             if not sent and bag_mode:
                 main._return_to_message_bag(pool_idx)
             mi = progress_next
@@ -574,6 +590,17 @@ def scheduler_tenant_ids() -> list[int | None]:
 
 
 async def scheduler_tick() -> None:
+    if main._is_server_mode():
+        from app.tenant import get_tenant_id
+        from app import db_pg
+
+        tid = get_tenant_id()
+        if tid is not None and not db_pg.subscription_active(tid):
+            main.set_setting("auto_run", "0")
+            main.append_log(
+                f"Планировщик: подписка не активна (tenant={tid}) — пропуск"
+            )
+            return
     with main._conn() as c:
         row = c.execute("SELECT * FROM campaign_schedule WHERE id=1").fetchone()
     if row and row["enabled"] and row["start_at"]:
@@ -593,6 +620,7 @@ async def scheduler_tick() -> None:
                 main.append_log(f"Расписание: пропуск — {e.detail}")
             else:
                 if main.load_message_pool() and main._has_sendable_profile():
+                    await main._preflight_group_proxies()
                     main.set_setting("auto_run", "1")
                     await start_worker(scheduled_for=row["start_at"])
                 else:

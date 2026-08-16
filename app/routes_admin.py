@@ -237,7 +237,6 @@ async def impersonate(tenant_id: int, request: Request):
         impersonator_id=admin_id,
     )
     data = {
-        "token": token,
         "tenant_id": tenant_id,
         "institution_name": tenant["institution_name"],
         "email": user_row["email"] if user_row else None,

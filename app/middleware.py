@@ -34,7 +34,7 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         limit, window = auth_rate_limit.auth_rate_limit_config()
-        ip = request.client.host if request.client else "127.0.0.1"
+        ip = auth_rate_limit.client_ip(request)
         key = f"auth_rl:{ip}:{request.url.path}"
         if not auth_rate_limit.check_auth_rate_limit(key, limit, window):
             return JSONResponse(

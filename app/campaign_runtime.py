@@ -21,6 +21,7 @@ class CampaignRuntime:
     worker_task: asyncio.Task[Any] | None = None
     pool_tasks: list[asyncio.Task[Any]] = field(default_factory=list)
     worker_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    claim_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     worker_last_activity: float = 0.0
     current_campaign_id: int | None = None
     pool_done_announced: bool = False
@@ -28,6 +29,7 @@ class CampaignRuntime:
     circuit_opened_at: dict[int, float] = field(default_factory=dict)
     human_burst_count: dict[int, int] = field(default_factory=dict)
     human_break_until: dict[int, datetime] = field(default_factory=dict)
+    groups_in_flight: set[int] = field(default_factory=set)
 
     def touch_activity(self) -> None:
         self.worker_last_activity = time.monotonic()
@@ -47,6 +49,7 @@ class CampaignRuntime:
         self.circuit_opened_at.clear()
         self.human_burst_count.clear()
         self.human_break_until.clear()
+        self.groups_in_flight.clear()
 
 
 @dataclass

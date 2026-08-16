@@ -29,8 +29,9 @@ Source skills adapted from Knowlange `agentic-awesome-skills` (`ui-ux-pro-max`, 
 
 1. Read target files (`static/index.html`, `static/admin.html`, `static/auth.html`).
 2. Fetch Vercel Web Interface Guidelines (see `web-design-guidelines` skill).
-3. Output findings as `file:line` + severity (CRITICAL/HIGH/MEDIUM).
-4. Run design-system search for product context:
+3. If a control is described in everyday words (“точки под слайдами”, “липкая полоска”), look up the real name at [namethatui.com](https://namethatui.com/) (Web filter). Copy the card **Prompt** into the brief. Stack is **vanilla HTML/CSS/JS** — ignore React/shadcn columns. Do not add a component library.
+4. Output findings as `file:line` + severity (CRITICAL/HIGH/MEDIUM).
+5. Run design-system search for product context:
 
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
@@ -48,7 +49,7 @@ Produce a short brief:
 
 - **Aesthetic direction** (one named stance, e.g. *industrial utilitarian dark*)
 - **Token deltas** (which `--*` vars change, contrast targets)
-- **Component list** (header, nav, tables, badges, forms)
+- **Component list** (header, nav, tables, badges, forms) — use NameThatUI names (`tablist`, `toast` vs `banner`, `dialog`) when the audit looked them up
 - **Anti-patterns to avoid** (AI purple gradients, emoji icons, layout-shift hovers)
 - **DFII score** if direction is risky (see `frontend-design-max`)
 

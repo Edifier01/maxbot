@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
+from conftest import requires_postgres
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"),
-    reason="DATABASE_URL required (PostgreSQL)",
-)
+pytestmark = requires_postgres
 
 
 def _truncate_saas() -> None:
@@ -27,7 +24,7 @@ def _truncate_saas() -> None:
         )
 
 
-def _register(client, uid: str, n: int) -> dict:
+def _register(client, uid: str, n: int) -> tuple[dict, str]:
     email = f"user{n}-{uid}@example.com"
     body = {
         "institution_name": f"Org {n} {uid}",
@@ -37,7 +34,9 @@ def _register(client, uid: str, n: int) -> dict:
     }
     r = client.post("/api/auth/register", json=body)
     assert r.status_code == 200, r.text
-    return r.json()
+    token = r.cookies.get("max_token")
+    assert token
+    return r.json(), token
 
 
 @pytest.fixture
@@ -79,11 +78,11 @@ def cross_client(tmp_path, monkeypatch):
 
 def test_tenant_profiles_isolated(cross_client):
     client, uid = cross_client
-    a = _register(client, uid, 1)
-    b = _register(client, uid, 2)
+    a, token_a = _register(client, uid, 1)
+    b, token_b = _register(client, uid, 2)
 
-    cookies_a = {"max_token": a["token"]}
-    cookies_b = {"max_token": b["token"]}
+    cookies_a = {"max_token": token_a}
+    cookies_b = {"max_token": token_b}
 
     ra = client.get("/api/profiles", cookies=cookies_a)
     rb = client.get("/api/profiles", cookies=cookies_b)
@@ -125,8 +124,8 @@ def test_tenant_profiles_isolated(cross_client):
 
 def test_two_tenants_independent_worker_runtime(cross_client):
     client, uid = cross_client
-    a = _register(client, uid, 1)
-    b = _register(client, uid, 2)
+    a, _ = _register(client, uid, 1)
+    b, _ = _register(client, uid, 2)
 
     from app.campaign_runtime import REGISTRY
 

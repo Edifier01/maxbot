@@ -9,11 +9,9 @@ import os
 import uuid
 
 import pytest
+from conftest import requires_postgres
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"),
-    reason="DATABASE_URL required (PostgreSQL)",
-)
+pytestmark = requires_postgres
 
 
 def _truncate_saas() -> None:
@@ -32,6 +30,12 @@ def _truncate_saas() -> None:
 
 def _tok(token: str) -> dict[str, str]:
     return {"max_token": token}
+
+
+def _cookie_token(resp) -> str:
+    token = resp.cookies.get("max_token")
+    assert token
+    return token
 
 
 @pytest.fixture
@@ -93,7 +97,7 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
     )
     assert reg_a.status_code == 200, reg_a.text
     body_a = reg_a.json()
-    token_a = body_a["token"]
+    token_a = _cookie_token(reg_a)
     tenant_a = body_a["tenant_id"]
 
     reg_b = client.post(
@@ -106,7 +110,7 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
         },
     )
     assert reg_b.status_code == 200
-    token_b = reg_b.json()["token"]
+    token_b = _cookie_token(reg_b)
     tenant_b = reg_b.json()["tenant_id"]
     assert tenant_a != tenant_b
 
@@ -126,7 +130,7 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
         json={"email": admin_email, "password": "AdminPass123!"},
     )
     assert admin_login.status_code == 200
-    admin_token = admin_login.json()["token"]
+    admin_token = _cookie_token(admin_login)
 
     users = client.get("/api/admin/users", cookies=_tok(admin_token))
     assert users.status_code == 200
@@ -156,7 +160,7 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
         cookies=_tok(admin_token),
     )
     assert imp.status_code == 200
-    imp_token = imp.json()["token"]
+    imp_token = _cookie_token(imp)
 
     status_imp = client.get("/api/status", cookies=_tok(imp_token))
     assert status_imp.status_code == 200
@@ -205,7 +209,7 @@ def test_tenant_token_bump_revokes_session(e2e_client):
         },
     )
     assert reg.status_code == 200
-    token = reg.json()["token"]
+    token = _cookie_token(reg)
     tenant_id = reg.json()["tenant_id"]
 
     me_ok = client.get("/api/auth/me", cookies=_tok(token))
@@ -235,7 +239,7 @@ def test_admin_tenant_worker_pool_settings(e2e_client):
         },
     )
     assert reg.status_code == 200, reg.text
-    token_user = reg.json()["token"]
+    token_user = _cookie_token(reg)
     tenant_id = reg.json()["tenant_id"]
 
     admin_login = client.post(
@@ -243,7 +247,7 @@ def test_admin_tenant_worker_pool_settings(e2e_client):
         json={"email": admin_email, "password": "AdminPass123!"},
     )
     assert admin_login.status_code == 200
-    admin_token = admin_login.json()["token"]
+    admin_token = _cookie_token(admin_login)
 
     default_settings = client.get(
         f"/api/admin/tenants/{tenant_id}/settings",
@@ -311,7 +315,7 @@ def test_admin_subscription_extend_and_revoke(e2e_client):
         },
     )
     assert reg.status_code == 200, reg.text
-    token_user = reg.json()["token"]
+    token_user = _cookie_token(reg)
     tenant_id = reg.json()["tenant_id"]
 
     me0 = client.get("/api/auth/me", cookies=_tok(token_user))
@@ -322,7 +326,7 @@ def test_admin_subscription_extend_and_revoke(e2e_client):
         json={"email": admin_email, "password": "AdminPass123!"},
     )
     assert admin_login.status_code == 200
-    admin_token = admin_login.json()["token"]
+    admin_token = _cookie_token(admin_login)
 
     missing = client.post(
         "/api/admin/users/999999/subscription/revoke",

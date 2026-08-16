@@ -40,6 +40,35 @@ def require_jwt_secret() -> str:
     return secret
 
 
+def _is_test_mode() -> bool:
+    return os.environ.get("MAX_TEST", "").strip().lower() in ("1", "true", "yes")
+
+
+def _placeholder_or_empty(value: str) -> bool:
+    v = (value or "").strip()
+    return not v or v.lower().startswith("change-me")
+
+
+def require_production_secrets() -> None:
+    """Server mode: reject empty or change-me* secrets. Skipped when MAX_TEST=1."""
+    if not is_server_mode() or _is_test_mode():
+        return
+    bad = [
+        name
+        for name, value in (
+            ("JWT_SECRET", os.environ.get("JWT_SECRET", "")),
+            ("ADMIN_PASSWORD", os.environ.get("ADMIN_PASSWORD", "")),
+            ("INTERNAL_SERVICE_TOKEN", os.environ.get("INTERNAL_SERVICE_TOKEN", "")),
+        )
+        if _placeholder_or_empty(value)
+    ]
+    if bad:
+        raise RuntimeError(
+            "MAX_SERVER_MODE=1: задайте реальные секреты (не пустые и не change-me*): "
+            + ", ".join(bad)
+        )
+
+
 def is_server_mode() -> bool:
     return MAX_SERVER_MODE
 

@@ -8,13 +8,17 @@ disable-model-invocation: true
 
 ## Project Root
 
-Canonical project root is `maxserverapp/`.
+Detect the Cursor workspace root, then prefix paths:
 
-If the workspace root is the parent folder (`MaxServer/MaxServer`), prefix project paths with `maxserverapp/`. If the workspace root is `maxserverapp/`, use paths as written below.
+| Root looks like | Prefix |
+|-----------------|--------|
+| This tree: `app/`, `static/`, `.cursor/` at root | none — paths as written |
+| Folder containing `server/app/` | `server/` |
+| Parent `maxserverapp/` (rare) | `maxserverapp/` or `maxserverapp/server/` as appropriate |
 
-1. Read `README.md` and `AGENTS.md` from the canonical project root.
+1. Read `README.md` and `AGENTS.md` from the detected project root.
 2. Read `.cursor/project-management/CURRENT_CONTEXT.md`, `PROJECT_STATUS.md`, `TASKS.md`, `DECISIONS.md`, and `HANDOFF.md`.
-3. Read `desktop/README.md`, `server/README.md`, or both depending on the task.
+3. Read `README.md` here; `desktop/README.md` only if `desktop/` exists in this workspace.
 4. Identify the work zone: `desktop`, `server`, or `both`.
 5. Load rules: `max-sender-workspace`, `ai-skills-system`, plus zone rule (`server-workspace` or `desktop-workspace`).
 6. Load domain skills for the zone:

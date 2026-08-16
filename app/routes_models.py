@@ -73,7 +73,7 @@ class GroupPatchIn(BaseModel):
 
 class SettingsIn(BaseModel):
     delay_min_sec: int | None = Field(default=None, ge=5)
-    delay_max_sec: int | None = None
+    delay_max_sec: int | None = Field(default=None, ge=5)
     max_msgs_per_profile_day: int | None = None
     daily_limit_min: int | None = None
     daily_limit_max: int | None = None

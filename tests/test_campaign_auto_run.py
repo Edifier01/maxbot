@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.campaign_runtime import REGISTRY
+from app.tenant import tenant_scope
 
 
 @pytest.fixture
@@ -80,6 +81,7 @@ def test_campaign_start_sets_auto_run(m, monkeypatch):
     monkeypatch.setattr(m, "_active_groups", lambda: [{"id": 1}])
     monkeypatch.setattr(m, "_has_active_profiles", lambda: True)
     monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+    monkeypatch.setattr(m, "_preflight_group_proxies", AsyncMock())
     monkeypatch.setattr(m, "_start_worker", AsyncMock())
 
     from app.routes_campaign import campaign_start
@@ -139,6 +141,62 @@ def test_scheduler_tick_sets_auto_run(m, monkeypatch):
     with m._conn() as c:
         row = c.execute("SELECT enabled FROM campaign_schedule WHERE id=1").fetchone()
     assert int(row["enabled"]) == 0
+
+
+def test_try_auto_resume_skips_expired_subscription(m, monkeypatch):
+    import app.db_pg as db_pg
+
+    m.set_setting("auto_run", "1")
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
+    monkeypatch.setattr(db_pg, "subscription_active", lambda _tid: False)
+    start_mock = AsyncMock()
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["hello"])
+    monkeypatch.setattr(m, "_prepare_auto_resume_pool", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+
+    async def _run():
+        with tenant_scope(tenant_id=42, role="user"):
+            resumed = await m._try_auto_resume(log_prefix="Автовозобновление")
+            return resumed, m.get_setting("auto_run")
+
+    resumed, auto_run = asyncio.run(_run())
+    assert resumed is False
+    assert auto_run == "0"
+    start_mock.assert_not_awaited()
+
+
+def test_scheduler_tick_skips_expired_subscription(m, monkeypatch):
+    import app.campaign_worker as cw
+    import app.db_pg as db_pg
+
+    m.set_setting("auto_run", "1")
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    with m._conn() as c:
+        c.execute(
+            "UPDATE campaign_schedule SET enabled=1, start_at=? WHERE id=1",
+            (past,),
+        )
+
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
+    monkeypatch.setattr(db_pg, "subscription_active", lambda _tid: False)
+    start_mock = AsyncMock()
+    resume_start = AsyncMock()
+    monkeypatch.setattr(cw, "start_worker", start_mock)
+    monkeypatch.setattr(m, "_start_worker", resume_start)
+    monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["hello"])
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+
+    async def _run():
+        with tenant_scope(tenant_id=42, role="user"):
+            await cw.scheduler_tick()
+            return m.get_setting("auto_run")
+
+    assert asyncio.run(_run()) == "0"
+    start_mock.assert_not_awaited()
+    resume_start.assert_not_awaited()
 
 
 def test_reset_queue_progress_reexported_from_main(m):

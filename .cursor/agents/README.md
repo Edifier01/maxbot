@@ -25,3 +25,4 @@ Routing: `.cursor/rules/ai-skills-system.mdc`
 - `context-loading` — every session start
 - `start-feature` — Feature Plans
 - `subagent-orchestrator` — multi-domain work
+- `maxserver-harness` — `/audit-harness` only; do not grow this roster without a routing row

@@ -16,21 +16,40 @@ read -r -p "Продолжить? [y/N] " ans
 echo "Остановка app и celery…"
 docker compose stop app celery-worker 2>/dev/null || docker compose stop app
 
-echo "Восстановление PostgreSQL…"
-docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner \
-  < "$SRC/pg.dump"
-
 echo "Восстановление data volume…"
-# python:3.12-slim has tar/python, not findutils; wipe with pathlib then extract.
+# python:3.12-slim has tar/python, not findutils. Extract to .incoming-restore,
+# verify, then swap live children into .outgoing-restore (same volume, rename).
 docker compose run --rm -T --no-deps \
   -v "$(cd "$SRC" && pwd):/backup:ro" \
   --entrypoint python \
   app -c 'import pathlib, shutil, tarfile
 root = pathlib.Path("/app/data")
-for child in list(root.iterdir()):
-    shutil.rmtree(child) if child.is_dir() else child.unlink()
+incoming = root / ".incoming-restore"
+outgoing = root / ".outgoing-restore"
+if outgoing.exists():
+    raise SystemExit("leftover .outgoing-restore; inspect before retry")
+if incoming.exists():
+    shutil.rmtree(incoming)
+incoming.mkdir()
 with tarfile.open("/backup/data.tar.gz") as archive:
-    archive.extractall(root, filter="data")'
+    archive.extractall(incoming, filter="data")
+if not any(incoming.iterdir()):
+    shutil.rmtree(incoming)
+    raise SystemExit("empty extract")
+outgoing.mkdir()
+for child in list(root.iterdir()):
+    if child.name in (".incoming-restore", ".outgoing-restore"):
+        continue
+    child.rename(outgoing / child.name)
+for child in list(incoming.iterdir()):
+    child.rename(root / child.name)
+incoming.rmdir()
+shutil.rmtree(outgoing)'
+
+echo "Восстановление PostgreSQL…"
+# Data volume is already swapped. If pg_restore fails, data is new and PG may be old.
+docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner \
+  < "$SRC/pg.dump"
 
 echo "Запуск стека…"
 docker compose up -d

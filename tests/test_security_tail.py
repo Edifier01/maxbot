@@ -178,13 +178,23 @@ def test_ws_auth_cookie_wins_over_json_token(monkeypatch):
     monkeypatch.setattr("app.config.is_server_mode", lambda: True)
     payload = {"sub": "1", "role": "user", "tenant_id": 2, "jti": "j", "tv": 0}
 
-    ws = AsyncMock()
-    ws.cookies = {"max_token": "cookie-jwt"}
-    ws.receive_text = AsyncMock(
-        return_value=json.dumps({"type": "auth", "token": "json-jwt"})
-    )
+    async def json_only_fails():
+        ws = AsyncMock()
+        ws.cookies = {}
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "auth", "token": "json-jwt"})
+        )
+        with patch("app.auth.decode_token") as dec:
+            ok = await _authenticate_ws(ws)
+            assert ok is False
+            dec.assert_not_called()
 
-    async def run():
+    async def cookie_still_works():
+        ws = AsyncMock()
+        ws.cookies = {"max_token": "cookie-jwt"}
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "auth", "token": "json-jwt"})
+        )
         with patch("app.auth.decode_token", return_value=payload) as dec, patch(
             "app.auth.cached_validate_token_session", return_value=None
         ), patch("app.tenant.set_context"):
@@ -192,7 +202,8 @@ def test_ws_auth_cookie_wins_over_json_token(monkeypatch):
             assert ok is True
             dec.assert_called_once_with("cookie-jwt")
 
-    asyncio.run(run())
+    asyncio.run(json_only_fails())
+    asyncio.run(cookie_still_works())
 
 
 def test_ws_auth_rejects_server_without_cookie_or_token(monkeypatch):
@@ -208,6 +219,117 @@ def test_ws_auth_rejects_server_without_cookie_or_token(monkeypatch):
         assert ok is False
 
     asyncio.run(run())
+
+
+def _health_request(*, authorization: str = "", cookie: str = "") -> MagicMock:
+    req = MagicMock()
+    headers = {}
+    if authorization:
+        headers["Authorization"] = authorization
+    req.headers = headers
+    req.cookies = {"max_token": cookie} if cookie else {}
+    return req
+
+
+def _patch_health_runtime(monkeypatch):
+    fake = MagicMock()
+    fake._is_server_mode.return_value = True
+    fake.vault_status.return_value = {
+        "unlocked": True,
+        "needs_setup": False,
+        "legacy": False,
+    }
+    fake.RUNTIME.worker_busy.return_value = True
+    fake._pool_size.return_value = 1
+    fake.DB_BACKEND = "pg"
+    fake.REDIS_URL = ""
+    fake.USE_CELERY = False
+    fake._app_started_at = None
+    fake.APP_VERSION = "test"
+    fake._circuit_open_count.return_value = 0
+    monkeypatch.setattr("app.routes_monitor.m", fake)
+    return fake
+
+
+def test_health_junk_authorization_stays_thin(monkeypatch):
+    from app.routes_monitor import health
+
+    _patch_health_runtime(monkeypatch)
+
+    async def run():
+        with patch("app.db_pg.ping", return_value=True):
+            body = await health(_health_request(authorization="x"))
+        assert body["ok"] is True
+        assert body["db_ok"] is True
+        assert "server_mode" in body
+        assert "worker_running" not in body
+
+    asyncio.run(run())
+
+
+def test_health_missing_token_stays_thin(monkeypatch):
+    from app.routes_monitor import health
+
+    _patch_health_runtime(monkeypatch)
+
+    async def run():
+        with patch("app.db_pg.ping", return_value=True):
+            body = await health(_health_request())
+        assert "worker_running" not in body
+        assert set(body) == {"ok", "db_ok", "server_mode"}
+
+    asyncio.run(run())
+
+
+def test_health_valid_cookie_or_service_token_gets_extras(monkeypatch):
+    from app.routes_monitor import health
+
+    _patch_health_runtime(monkeypatch)
+    monkeypatch.setattr("app.config.INTERNAL_SERVICE_TOKEN", "health-svc-token")
+    payload = {"sub": "1", "role": "user", "tenant_id": 2, "jti": "j", "tv": 0}
+
+    async def run():
+        with patch("app.db_pg.ping", return_value=True), patch(
+            "app.db_pg.ping_latency_ms", return_value=1.0
+        ), patch("app.db_pg.count_subscriptions_expiring", return_value=0):
+            svc = await health(
+                _health_request(authorization="Bearer health-svc-token")
+            )
+            assert svc["worker_running"] is True
+
+            with patch("app.auth.decode_token", return_value=payload), patch(
+                "app.auth.cached_validate_token_session", return_value=None
+            ):
+                cookie = await health(_health_request(cookie="good-jwt"))
+            assert cookie["worker_running"] is True
+
+            junk_cookie = await health(_health_request(cookie="junk"))
+            assert "worker_running" not in junk_cookie
+
+    asyncio.run(run())
+
+
+def test_require_production_secrets_rejects_change_me(monkeypatch):
+    monkeypatch.delenv("MAX_TEST", raising=False)
+    monkeypatch.setenv("JWT_SECRET", "change-me-random-64-chars-xxxxxxxxxxx")
+    monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")
+    monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "real-service-token")
+    monkeypatch.setattr("app.config.is_server_mode", lambda: True)
+    from app.config import require_production_secrets
+
+    with pytest.raises(RuntimeError, match="JWT_SECRET"):
+        require_production_secrets()
+
+
+def test_require_production_secrets_skipped_when_max_test(monkeypatch):
+    monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("JWT_SECRET", "change-me-random-64-chars-xxxxxxxxxxx")
+    monkeypatch.setenv("ADMIN_PASSWORD", "change-me-admin")
+    monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "change-me-svc")
+    monkeypatch.setattr("app.config.is_server_mode", lambda: True)
+    from app.config import require_production_secrets
+
+    require_production_secrets()
 
 
 def test_user_jwt_bearer_without_cookie_401(auth_mw):

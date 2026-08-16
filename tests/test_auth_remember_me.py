@@ -7,11 +7,9 @@ import re
 import uuid
 
 import pytest
+from conftest import requires_postgres
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"),
-    reason="DATABASE_URL required (PostgreSQL)",
-)
+pytestmark = requires_postgres
 
 
 def _truncate_saas() -> None:
@@ -30,6 +28,12 @@ def _truncate_saas() -> None:
 
 def _tok(token: str) -> dict[str, str]:
     return {"max_token": token}
+
+
+def _cookie_token(resp) -> str:
+    token = resp.cookies.get("max_token")
+    assert token
+    return token
 
 
 def _set_cookie_headers(resp) -> list[str]:
@@ -106,6 +110,7 @@ def test_login_remember_me_sets_httponly_cookie(auth_client):
         },
     )
     assert login.status_code == 200
+    assert "token" not in login.json()
     set_cookie = login.headers.get("set-cookie", "")
     assert "max_token=" in set_cookie
     assert "HttpOnly" in set_cookie
@@ -145,12 +150,12 @@ def test_restore_session_with_valid_cookie(auth_client):
         },
     )
     assert login.status_code == 200
-    token = login.json()["token"]
+    assert _cookie_token(login)
 
     restore = client.post("/api/auth/restore-session")
     assert restore.status_code == 200
     body = restore.json()
-    assert body["token"] == token
+    assert "token" not in body
     assert body["email"] == f"user-{uid}@example.com"
     assert body["role"] == "user"
 
@@ -196,7 +201,7 @@ def test_impersonate_does_not_set_persistent_cookie(auth_client):
         json={"email": admin_email, "password": "AdminPass123!", "remember_me": True},
     )
     assert admin_login.status_code == 200
-    admin_token = admin_login.json()["token"]
+    admin_token = _cookie_token(admin_login)
 
     imp = client.post(
         f"/api/admin/impersonate/{tenant_id}",

@@ -10,6 +10,11 @@ _(none)_
 - Optional: CI install from `*.lock` (today lockfiles are Docker-only; CI uses `requirements*.txt`).
 
 ## Done
+- **UI polish / web-design-guidelines (2026-08-16):** installed official Vercel skill into `.agents/skills/` + harness copy `.cursor/skills/web-design-guidelines`; unified static panels (auth/admin → tenant chrome). `test_saas_ux_static.py` **14 passed**. Verifier PASS WITH NOTES.
+- **FEATURE-CABINET-ACTIVITY-2026** (2026-08-16): full admin pacing UI (all `GLOBAL_PACING_SETTING_KEYS`); cabinet human `activity` journal; per-tenant in-flight group lock (no even/odd). Verifier [PASS WITH NOTES](0a8eaed0-248a-4e34-bda6-312127ca3641). Targeted pytest **68 passed**.
+- **FEATURE-P3-REVIEW-FIX-2026** (2026-08-16): delete unused `campaign_store`; flood-wait sleep N; per-tenant `claim_lock`; backup archive verify; compose sidecar digest pins; mocked MAX login + `send_with_retry` success. Verifier [PASS WITH NOTES](ceb43ba6-7e23-4fc7-b5d1-4270fb71cb39). Pytest **197 passed, 26 skipped**. Compose config OK.
+- **FEATURE-P2-REVIEW-FIX-2026** (2026-08-16): health extras gated; omit JSON JWT; WS cookie-only; change-me startup; auto_run subscription skip; skipif psycopg_pool/celery. Verifier [PASS WITH NOTES](5b0f7201-a7a5-42f5-a525-27c5494bb02f). Pytest **191 passed, 26 skipped**.
+- **FEATURE-P1-REVIEW-FIX-2026** (2026-08-16): tenant status/WS logs; runtime delay floor 5s; atomic restore; proxy fail-closed; rightmost XFF + IP RL count; campaign/test 409 + no rewind. Verifier [PASS WITH NOTES](9e85f29c-be39-4884-bebe-5476525fcda0). Pytest **64 passed** (targeted). Compose config OK.
 - **FEATURE-RESIDUALS-2026** (2026-08-15): REGISTRATION_OPEN fail-closed 0; CI 15 skipif isolated; cookie-only JWT (ADR 008) + CSP `script-src 'self'`; UI toast/progressWrap/skip-link; Celery empty-token fail-closed. Verifier [PASS WITH NOTES](f200e084-1724-4e7a-bc06-566254c425f0). Pytest **181 passed, 19 skipped**.
 - **Plan vs Reality Review 2026-08-15:** verifier PASS WITH NOTES. Pytest **165 passed, 19 skipped**. Audits refreshed. In-scope residuals closed by FEATURE-RESIDUALS-2026.
 - **Harness DX 2026-08-15:** `maxserver-*` facades on disk + `/ponytail-review` + `/audit-harness` + NameThatUI in UI workflow. No product runtime change.

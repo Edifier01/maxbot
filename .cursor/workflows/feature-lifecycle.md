@@ -30,3 +30,5 @@ When DevOps domain is affected:
 
 ## Completion Rule
 A task is not done until the response states what changed, what was verified, and what remains unverified.
+
+Optional after a large diff: `/ponytail-review` (size only). Optional if agents/skills look broken: `/audit-harness`.

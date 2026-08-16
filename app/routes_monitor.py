@@ -17,7 +17,7 @@ _WS_AUTH_TIMEOUT = 5.0
 
 
 async def _authenticate_ws(ws: WebSocket) -> bool:
-    """First-message auth. Server: cookie max_token (JSON token fallback). Desktop: pin."""
+    """First-message auth. Server: cookie max_token only. Desktop: pin."""
 
     from app.auth import cached_validate_token_session, decode_token
     from app.config import is_server_mode
@@ -36,9 +36,7 @@ async def _authenticate_ws(ws: WebSocket) -> bool:
         return False
 
     if is_server_mode():
-        cookie_token = (ws.cookies.get("max_token") or "").strip()
-        json_token = (data.get("token") or "").strip()
-        token = cookie_token or json_token
+        token = (ws.cookies.get("max_token") or "").strip()
         if not token:
             return False
         try:
@@ -62,6 +60,34 @@ async def _authenticate_ws(ws: WebSocket) -> bool:
     return m._ws_pin_ok(pin)
 
 
+def _health_public(db_ok: bool) -> dict:
+    vs = m.vault_status()
+    return {
+        "ok": db_ok and (vs["unlocked"] or vs["needs_setup"] or vs["legacy"]),
+        "db_ok": db_ok,
+        "server_mode": m._is_server_mode(),
+    }
+
+
+def _health_authorized(request: Request) -> bool:
+    from app.auth import cached_validate_token_session, decode_token
+    from app.config import INTERNAL_SERVICE_TOKEN
+
+    auth = request.headers.get("Authorization", "")
+    bearer = auth[7:].strip() if auth.startswith("Bearer ") else ""
+    internal = INTERNAL_SERVICE_TOKEN
+    if internal and bearer == internal:
+        return True
+    cookie = (request.cookies.get("max_token") or "").strip()
+    if not cookie:
+        return False
+    try:
+        payload = decode_token(cookie)
+    except jwt.PyJWTError:
+        return False
+    return cached_validate_token_session(payload) is None
+
+
 @router.get("/api/health")
 async def health(request: Request):
 
@@ -79,16 +105,8 @@ async def health(request: Request):
     except Exception:
         db_ok = False
 
-    token = request.headers.get("Authorization", "")
-    if not token:
-        token = request.cookies.get("max_token", "")
-    if not token.strip():
-        vs = m.vault_status()
-        return {
-            "ok": db_ok and (vs["unlocked"] or vs["needs_setup"] or vs["legacy"]),
-            "db_ok": db_ok,
-            "server_mode": m._is_server_mode(),
-        }
+    if not _health_authorized(request):
+        return _health_public(db_ok)
 
     started = getattr(m, "_app_started_at", None)
     uptime = time.time() - started if started else 0.0
@@ -195,7 +213,7 @@ async def status():
 
 @router.websocket("/ws/status")
 async def ws_status(ws: WebSocket):
-    """Пуш статуса ~1/с. Server: cookie max_token + {type:auth}. Local: {type,pin}."""
+    """Пуш статуса ~1/с. Server: cookie max_token + {type:auth} (JSON token ignored). Local: {type,pin}."""
 
     from app.config import is_server_mode
     from app.tenant import clear_context

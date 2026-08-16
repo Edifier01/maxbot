@@ -2,13 +2,36 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import time
 from collections import defaultdict
+from typing import Any
 
 _redis_client = None
 _redis_failed = False
 _last_redis_retry: float = 0.0
+
+
+def client_ip(request: Any) -> str:
+    """Peer IP behind one trusted reverse proxy (Caddy).
+
+    Leftmost X-Forwarded-For is client-spoofable; Caddy appends the real peer.
+    App port must stay unpublished (already true in compose).
+    """
+    raw = ""
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        raw = headers.get("X-Forwarded-For") or headers.get("x-forwarded-for") or ""
+    if isinstance(raw, str) and raw.strip():
+        token = raw.split(",")[-1].strip()
+        try:
+            ipaddress.ip_address(token)
+            return token
+        except ValueError:
+            pass
+    host = getattr(getattr(request, "client", None), "host", None)
+    return host if isinstance(host, str) and host else "127.0.0.1"
 
 
 def auth_rate_limit_config() -> tuple[int, float]:

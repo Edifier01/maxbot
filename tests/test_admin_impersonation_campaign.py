@@ -6,11 +6,9 @@ import os
 import uuid
 
 import pytest
+from conftest import requires_postgres
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"),
-    reason="DATABASE_URL required (PostgreSQL)",
-)
+pytestmark = requires_postgres
 
 
 def _truncate_saas() -> None:
@@ -29,6 +27,12 @@ def _truncate_saas() -> None:
 
 def _tok(token: str) -> dict[str, str]:
     return {"max_token": token}
+
+
+def _cookie_token(resp) -> str:
+    token = resp.cookies.get("max_token")
+    assert token
+    return token
 
 
 @pytest.fixture
@@ -92,7 +96,7 @@ def test_impersonation_me_email_and_campaign_history(imp_client):
         json={"email": admin_email, "password": "AdminPass123!"},
     )
     assert admin_login.status_code == 200
-    admin_token = admin_login.json()["token"]
+    admin_token = _cookie_token(admin_login)
 
     client.post(
         f"/api/admin/users/{tenant_id}/subscription",
@@ -105,7 +109,7 @@ def test_impersonation_me_email_and_campaign_history(imp_client):
         cookies=_tok(admin_token),
     )
     assert imp.status_code == 200
-    imp_token = imp.json()["token"]
+    imp_token = _cookie_token(imp)
 
     me = client.get("/api/auth/me", cookies=_tok(imp_token))
     assert me.status_code == 200

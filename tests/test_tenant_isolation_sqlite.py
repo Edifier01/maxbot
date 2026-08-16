@@ -72,3 +72,37 @@ def test_auth_sessions_scoped_by_tenant(monkeypatch):
     with tenant_scope(tenant_id=1, role="user"):
         sess = m._auth_sessions.get(m._auth_session_key(42), {})
         assert sess.get("step") == "waiting_sms"
+
+
+def test_status_payload_log_is_tenant_scoped(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAX_SERVER_MODE", "1")
+    monkeypatch.setenv("MAX_TEST", "1")
+
+    import importlib
+
+    import app.config as cfg
+
+    importlib.reload(cfg)
+
+    import main as m
+
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    (tmp_path / "data" / "tenants" / "1").mkdir(parents=True)
+    (tmp_path / "data" / "tenants" / "2").mkdir(parents=True)
+    m.reset_test_runtime()
+
+    with tenant_scope(tenant_id=1, role="user"):
+        m._refresh_data_paths()
+        m._reset_db_conn()
+        m.init_db()
+        m.append_log("TENANT1-SECRET-LINE")
+
+    with tenant_scope(tenant_id=2, role="user"):
+        m._refresh_data_paths()
+        m._reset_db_conn()
+        m.init_db()
+        m.append_log("TENANT2-OWN-LINE")
+        payload = m._build_status_payload()
+        log_text = " ".join(payload["log"])
+        assert "TENANT1-SECRET-LINE" not in log_text
+        assert "TENANT2-OWN-LINE" in log_text

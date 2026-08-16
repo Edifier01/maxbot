@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from unittest.mock import patch
 
 import pytest
+from conftest import requires_postgres
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("DATABASE_URL"),
-    reason="DATABASE_URL required (PostgreSQL)",
-)
+pytestmark = requires_postgres
 
 
 def _truncate_saas() -> None:

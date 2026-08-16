@@ -3,14 +3,17 @@
 Единая AI-система для `desktop/` и `server/`. Конфигурация в `.cursor/`.
 
 **Серверная версия — самодостаточный проект** в `server/`: собственные `AGENTS.md`, `.cursor/`, `.github/`. Откройте `server/` как корень workspace или скопируйте папку отдельно — desktop не нужен.
+
 ## Быстрый старт
 
 1. `/start-feature [задача]` — Feature Plan перед нетривиальной работой.
 2. `/improve-ui [scope]` — audit и улучшение static UI (см. `maxserver-ui-workflow`).
 3. `/deploy-server [изменение]` — Docker/VPS/deploy по checklist.
-3. Классифицировать: `desktop` | `server` | `both`.
-4. Загрузить skills по зоне (см. таблицу ниже).
-5. Назначить agents → реализация через Task (см. `.cursor/rules/specialist-delegation.mdc`) → verifier.
+4. `/ponytail-review` — оверинжиниринг текущего diff.
+5. `/audit-harness` — проверка путей agents/skills.
+6. Классифицировать: `desktop` | `server` | `both`.
+7. Загрузить skills по зоне (см. таблицу ниже).
+8. Назначить agents → реализация через Task (см. `.cursor/rules/specialist-delegation.mdc`) → verifier.
 
 ## Skills
 
@@ -19,8 +22,9 @@
 | `context-loading` | Старт, resume, выбор зоны |
 | `start-feature` | Feature Plan |
 | `subagent-orchestrator` | Multi-domain, routing |
+| `maxserver-harness` | `/audit-harness`, новые agents/skills |
 | `maxserver-server-deploy` | Docker, VPS, Caddy, deploy, CI/CD |
-| `maxserver-fastapi-backend` | API, hooks, `server/app/` |
+| `maxserver-fastapi-backend` | API, hooks, `app/` |
 | `maxserver-postgresql` | Schema, `db_pg.py`, migrations |
 | `maxserver-auth-security` | JWT, tenant, secrets |
 | `maxserver-static-ui` | Vanilla HTML/CSS/JS UI, auth/admin panel |
@@ -48,16 +52,18 @@
 | QA | `.cursor/agents/qa-engineer.md` |
 | Campaign | `.cursor/agents/campaign-specialist.md` |
 
+Не расширяйте roster без `/audit-harness` и строки в `ai-skills-system.mdc`. Extra persona files without routing are unused.
+
 ## External Skills Library
 
-Большая библиотека находится в `skills/` и не должна загружаться целиком. Project skills выше уже вобрали нужное из релевантных source skills: `fastapi-pro`, `docker-expert`, `postgresql`, `auth-implementation-patterns`, `async-python-patterns`, `webapp-testing`, `frontend-api-integration-patterns`, `verification-before-completion` и др.
+Не грузите `skills/` или `Knowlange/` целиком. Активный слой — `.cursor/skills/`. Generics (`fastapi-patterns`, …) читаются из facade `maxserver-*`, не вместо него.
 
 ## Rules
 
 - `max-sender-workspace.mdc` — общие правила (always)
 - `ai-skills-system.mdc` — маршрутизация skills/agents (always)
 - `server-workspace.mdc` — `server/**`
-- `desktop-workspace.mdc` — `desktop/**`
+- `desktop-workspace.mdc` — `desktop/**` (N/A если workspace = этот server tree)
 
 ## Документация
 

@@ -65,6 +65,8 @@ def compute_send_delay_sec(*, pool_scale: bool = False) -> tuple[float, str]:
             shi = float(_setting_int("short_pause_max_sec", 50))
             lo, hi = antiban_core.clamp_range(slo, shi)
             kind = "short"
+    lo = max(5.0, lo)
+    hi = max(lo, hi)
     delay = antiban_core.lognormal_delay_sec(
         lo, hi, jitter_percent=_jitter_percent_now()
     )
@@ -182,6 +184,9 @@ async def send_with_retry(
                 main.append_log(f"Ошибка #{profile['id']}: {last_err}")
                 return False
             delay = main.RETRY_DELAYS[attempt]
+            parsed = antiban_core.flood_wait_seconds(last_err)
+            if parsed is not None:
+                delay = max(delay, parsed)
             main.append_log(
                 f"Попытка {attempt + 1}/{main.MAX_RETRY} для #{profile['id']}, "
                 f"повтор через {delay}с: {last_err}"

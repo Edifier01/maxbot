@@ -105,6 +105,8 @@ bash scripts/backup-volumes.sh
 # → ./backups/YYYYMMDD-HHMMSS/{pg.dump,data.tar.gz,README.txt}
 ```
 
+Backup is hot: the app stays up. The script verifies archive integrity (`pg.dump` non-empty + `PGDMP` magic; `data.tar.gz` `gzip -t` and at least one tar member). SQLite in the data volume may be crash-consistent, not freeze-consistent. Treat backup directories as secret (vault material).
+
 Cron (ежедневно, 03:00):
 
 ```cron
@@ -119,7 +121,7 @@ Cron (ежедневно, 03:00):
 bash scripts/restore-volumes.sh ./backups/20260729-030000
 ```
 
-Скрипт останавливает `app`/`celery-worker`, восстанавливает PG и data volume, поднимает стек и вызывает `verify_deploy.sh`.
+Скрипт останавливает `app`/`celery-worker`, сначала extract+verify+swap data volume, затем `pg_restore` (если PG упадёт, data уже новая), поднимает стек и вызывает `verify_deploy.sh`. Прерванный swap оставляет `.outgoing-restore` — повтор не пойдёт, пока каталог на месте.
 
 ### Ручной PG-only restore
 
@@ -137,10 +139,27 @@ docker compose run --rm -T --no-deps \
   --entrypoint python \
   app -c 'import pathlib, shutil, tarfile
 root = pathlib.Path("/app/data")
-for child in list(root.iterdir()):
-    shutil.rmtree(child) if child.is_dir() else child.unlink()
+incoming = root / ".incoming-restore"
+outgoing = root / ".outgoing-restore"
+if outgoing.exists():
+    raise SystemExit("leftover .outgoing-restore; inspect before retry")
+if incoming.exists():
+    shutil.rmtree(incoming)
+incoming.mkdir()
 with tarfile.open("/backup/data.tar.gz") as archive:
-    archive.extractall(root, filter="data")'
+    archive.extractall(incoming, filter="data")
+if not any(incoming.iterdir()):
+    shutil.rmtree(incoming)
+    raise SystemExit("empty extract")
+outgoing.mkdir()
+for child in list(root.iterdir()):
+    if child.name in (".incoming-restore", ".outgoing-restore"):
+        continue
+    child.rename(outgoing / child.name)
+for child in list(incoming.iterdir()):
+    child.rename(root / child.name)
+incoming.rmdir()
+shutil.rmtree(outgoing)'
 docker compose up -d
 ```
 

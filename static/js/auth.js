@@ -1,13 +1,21 @@
 function showTab(name) {
   const isLogin = name === 'login';
-  document.getElementById('panelLogin').classList.toggle('active', isLogin);
-  document.getElementById('panelRegister').classList.toggle('active', !isLogin);
-  document.getElementById('tabLogin').classList.toggle('active', isLogin);
-  document.getElementById('tabRegister').classList.toggle('active', !isLogin);
-  document.getElementById('tabLogin').classList.toggle('secondary', !isLogin);
-  document.getElementById('tabRegister').classList.toggle('secondary', isLogin);
-  document.getElementById('tabLogin').setAttribute('aria-selected', isLogin ? 'true' : 'false');
-  document.getElementById('tabRegister').setAttribute('aria-selected', !isLogin ? 'true' : 'false');
+  const login = document.getElementById('panelLogin');
+  const register = document.getElementById('panelRegister');
+  const tabLogin = document.getElementById('tabLogin');
+  const tabRegister = document.getElementById('tabRegister');
+  login.classList.toggle('active', isLogin);
+  register.classList.toggle('active', !isLogin);
+  login.hidden = !isLogin;
+  register.hidden = isLogin;
+  tabLogin.classList.toggle('active', isLogin);
+  tabRegister.classList.toggle('active', !isLogin);
+  tabLogin.classList.toggle('secondary', !isLogin);
+  tabRegister.classList.toggle('secondary', isLogin);
+  tabLogin.setAttribute('aria-selected', isLogin ? 'true' : 'false');
+  tabRegister.setAttribute('aria-selected', !isLogin ? 'true' : 'false');
+  tabLogin.setAttribute('tabindex', isLogin ? '0' : '-1');
+  tabRegister.setAttribute('tabindex', isLogin ? '-1' : '0');
 }
 function formatApiError(detail, fallback) {
   if (!detail) return fallback;
@@ -65,11 +73,15 @@ async function doRegister() {
   const btn = document.getElementById('btnRegister');
   err.textContent = '';
   const pass = document.getElementById('regPass').value;
-  const pass2 = document.getElementById('regPass2').value;
+  const pass2el = document.getElementById('regPass2');
+  const pass2 = pass2el.value;
   if (pass !== pass2) {
     err.textContent = 'Пароли не совпадают';
+    pass2el.setAttribute('aria-invalid', 'true');
+    pass2el.focus();
     return;
   }
+  pass2el.removeAttribute('aria-invalid');
   await withAuthLoading(btn, 'Регистрация…', async () => {
     try {
       const r = await fetch('/api/auth/register', {
@@ -106,6 +118,28 @@ async function tryRestoreSession() {
 }
 document.getElementById('tabLogin').addEventListener('click', () => showTab('login'));
 document.getElementById('tabRegister').addEventListener('click', () => showTab('register'));
+document.querySelector('.tabs[role="tablist"]').addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const tabs = [document.getElementById('tabLogin'), document.getElementById('tabRegister')];
+  const i = tabs.indexOf(document.activeElement);
+  if (i < 0) return;
+  e.preventDefault();
+  const next = e.key === 'ArrowRight' ? (i + 1) % 2 : (i - 1 + 2) % 2;
+  showTab(next === 0 ? 'login' : 'register');
+  tabs[next].focus();
+});
+document.getElementById('regPass').addEventListener('input', () => {
+  const p2 = document.getElementById('regPass2');
+  if (p2.getAttribute('aria-invalid') === 'true' && p2.value === document.getElementById('regPass').value) {
+    p2.removeAttribute('aria-invalid');
+  }
+});
+document.getElementById('regPass2').addEventListener('input', () => {
+  const p2 = document.getElementById('regPass2');
+  if (p2.getAttribute('aria-invalid') === 'true' && p2.value === document.getElementById('regPass').value) {
+    p2.removeAttribute('aria-invalid');
+  }
+});
 document.getElementById('formLogin').addEventListener('submit', (event) => {
   event.preventDefault();
   doLogin();

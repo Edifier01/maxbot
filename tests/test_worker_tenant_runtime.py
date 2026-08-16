@@ -20,6 +20,15 @@ def test_runtime_registry_isolates_tenants():
     assert REGISTRY.worker_for(1) is rt1
 
 
+def test_claim_lock_is_per_tenant():
+    REGISTRY.reset_test()
+    rt1 = REGISTRY.worker_for(1)
+    rt2 = REGISTRY.worker_for(2)
+    assert rt1.claim_lock is not rt2.claim_lock
+    assert REGISTRY.worker_for(1).claim_lock is rt1.claim_lock
+    REGISTRY.reset_test()
+
+
 def test_runtime_proxy_uses_tenant_context():
     REGISTRY.reset_test()
     with tenant_scope(tenant_id=7, role="user"):

@@ -109,6 +109,7 @@ def test_internal_token_requires_tenant_header_server_mode(monkeypatch):
 
 
 def test_celery_enqueue_accepts_tenant_id():
+    pytest.importorskip("celery")
     import inspect
 
     from celery_worker import enqueue_campaign_start

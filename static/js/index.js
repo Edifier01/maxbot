@@ -49,6 +49,26 @@ let openGroupId = null;
       }).join('');
     }
 
+    function renderUserActivity(activity) {
+      const el = document.getElementById('userActivityLog');
+      if (!el) return;
+      if (!Array.isArray(activity) || !activity.length) {
+        el.textContent = 'Пока нет событий';
+        return;
+      }
+      el.innerHTML = activity.map(item => {
+        const ts = item && item.ts != null ? String(item.ts) : '';
+        const text = item && item.text != null ? String(item.text) : '';
+        const kind = item && item.kind != null ? String(item.kind) : '';
+        let cls = '';
+        if (kind === 'failed') cls = 'fail';
+        else if (kind === 'sent') cls = 'ok';
+        const line = ts ? (ts + '  ' + text) : text;
+        return `<div class="log-line ${cls}">${esc(line)}</div>`;
+      }).join('');
+      el.scrollTop = el.scrollHeight;
+    }
+
     async function tryRestoreSession() {
       try {
         const r = await fetch('/api/auth/restore-session', {
@@ -218,14 +238,21 @@ let openGroupId = null;
     function switchTab(tabId, { skipHash = false } = {}) {
       const btn = document.querySelector(`nav button[data-tab="${tabId}"]`);
       if (!btn) return;
-      document.querySelectorAll('nav button').forEach(x => {
+      document.querySelectorAll('nav button[role="tab"]').forEach(x => {
         x.classList.remove('active');
         x.setAttribute('aria-selected', 'false');
+        x.setAttribute('tabindex', '-1');
       });
-      document.querySelectorAll('section').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('main > section').forEach(x => {
+        x.classList.remove('active');
+        x.hidden = true;
+      });
       btn.classList.add('active');
       btn.setAttribute('aria-selected', 'true');
-      document.getElementById(tabId).classList.add('active');
+      btn.setAttribute('tabindex', '0');
+      const panel = document.getElementById(tabId);
+      panel.classList.add('active');
+      panel.hidden = false;
       if (!skipHash) syncTabHash(tabId);
       if (tabId === 'campaign') loadDashboard();
     }
@@ -411,10 +438,25 @@ let openGroupId = null;
       return vs;
     }
 
-    document.querySelectorAll('nav button').forEach(b => {
+    document.querySelectorAll('nav button[role="tab"]').forEach(b => {
       b.addEventListener('click', () => {
         switchTab(b.dataset.tab);
       });
+    });
+    document.querySelector('nav[role="tablist"]').addEventListener('keydown', (e) => {
+      const tabs = [...document.querySelectorAll('nav button[role="tab"]')]
+        .filter(t => t.style.display !== 'none');
+      const i = tabs.indexOf(document.activeElement);
+      if (i < 0) return;
+      let next = -1;
+      if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') next = (i - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = tabs.length - 1;
+      if (next < 0) return;
+      e.preventDefault();
+      tabs[next].focus();
+      switchTab(tabs[next].dataset.tab);
     });
 
     function parseDataId(raw) {
@@ -714,6 +756,7 @@ let openGroupId = null;
       const el = document.getElementById('campaignLog');
       el.innerHTML = renderLogLines(s.log || []);
       el.scrollTop = el.scrollHeight;
+      renderUserActivity(s.activity);
       if (document.getElementById('campaign').classList.contains('active') && !isUserRole()) {
         renderDashProgress(s);
       }
@@ -868,9 +911,9 @@ let openGroupId = null;
       const pages = Math.ceil(d.total / d.limit) || 1;
       const cur = Math.floor(d.offset / d.limit) + 1;
       document.getElementById('sendLogPager').innerHTML = d.total > d.limit
-        ? `<button class="small" aria-label="Предыдущая страница" data-action="send-log-page" data-offset="${Math.max(0, offset - d.limit)}" ${offset <= 0 ? 'disabled' : ''}>←</button>
+        ? `<button type="button" class="small" aria-label="Предыдущая страница" data-action="send-log-page" data-offset="${Math.max(0, offset - d.limit)}" ${offset <= 0 ? 'disabled' : ''}>←</button>
            <span class="hint">${cur}/${pages} · ${d.total}</span>
-           <button class="small" aria-label="Следующая страница" data-action="send-log-page" data-offset="${offset + d.limit}" ${offset + d.limit >= d.total ? 'disabled' : ''}>→</button>`
+           <button type="button" class="small" aria-label="Следующая страница" data-action="send-log-page" data-offset="${offset + d.limit}" ${offset + d.limit >= d.total ? 'disabled' : ''}>→</button>`
         : (d.total ? `<span class="hint">${d.total} записей</span>` : '');
     }
 
@@ -918,8 +961,8 @@ let openGroupId = null;
           <div class="meta">Сегодня: ${p.messages_sent_today || 0} · ${esc(p.group_names || '')}</div>
           ${p.last_error ? `<div class="auth-error">${esc(p.last_error)}</div>` : ''}
           <div class="row" style="margin-top:.5rem;margin-bottom:0">
-            <button class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${isUserRole() ? 1 : 0}" data-group-id="${p.primary_group_id || ''}">Войти</button>
-            ${isUserRole() ? '' : `<button class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${p.primary_group_id || ''}">Заново</button>`}
+            <button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${isUserRole() ? 1 : 0}" data-group-id="${p.primary_group_id || ''}">Войти</button>
+            ${isUserRole() ? '' : `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${p.primary_group_id || ''}">Заново</button>`}
           </div>
         </div>
       `).join('');
@@ -1230,10 +1273,10 @@ let openGroupId = null;
       const busy = ['connecting', 'waiting_sms', 'verifying_sms', 'waiting_cloud_password', 'verifying_password'].includes(p.auth_step);
       const loginFresh = isUserRole();
       return `
-        <button class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${loginFresh ? 1 : 0}" data-group-id="${groupId}" ${busy ? 'disabled' : ''}>Войти</button>
-        ${isUserRole() ? '' : `<button class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${groupId}" ${busy ? 'disabled' : ''}>Заново</button>`}
-        ${busy ? `<button class="small" data-action="reset-login" data-profile-id="${p.id}">Сброс</button>` : ''}
-        <button class="small danger" data-action="remove-profile" data-group-id="${groupId}" data-profile-id="${p.id}">Удалить</button>`;
+        <button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${loginFresh ? 1 : 0}" data-group-id="${groupId}" ${busy ? 'disabled' : ''}>Войти</button>
+        ${isUserRole() ? '' : `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${groupId}" ${busy ? 'disabled' : ''}>Заново</button>`}
+        ${busy ? `<button type="button" class="small" data-action="reset-login" data-profile-id="${p.id}">Сброс</button>` : ''}
+        <button type="button" class="small danger" data-action="remove-profile" data-group-id="${groupId}" data-profile-id="${p.id}">Удалить</button>`;
     }
 
     function toggleGroup(id) {
@@ -1408,9 +1451,9 @@ let openGroupId = null;
       const cur = Math.floor(offset / PROFILE_PAGE) + 1;
       if (pages <= 1) return '';
       return `<div class="row">
-        <button class="small" aria-label="Предыдущая страница" data-action="profile-page" data-group-id="${groupId}" data-dir="-1" ${offset <= 0 ? 'disabled' : ''}>←</button>
+        <button type="button" class="small" aria-label="Предыдущая страница" data-action="profile-page" data-group-id="${groupId}" data-dir="-1" ${offset <= 0 ? 'disabled' : ''}>←</button>
         <span class="hint">Стр. ${cur}/${pages} (${total} проф.)</span>
-        <button class="small" aria-label="Следующая страница" data-action="profile-page" data-group-id="${groupId}" data-dir="1" ${offset + PROFILE_PAGE >= total ? 'disabled' : ''}>→</button>
+        <button type="button" class="small" aria-label="Следующая страница" data-action="profile-page" data-group-id="${groupId}" data-dir="1" ${offset + PROFILE_PAGE >= total ? 'disabled' : ''}>→</button>
       </div>`;
     }
 
@@ -1479,8 +1522,8 @@ let openGroupId = null;
             ${open ? `
             <div class="group-body">
               ${!isUserRole() ? `<div class="row" style="margin-bottom:.75rem">
-                <textarea id="groupProxy-${g.id}" rows="2" placeholder="1 прокси на группу (~30 acc). Несколько URL — ротация по аккаунту" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
-                <button class="small" data-action="save-group-proxy" data-group-id="${g.id}">Сохранить прокси</button>
+                <textarea id="groupProxy-${g.id}" rows="2" placeholder="1 прокси на группу (~30 acc). Несколько URL — ротация по аккаунту…" aria-label="Прокси группы" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
+                <button type="button" class="small" data-action="save-group-proxy" data-group-id="${g.id}">Сохранить прокси</button>
               </div>` : ''}
               <div class="table-wrap group-table-wrap">
               <table>
@@ -1490,10 +1533,10 @@ let openGroupId = null;
               </div>
               ${profilePageControls(g.id, total)}
               <div class="row" style="margin-top:.75rem">
-                <input id="phone-${g.id}" placeholder="+79991234567">
-                <input id="label-${g.id}" placeholder="Метка" style="max-width:120px">
-                <button class="primary" data-action="login-from-phone" data-group-id="${g.id}">Войти</button>
-                ${isUserRole() ? '' : `<button class="small" data-action="import-csv">Импорт CSV</button>`}
+                <input id="phone-${g.id}" placeholder="+79991234567…" aria-label="Телефон">
+                <input id="label-${g.id}" placeholder="Метка…" aria-label="Метка" style="max-width:120px">
+                <button type="button" class="primary" data-action="login-from-phone" data-group-id="${g.id}">Войти</button>
+                ${isUserRole() ? '' : `<button type="button" class="small" data-action="import-csv">Импорт CSV</button>`}
               </div>
             </div>` : ''}
           </div>`;

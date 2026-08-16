@@ -18,6 +18,9 @@ _BAN_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 _RECOVERABLE_PACING_RE = re.compile(r"flood|spam", re.IGNORECASE)
+_FLOOD_WAIT_RE = re.compile(r"wait\s+(\d+)\s+seconds?", re.IGNORECASE)
+# ponytail: 24h ceiling if MAX returns an absurd N; raise if real waits ever exceed a day.
+_FLOOD_WAIT_CAP_SEC = 24 * 3600
 
 
 def is_ban_error(err: str) -> bool:
@@ -28,6 +31,14 @@ def is_ban_error(err: str) -> bool:
     if _RECOVERABLE_PACING_RE.search(text) and not _BAN_ERROR_RE.search(text):
         return False
     return bool(_BAN_ERROR_RE.search(text))
+
+
+def flood_wait_seconds(err: str) -> int | None:
+    """Parsed flood/spam wait N, or None if the error has no wait duration."""
+    m = _FLOOD_WAIT_RE.search(err or "")
+    if not m:
+        return None
+    return min(int(m.group(1)), _FLOOD_WAIT_CAP_SEC)
 
 
 def clamp_range(lo: float, hi: float) -> tuple[float, float]:
@@ -61,7 +72,7 @@ def lognormal_delay_sec(
     delay = max(lo * 0.5, min(hi * 2.5, delay))
     jitter = max(0.0, min(100.0, float(jitter_percent))) / 100.0
     delay *= random.uniform(1 - jitter * 0.3, 1 + jitter * 0.3)
-    return max(1.0, delay)
+    return max(5.0, delay)
 
 
 def escalating_cooldown_hours(
@@ -323,6 +334,9 @@ def _self_check_is_ban_error() -> None:
     assert not is_ban_error("spam rate limit")
     assert not is_ban_error("connection timeout")
     assert is_ban_error("blocked for spam")
+    assert flood_wait_seconds("flood wait 30 seconds") == 30
+    assert flood_wait_seconds("wait 1 second") == 1
+    assert flood_wait_seconds("connection timeout") is None
 
 
 _self_check_split_role_counts()

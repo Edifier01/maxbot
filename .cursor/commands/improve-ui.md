@@ -26,6 +26,8 @@ description: UI improvement workflow for MAX Sender static panels — audit, des
 
 `maxserver-ui-workflow`, `web-design-guidelines`, `ui-ux-pro-max`, `frontend-design-max`, `maxserver-static-ui`
 
+NameThatUI ([namethatui.com](https://namethatui.com/)) — только словарь имён контролов; не библиотека компонентов.
+
 ## Вывод
 
 Краткий audit summary + design brief; без кода до approve (если нет явного «делай сразу»).

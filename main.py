@@ -232,7 +232,6 @@ _APP_SALT_PATH = DATA / ".app_salt"
 _APP_VAULT_PATH = DATA / ".app_vault"
 BACKUPS = DATA / "backups"
 
-_claim_lock = asyncio.Lock()
 _app_started_at: float | None = None
 _metrics: dict[str, float] = {
     "messages_sent_total": 0,
@@ -800,6 +799,19 @@ def _prepare_auto_resume_pool() -> bool:
 async def _try_auto_resume(*, log_prefix: str = "Автовозобновление") -> bool:
     if not _auto_run_enabled():
         return False
+    if _is_server_mode():
+        from app.tenant import get_tenant_id
+
+        tid = get_tenant_id()
+        if tid is not None:
+            from app import db_pg
+
+            if not db_pg.subscription_active(tid):
+                set_setting("auto_run", "0")
+                append_log(
+                    f"{log_prefix}: подписка не активна (tenant={tid}) — пропуск"
+                )
+                return False
     if RUNTIME.worker_busy():
         return False
     if not _vault_ready_for_send():
@@ -1243,12 +1255,13 @@ async def _with_client_unlocked(
     try:
         extra = ExtraConfig(**extra_kwargs)
     except TypeError:
-        extra_kwargs.pop("proxy", None)
+        if proxy:
+            raise RuntimeError(
+                "клиент MAX не поддерживает прокси в этой конфигурации"
+            ) from None
         extra_kwargs.pop("device_id", None)
         extra_kwargs.pop("mt_instance_id", None)
         extra = ExtraConfig(**extra_kwargs)
-        if proxy:
-            append_log("Внимание: клиент MAX не поддерживает прокси в этой конфигурации — работаем без него")
     _prefer_current_max_user_agent(extra)
     client_kwargs: dict[str, Any] = {
         "phone": phone,
@@ -2042,15 +2055,6 @@ def _group_proxy_raw(group_id: int) -> str:
         return ""
 
 
-def _group_has_proxy_configured(group: sqlite3.Row | dict[str, Any]) -> bool:
-    raw = ""
-    try:
-        raw = (group["proxy"] or "").strip()
-    except (KeyError, IndexError, TypeError):
-        raw = _group_proxy_raw(int(group["id"]))
-    return bool(antiban_core.parse_proxy_list(raw))
-
-
 def _proxy_host_label(proxy_url: str) -> str:
     return proxy_url.split("@")[-1] if proxy_url else ""
 
@@ -2059,10 +2063,12 @@ def _validate_proxy_for_group(
     group: sqlite3.Row | dict[str, Any],
     profile_id: int | None,
 ) -> tuple[bool, str]:
-    """True = можно работать (прокси не задан или доступен)."""
+    """True = можно работать (прокси доступен; desktop — или не задан)."""
     gid = int(group["id"])
     raw = _group_proxy_raw(gid)
     if not antiban_core.parse_proxy_list(raw):
+        if _is_server_mode():
+            return False, "нет прокси"
         return True, ""
     if profile_id is not None:
         urls = [u for u in [_group_proxy(gid, profile_id)] if u]
@@ -2101,9 +2107,16 @@ def _validate_proxy_for_group(
 
 async def _preflight_group_proxies() -> None:
     for group in _active_groups():
-        if not _group_has_proxy_configured(group):
-            continue
-        await asyncio.to_thread(_validate_proxy_for_group, group, None)
+        ok, err = await asyncio.to_thread(_validate_proxy_for_group, group, None)
+        if not ok:
+            try:
+                gname = str(group["name"])
+            except (KeyError, IndexError, TypeError):
+                gname = f"#{int(group['id'])}"
+            msg = f"Группа «{gname}»: нужен прокси группы; задаёт администратор"
+            if err:
+                msg = f"{msg} ({err})"
+            raise HTTPException(400, msg)
 
 
 def _dedupe_window_for_group(group_id: int) -> int:
@@ -2598,11 +2611,27 @@ async def _backup_loop() -> None:
 
 
 def _build_status_payload() -> dict[str, Any]:
+    from app.activity_log import fetch_activity
+
     with _conn() as c:
         qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
         counts = c.execute(
             "SELECT status, COUNT(*) n FROM profiles GROUP BY status"
         ).fetchall()
+        if _is_server_mode():
+            log_rows = c.execute(
+                "SELECT msg FROM app_log ORDER BY id DESC LIMIT 80"
+            ).fetchall()
+            status_log = list(reversed([r["msg"] for r in log_rows]))
+        else:
+            status_log = _log[-80:]
+        running = bool(qs and qs["running"])
+        activity = fetch_activity(
+            c,
+            running=running,
+            outside_window=not _in_send_window(),
+            now_iso=_local_now().isoformat(timespec="seconds"),
+        )
     messages_total = len(load_message_pool())
     message_idx = qs["message_idx"] if qs else 0
     if _campaign_goal() == "daily_limits":
@@ -2616,7 +2645,7 @@ def _build_status_payload() -> dict[str, Any]:
             "messages_in_pool": messages_total,
         }
     return {
-        "running": bool(qs and qs["running"]),
+        "running": running,
         "queue": dict(qs) if qs else {},
         "profiles": {r["status"]: r["n"] for r in counts},
         "messages_count": messages_total,
@@ -2628,7 +2657,8 @@ def _build_status_payload() -> dict[str, Any]:
         "circuit_open": _circuit_open_count(),
         "worker_pool_size": _pool_size(),
         "db_backend": DB_BACKEND,
-        "log": _log[-80:],
+        "log": status_log,
+        "activity": activity,
         "version": APP_VERSION,
     }
 
@@ -2642,22 +2672,21 @@ def _ws_pin_ok(pin: str) -> bool:
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        from app.auth_rate_limit import client_ip
+
         if not request.url.path.startswith("/api"):
             return await call_next(request)
         if request.url.path in ("/api/health", "/api/vault/status", "/metrics"):
             return await call_next(request)
-        ip = request.client.host if request.client else "127.0.0.1"
+        ip = client_ip(request)
         now = time.monotonic()
-        window = _rate_counters[ip]
-        _rate_counters[ip] = [t for t in window if now - t < RATE_WINDOW]
-        if not _rate_counters[ip]:
-            del _rate_counters[ip]
-            return await call_next(request)
-        if len(_rate_counters[ip]) >= RATE_LIMIT:
+        window = [t for t in _rate_counters[ip] if now - t < RATE_WINDOW]
+        window.append(now)
+        _rate_counters[ip] = window
+        if len(window) >= RATE_LIMIT:
             return JSONResponse(
                 status_code=429, content={"detail": "Слишком много запросов"}
             )
-        _rate_counters[ip].append(now)
         return await call_next(request)
 
 

@@ -211,14 +211,55 @@ function jsonHeaders(json = true) {
       document.getElementById('warmupStartMax').value = s.warmup_start_max || '2';
       document.getElementById('lazyDayPct').value = s.lazy_day_percent || '15';
       document.getElementById('lazyDayFactor').value = s.lazy_day_factor || '0.4';
+      document.getElementById('rhythmOn').checked = String(s.human_rhythm_enabled || '1') === '1';
+      document.getElementById('tzOffset').value = s.timezone_offset_hours ?? '3';
+      document.getElementById('windowsWeekday').value = s.send_windows_weekday || '9-13,16-21';
+      document.getElementById('windowsWeekend').value = s.send_windows_weekend || '11-14,17-20';
+      document.getElementById('daySkipPct').value = s.day_skip_percent || '40';
+      document.getElementById('roleActivePct').value = s.role_active_percent || '30';
+      document.getElementById('roleQuietPct').value = s.role_quiet_percent || '30';
+      document.getElementById('rolePlanOn').checked = String(s.role_plan_enabled || '1') === '1';
+      document.getElementById('roleActiveMin').value = s.role_active_min || '5';
+      document.getElementById('roleActiveMax').value = s.role_active_max || '10';
+      document.getElementById('roleQuietLimit').value = s.role_quiet_limit || '1';
+      document.getElementById('pausesOn').checked = String(s.human_pauses_enabled || '1') === '1';
+      document.getElementById('shortPauseChance').value = s.short_pause_chance || '8';
+      document.getElementById('shortPauseMin').value = s.short_pause_min_sec || '30';
+      document.getElementById('shortPauseMax').value = s.short_pause_max_sec || '50';
+      document.getElementById('longPauseChance').value = s.long_pause_chance || '3';
+      document.getElementById('longPauseMin').value = s.long_pause_min_sec || '120';
+      document.getElementById('longPauseMax').value = s.long_pause_max_sec || '300';
+      document.getElementById('breakAfterN').value = s.break_after_n || '8';
+      document.getElementById('breakMin').value = s.break_min_sec || '600';
+      document.getElementById('breakMax').value = s.break_max_sec || '1200';
+      document.getElementById('jitterMorning').value = s.jitter_morning_percent || '55';
+      document.getElementById('jitterEvening').value = s.jitter_evening_percent || '35';
+      document.getElementById('presenceOn').checked = String(s.human_presence_enabled || '1') === '1';
+      document.getElementById('presHist').value = s.presence_history_chance || '70';
+      document.getElementById('presRead').value = s.presence_read_chance || '40';
+      document.getElementById('presReact').value = s.presence_react_chance || '12';
+      document.getElementById('presReactions').value = s.presence_reactions || '👍,❤️,🔥,😂';
+      document.getElementById('presIdle').value = s.presence_idle_chance || '5';
+      document.getElementById('textsOn').checked = String(s.human_texts_enabled || '1') === '1';
+      document.getElementById('dedupeOn').checked = String(s.text_dedupe_enabled || '1') === '1';
+      document.getElementById('lenVarietyOn').checked = String(s.text_length_variety || '1') === '1';
+      document.getElementById('textSimMax').value = s.text_similarity_max || '0.72';
+      document.getElementById('textDedupeWin').value = s.text_dedupe_window || '6';
+      document.getElementById('cdReauth').value = s.cooldown_reauth_hours || '24';
+      document.getElementById('cdFail').value = s.cooldown_fail_hours || '2';
+      document.getElementById('cdFailMax').value = s.cooldown_fail_max_hours || '48';
+      document.getElementById('cdDisableAfter').value = s.cooldown_disable_after_fails || '8';
+      document.getElementById('circuitMins').value = s.circuit_break_minutes || '30';
     }
     async function saveGlobalSettings() {
       const btn = document.getElementById('btnSaveSettings');
+      const dayMax = +document.getElementById('dayLimitMax').value;
       const body = {
         delay_min_sec: +document.getElementById('delayMin').value,
         delay_max_sec: +document.getElementById('delayMax').value,
+        max_msgs_per_profile_day: dayMax,
         daily_limit_min: +document.getElementById('dayLimitMin').value,
-        daily_limit_max: +document.getElementById('dayLimitMax').value,
+        daily_limit_max: dayMax,
         jitter_percent: +document.getElementById('jitter').value,
         message_pick_mode: document.getElementById('msgPickMode').value,
         campaign_goal: document.getElementById('campaignGoal').value,
@@ -228,6 +269,45 @@ function jsonHeaders(json = true) {
         warmup_start_max: +document.getElementById('warmupStartMax').value,
         lazy_day_percent: +document.getElementById('lazyDayPct').value,
         lazy_day_factor: +document.getElementById('lazyDayFactor').value,
+        human_rhythm_enabled: document.getElementById('rhythmOn').checked ? 1 : 0,
+        timezone_offset_hours: +document.getElementById('tzOffset').value,
+        send_windows_weekday: document.getElementById('windowsWeekday').value.trim(),
+        send_windows_weekend: document.getElementById('windowsWeekend').value.trim(),
+        day_skip_percent: +document.getElementById('daySkipPct').value,
+        role_plan_enabled: document.getElementById('rolePlanOn').checked ? 1 : 0,
+        role_active_percent: +document.getElementById('roleActivePct').value,
+        role_quiet_percent: +document.getElementById('roleQuietPct').value,
+        role_active_min: +document.getElementById('roleActiveMin').value,
+        role_active_max: +document.getElementById('roleActiveMax').value,
+        role_quiet_limit: +document.getElementById('roleQuietLimit').value,
+        human_pauses_enabled: document.getElementById('pausesOn').checked ? 1 : 0,
+        short_pause_chance: +document.getElementById('shortPauseChance').value,
+        short_pause_min_sec: +document.getElementById('shortPauseMin').value,
+        short_pause_max_sec: +document.getElementById('shortPauseMax').value,
+        long_pause_chance: +document.getElementById('longPauseChance').value,
+        long_pause_min_sec: +document.getElementById('longPauseMin').value,
+        long_pause_max_sec: +document.getElementById('longPauseMax').value,
+        break_after_n: +document.getElementById('breakAfterN').value,
+        break_min_sec: +document.getElementById('breakMin').value,
+        break_max_sec: +document.getElementById('breakMax').value,
+        jitter_morning_percent: +document.getElementById('jitterMorning').value,
+        jitter_evening_percent: +document.getElementById('jitterEvening').value,
+        human_presence_enabled: document.getElementById('presenceOn').checked ? 1 : 0,
+        presence_history_chance: +document.getElementById('presHist').value,
+        presence_read_chance: +document.getElementById('presRead').value,
+        presence_react_chance: +document.getElementById('presReact').value,
+        presence_reactions: document.getElementById('presReactions').value.trim(),
+        presence_idle_chance: +document.getElementById('presIdle').value,
+        human_texts_enabled: document.getElementById('textsOn').checked ? 1 : 0,
+        text_dedupe_enabled: document.getElementById('dedupeOn').checked ? 1 : 0,
+        text_length_variety: document.getElementById('lenVarietyOn').checked ? 1 : 0,
+        text_similarity_max: +document.getElementById('textSimMax').value,
+        text_dedupe_window: +document.getElementById('textDedupeWin').value,
+        cooldown_reauth_hours: +document.getElementById('cdReauth').value,
+        cooldown_fail_hours: +document.getElementById('cdFail').value,
+        cooldown_fail_max_hours: +document.getElementById('cdFailMax').value,
+        cooldown_disable_after_fails: +document.getElementById('cdDisableAfter').value,
+        circuit_break_minutes: +document.getElementById('circuitMins').value,
       };
       if (btn) btn.disabled = true;
       try {
@@ -399,14 +479,21 @@ function jsonHeaders(json = true) {
     async function switchTab(tabId, { skipHash = false } = {}) {
       const btn = document.querySelector(`nav button[data-tab="${tabId}"]`);
       if (!btn) return;
-      document.querySelectorAll('nav button').forEach(x => {
+      document.querySelectorAll('nav button[role="tab"]').forEach(x => {
         x.classList.remove('active');
         x.setAttribute('aria-selected', 'false');
+        x.setAttribute('tabindex', '-1');
       });
-      document.querySelectorAll('main > section').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('main > section').forEach(x => {
+        x.classList.remove('active');
+        x.hidden = true;
+      });
       btn.classList.add('active');
       btn.setAttribute('aria-selected', 'true');
-      document.getElementById(tabId).classList.add('active');
+      btn.setAttribute('tabindex', '0');
+      const panel = document.getElementById(tabId);
+      panel.classList.add('active');
+      panel.hidden = false;
       if (!skipHash) syncTabHash(tabId);
       if (tabId === 'settings' && !_tabLoaded.settings) {
         _tabLoaded.settings = true;
@@ -422,8 +509,22 @@ function jsonHeaders(json = true) {
       switchTab(tabFromHash(), { skipHash: true });
     }
 
-    document.querySelectorAll('nav button').forEach(b => {
+    document.querySelectorAll('nav button[role="tab"]').forEach(b => {
       b.addEventListener('click', () => switchTab(b.dataset.tab));
+    });
+    document.querySelector('nav[role="tablist"]').addEventListener('keydown', (e) => {
+      const tabs = [...document.querySelectorAll('nav button[role="tab"]')];
+      const i = tabs.indexOf(document.activeElement);
+      if (i < 0) return;
+      let next = -1;
+      if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') next = (i - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = tabs.length - 1;
+      if (next < 0) return;
+      e.preventDefault();
+      tabs[next].focus();
+      switchTab(tabs[next].dataset.tab);
     });
     window.addEventListener('hashchange', () => applyTabFromHash());
 

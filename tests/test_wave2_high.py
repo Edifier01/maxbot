@@ -30,7 +30,9 @@ def test_ip_rate_limit_drops_empty_keys():
         req.client.host = ip
         m._rate_counters[ip] = [stale]
         await mw.dispatch(req, AsyncMock(return_value="ok"))
-        assert ip not in m._rate_counters
+        assert ip in m._rate_counters
+        assert len(m._rate_counters[ip]) == 1
+        assert m._rate_counters[ip][0] > stale
 
     asyncio.run(run())
 

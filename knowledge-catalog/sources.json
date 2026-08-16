@@ -1,0 +1,45 @@
+{
+  "updated": "2026-08-16",
+  "note": "What from Knowlange/guides is distilled into this repo. Do not clone the rest.",
+  "used": [
+    {
+      "guide": "guides/situational/ponytail.md",
+      "in_repo": ".cursor/rules/ponytail.mdc, .cursor/commands/ponytail-review.md"
+    },
+    {
+      "guide": "guides/high-signal/agents-best-practices.md",
+      "in_repo": ".cursor/skills/maxserver-harness/SKILL.md, .cursor/commands/audit-harness.md"
+    },
+    {
+      "guide": "guides/situational/namethatui.md",
+      "in_repo": ".cursor/skills/maxserver-ui-workflow/SKILL.md (lookup only)"
+    },
+    {
+      "guide": "guides/situational/agency-agents.md",
+      "in_repo": "custom specialist agents in .cursor/agents/ — not the 270-persona dump"
+    },
+    {
+      "guide": "guides/catalogs/agentic-awesome-skills.md",
+      "in_repo": "ui-ux-pro-max, frontend-design-max"
+    },
+    {
+      "guide": "vercel-labs/agent-skills web-design-guidelines",
+      "in_repo": ".cursor/skills/web-design-guidelines, .agents/skills/web-design-guidelines, skills-lock.json"
+    },
+    {
+      "guide": "guides/high-signal/supabase.md",
+      "in_repo": "postgres-patterns (SQL/indexes/pooling only). Not Auth/PostgREST/Realtime."
+    }
+  ],
+  "rejected": [
+    "railway.md",
+    "n8n.md",
+    "medusa.md",
+    "ghost.md",
+    "ecc.md (full install)",
+    "deer-flow.md",
+    "agentmemory.md",
+    "skillsgate.md (full catalog)",
+    "agency-agents 270 roster"
+  ]
+}

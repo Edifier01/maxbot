@@ -10,6 +10,13 @@
 7. Use `/start-feature ...` for non-trivial changes. `/ponytail-review` after a fat diff. `/audit-harness` if skill paths 404.
 8. Update these project-management files after meaningful work.
 
+## Latest (2026-08-16)
+- **UI polish COMPLETE** — Vercel `web-design-guidelines` from https://www.skills.sh/vercel-labs/agent-skills/web-design-guidelines (`npx skills add`, `skills-lock.json`). Panels share tokens/chrome/a11y. Verifier [PASS WITH NOTES](76f02d26-dac8-4acc-876c-8f41a963a602). Agents: ui-designer [ee64f9e5](ee64f9e5-ef8d-4d05-8aae-34c29394df69), frontend [270b118d](270b118d-7a63-4276-9da1-1fee394e3053), qa [0e5f1f76](0e5f1f76-5c0d-4c26-bc5d-83afdd21a702). Pytest **14 passed** (`test_saas_ux_static.py`). Residual: generated admin `type="button"`; auth tabs Home/End. Uncommitted until asked.
+- **FEATURE-CABINET-ACTIVITY-2026 COMPLETE** — verifier [PASS WITH NOTES](0a8eaed0-248a-4e34-bda6-312127ca3641). Targeted pytest **68 passed**. Agents: campaign [47e563b4](47e563b4-24ef-4cc0-89f5-b3a6c7eed56c), backend [98b0eb88](98b0eb88-7266-4757-bef7-eed921ccf339), frontend [a224a97f](a224a97f-6017-47db-94c8-1d1dfec5b268), security [45e89e2e](45e89e2e-000b-46d2-a15c-5a3e77b4094b). Residual: `/api/send_log` still returns `sent_text` to role=user if called directly (UI hidden). Uncommitted until asked.
+- **FEATURE-P3-REVIEW-FIX-2026 COMPLETE** — verifier [PASS WITH NOTES](ceb43ba6-7e23-4fc7-b5d1-4270fb71cb39). Pytest **197 passed, 26 skipped**. `docker compose config -q` OK. Agents: campaign [29c147d7](29c147d7-8776-4867-8162-7d9a239ad1fa), backend [ec8828aa](ec8828aa-d013-4a6a-b45b-e46cc757fdbc), devops [2e08537a](2e08537a-10fd-4a34-b50c-57520c1f4e2a), qa [e1440654](e1440654-12a6-48d9-b7d2-f00af26e5dd7). Out of scope: style-src, PIN vault, main.py split, Docker USER, to_thread. Uncommitted until asked.
+- **FEATURE-P2-REVIEW-FIX-2026 COMPLETE** — verifier [PASS WITH NOTES](5b0f7201-a7a5-42f5-a525-27c5494bb02f). Pytest **191 passed, 26 skipped**. Agents: security [662e61d0](662e61d0-9bbc-48ed-8067-2bdb19c2f376), campaign [6e1d4ae1](6e1d4ae1-34ef-4834-89cb-56a0644f8a9a), backend [bb6ce709](bb6ce709-47e1-49c4-9577-29524675442c). Skipif now requires `psycopg_pool` too. Uncommitted until asked.
+- **FEATURE-P1-REVIEW-FIX-2026 COMPLETE** — verifier [PASS WITH NOTES](9e85f29c-be39-4884-bebe-5476525fcda0). Parent pytest **64 passed** (P1 + related files). `docker compose config -q` OK. Agents: security [ea430d6d](ea430d6d-7f6f-40c0-baea-81781b479a24), campaign [92d2ac9c](92d2ac9c-2373-4539-93a3-1f46441dd0fa), devops [2f4a182b](2f4a182b-53aa-47da-8667-6ce3b6789797), qa [12977a85](12977a85-2dc9-4a8e-89fd-2e42d68a5a4a). Uncommitted until asked. Residual: `_log` still written globally; restore swap before pg_restore (if PG fails, data is new); full local pytest still 12 fail/14 error without celery/psycopg.
+
 ## Latest (2026-08-15)
 - **FEATURE-RESIDUALS-2026 COMPLETE** — verifier [PASS WITH NOTES](f200e084-1724-4e7a-bc06-566254c425f0). REGISTRATION_OPEN default 0; CI 15 skipif isolated; cookie-only JWT (ADR 008) + CSP `script-src 'self'`; UI leftovers; Celery fail-closed. Parent pytest **181 passed, 19 skipped**. Agents: security [c11fc457](c11fc457-955d-4dd8-a3a9-3050eee29c74) [08b33072](08b33072-4d1d-4521-a439-5c7612bdd896), campaign [6baa1648](6baa1648-5cab-458d-a26b-6b56428726ba), devops [67cadf32](67cadf32-b076-477c-bd40-6fab9fcc6187) [7892d68e](7892d68e-57d5-48d3-9c9f-b8c2adf47185), frontend [a587b936](a587b936-be5e-497d-8410-7d85c4eeb166) [5f8aff05](5f8aff05-72f2-450a-a310-b59f8ed6d211), qa [5893416f](5893416f-800e-447c-be9e-583e3234d443). Uncommitted until asked.
 - **Plan vs Reality Review COMPLETE** — verifier [PASS WITH NOTES](e20e90ee-a96c-47d7-9730-bb32a334795c). In-scope residuals closed by FEATURE-RESIDUALS-2026. Still deferred: main.py P3-3, to_thread, mobile P2, extra agents.
@@ -38,7 +45,7 @@
 - Agent Fix Plan 2026 waves 1–4 implemented and marked DONE.
 - G-2: removed server-mode strip of group `proxy` on create/PATCH; test `tests/test_group_proxy_server.py`.
 - G-4 decision: keep `*.lock` for Docker only; CI stays on `requirements*.txt`.
-- Dead `CampaignRuntime.claim_lock` removed (claim uses `main._claim_lock` asyncio.Lock).
+- Per-tenant `CampaignRuntime.claim_lock` (FEATURE-P3); process-global `main._claim_lock` removed.
 
 ## Important Rule
 Specialist agents must not edit project-management state independently. The parent agent owns integration and handoff updates.
