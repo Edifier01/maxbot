@@ -191,6 +191,11 @@ async def send_with_retry(
                 f"Попытка {attempt + 1}/{main.MAX_RETRY} для #{profile['id']}, "
                 f"повтор через {delay}с: {last_err}"
             )
-            await asyncio.sleep(delay)
-            main._touch_worker_activity()
+            end_at = time.monotonic() + float(delay)
+            while time.monotonic() < end_at:
+                main._touch_worker_activity()
+                left = end_at - time.monotonic()
+                if left <= 0:
+                    break
+                await asyncio.sleep(min(30.0, left))
     return False

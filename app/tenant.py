@@ -111,6 +111,18 @@ def is_cabinet_user() -> bool:
     return get_user_role() == "user" and not is_impersonating()
 
 
+_CABINET_REDACT_KEYS = ("proxy", "sent_text")
+
+
+def redact_cabinet_row(d: dict) -> dict:
+    """Copy row; drop proxy/sent_text for cabinet users (admin/imp keep them)."""
+    out = dict(d)
+    if is_cabinet_user():
+        for key in _CABINET_REDACT_KEYS:
+            out.pop(key, None)
+    return out
+
+
 def use_global_data() -> bool:
     return _use_global_data.get()
 

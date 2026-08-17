@@ -72,3 +72,9 @@ def test_compose_celery_profile_env():
     assert 'profiles: ["celery"]' in text
     assert "celery-worker" in text
     assert 'USE_CELERY: "1"' in text
+
+
+def test_celery_docstring_is_trigger_only():
+    text = (Path(__file__).resolve().parents[1] / "celery_worker.py").read_text(encoding="utf-8")
+    assert "trigger-only" in text
+    assert "horizontal scale" not in text

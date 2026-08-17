@@ -107,8 +107,12 @@ def test_reset_test_clears_inflight():
     REGISTRY.reset_test()
     rt = REGISTRY.worker_for(None)
     rt.groups_in_flight.add(7)
+    rt.jobs_in_flight = 3
+    rt.profile_reserved[1] = 2
     rt.reset_test()
     assert rt.groups_in_flight == set()
+    assert rt.jobs_in_flight == 0
+    assert rt.profile_reserved == {}
 
 
 def test_inflight_set_is_per_tenant():
@@ -149,6 +153,8 @@ def test_async_claim_marks_inflight(m):
         assert job is not None
         assert int(job["group"]["id"]) == 1
         assert 1 in RUNTIME.groups_in_flight
+        assert RUNTIME.jobs_in_flight == 1
+        assert RUNTIME.profile_reserved.get(int(job["profile"]["id"]), 0) == 1
 
     asyncio.run(_run())
 
@@ -168,6 +174,8 @@ def test_cancelled_to_thread_does_not_mark(m, monkeypatch):
         with pytest.raises(asyncio.CancelledError):
             await cw.claim_next_job()
         assert not RUNTIME.groups_in_flight
+        assert RUNTIME.jobs_in_flight == 0
+        assert RUNTIME.profile_reserved == {}
 
     asyncio.run(_run())
 
@@ -176,6 +184,8 @@ def test_poolworker_releases_inflight_on_cancel(m, monkeypatch):
     from app import campaign_worker as cw
 
     RUNTIME.groups_in_flight.add(1)
+    RUNTIME.jobs_in_flight = 1
+    RUNTIME.profile_reserved[1] = 1
     job = {
         "profile": {"id": 1},
         "group": {"id": 1, "name": "g"},
@@ -212,3 +222,44 @@ def test_poolworker_releases_inflight_on_cancel(m, monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(_run())
     assert 1 not in RUNTIME.groups_in_flight
+    assert RUNTIME.jobs_in_flight == 0
+    assert 1 not in RUNTIME.profile_reserved
+
+
+def test_claim_skips_profile_when_reserved_hits_daily(m):
+    from app import campaign_worker as cw
+
+    _seed(m, [1, 2], n_profiles=2)
+    today = m._local_today().isoformat()
+    with m._conn() as c:
+        c.execute(
+            "UPDATE profiles SET messages_sent_today=9, sent_day=?, "
+            "daily_limit=10, daily_limit_day=? WHERE id=1",
+            (today, today),
+        )
+        c.execute(
+            "UPDATE profiles SET messages_sent_today=0, sent_day=?, "
+            "daily_limit=10, daily_limit_day=? WHERE id=2",
+            (today, today),
+        )
+    RUNTIME.profile_reserved[1] = 1
+    job = cw._claim_next_job_sync()
+    assert job is not None
+    assert int(job["profile"]["id"]) == 2
+
+
+def test_empty_bag_with_jobs_in_flight_does_not_return_done(m):
+    from app import campaign_worker as cw
+
+    m.set_setting("campaign_goal", "message_pool")
+    m.set_setting("message_pick_mode", "random_norepeat")
+    _seed(m, [1])
+    with m._conn() as c:
+        c.execute(
+            "UPDATE queue_state SET message_bag='[]', message_idx=? WHERE id=1",
+            (3,),
+        )
+    RUNTIME.jobs_in_flight = 2
+    RUNTIME.pool_done_announced = False
+    assert cw._claim_next_job_sync() is None
+    assert RUNTIME.pool_done_announced is False

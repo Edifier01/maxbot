@@ -218,7 +218,7 @@ def init_db() -> None:
 
         if n_settings == 0 and should_seed_tenant_pacing():
             seed_tenant_settings_from_global(c)
-    m.BACKUPS.mkdir(parents=True, exist_ok=True)
+    m._backups_dir().mkdir(parents=True, exist_ok=True)
 
 
 def _table_columns(c: sqlite3.Connection, table: str) -> set[str]:

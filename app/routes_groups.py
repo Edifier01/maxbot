@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.routes_models import BulkProfilesIn, GroupIn, GroupPatchIn, ProfileIn
 from app.runtime import main as m
-from app.tenant import is_cabinet_user
+from app.tenant import is_cabinet_user, redact_cabinet_row
 
 router = APIRouter(tags=["groups"])
 
@@ -30,7 +30,7 @@ async def list_groups():
             """,
             (m.ProfileStatus.ACTIVE,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [redact_cabinet_row(dict(r)) for r in rows]
 
 
 @router.get("/api/groups/{group_id}/profiles")
@@ -150,7 +150,7 @@ async def patch_group(group_id: int, body: GroupPatchIn):
                 (int(data["is_active"]), group_id),
             )
         row = c.execute("SELECT * FROM groups WHERE id=?", (group_id,)).fetchone()
-    return dict(row)
+    return redact_cabinet_row(dict(row))
 
 
 @router.post("/api/groups/{group_id}/profiles")

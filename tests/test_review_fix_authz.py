@@ -219,7 +219,7 @@ def test_user_cannot_patch_group_is_active_or_proxy(tmp_path, monkeypatch):
         renamed = asyncio.run(patch_group(gid, GroupPatchIn(name="Renamed")))
         assert renamed["name"] == "Renamed"
         assert renamed["is_active"] == 1
-        assert renamed["proxy"] == ""
+        assert "proxy" not in renamed
 
 
 def test_admin_imp_can_patch_group_proxy(tmp_path, monkeypatch):
@@ -254,6 +254,32 @@ def test_is_cabinet_user_role_and_impersonation():
         assert not is_cabinet_user()
 
 
+def test_list_profiles_clamps_limit_offset_q(tmp_path, monkeypatch):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_profiles import list_profiles
+
+    with tenant_scope(tenant_id=1, role="user"):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as c:
+            c.execute("INSERT INTO groups (name) VALUES ('G')")
+            gid = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
+            for i in range(3):
+                c.execute(
+                    "INSERT INTO profiles (phone, label) VALUES (?, ?)",
+                    (f"+7900000000{i}", f"p{i}"),
+                )
+                pid = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
+                c.execute(
+                    "INSERT INTO group_profiles (group_id, profile_id) VALUES (?, ?)",
+                    (gid, pid),
+                )
+        asyncio.run(list_profiles(offset=0, limit=50, q="x" * 250))
+        result = asyncio.run(list_profiles(offset=-3, limit=-1, q=""))
+        assert len(result["items"]) == 1
+        assert result["total"] == 3
+
+
 def test_user_cannot_patch_profile_proxy(tmp_path, monkeypatch):
     m = _setup_tenant_db(tmp_path, monkeypatch)
     from app.routes_models import ProfilePatchIn
@@ -281,7 +307,7 @@ def test_user_cannot_patch_profile_proxy(tmp_path, monkeypatch):
 
         renamed = asyncio.run(patch_profile(pid, ProfilePatchIn(label="Renamed")))
         assert renamed["label"] == "Renamed"
-        assert renamed["proxy"] == ""
+        assert "proxy" not in renamed
 
 
 def test_user_cannot_add_phone_with_proxy(tmp_path, monkeypatch):
@@ -339,6 +365,125 @@ def test_admin_imp_can_patch_profile_proxy(tmp_path, monkeypatch):
         proxy = "socks5://user:pass@203.0.113.10:1080"
         row = asyncio.run(patch_profile(pid, ProfilePatchIn(proxy=proxy)))
         assert row["proxy"] == proxy
+
+
+def test_redact_cabinet_row_drops_proxy_and_sent_text():
+    from app.tenant import redact_cabinet_row
+
+    src = {
+        "id": 1,
+        "name": "G",
+        "proxy": "socks5://user:pass@203.0.113.10:1080",
+        "sent_text": "SECRET-BODY",
+    }
+    with tenant_scope(user_id=1, tenant_id=2, role="user"):
+        out = redact_cabinet_row(src)
+        assert "proxy" not in out
+        assert "sent_text" not in out
+        assert out["name"] == "G"
+        assert src["proxy"] == "socks5://user:pass@203.0.113.10:1080"
+    with tenant_scope(user_id=9, role="admin"):
+        kept = redact_cabinet_row(src)
+        assert kept["proxy"] == src["proxy"]
+        assert kept["sent_text"] == "SECRET-BODY"
+    with tenant_scope(user_id=9, tenant_id=2, role="admin", impersonating=True):
+        assert redact_cabinet_row(src)["proxy"] == src["proxy"]
+    with tenant_scope(user_id=1, tenant_id=2, role="user", impersonating=True):
+        assert "proxy" in redact_cabinet_row(src)
+
+
+def test_cabinet_get_serializers_omit_proxy_and_sent_text(tmp_path, monkeypatch):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_dashboard import dashboard, get_send_log
+    from app.routes_groups import list_group_profiles, list_groups
+    from app.routes_profiles import get_profile, list_profiles
+
+    proxy = "socks5://user:pass@203.0.113.10:1080"
+    with tenant_scope(tenant_id=1, role="user"):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as c:
+            gcur = c.execute(
+                "INSERT INTO groups (name, invite_link, proxy) VALUES (?, ?, ?)",
+                ("G1", "https://max.ru/join/abc", proxy),
+            )
+            gid = int(gcur.lastrowid)
+            pcur = c.execute(
+                "INSERT INTO profiles (phone, label, status, proxy) VALUES (?, ?, ?, ?)",
+                ("+79001234567", "A", m.ProfileStatus.PENDING, proxy),
+            )
+            pid = int(pcur.lastrowid)
+            c.execute(
+                "INSERT INTO group_profiles (group_id, profile_id, order_index) "
+                "VALUES (?, ?, 0)",
+                (gid, pid),
+            )
+            c.execute(
+                "INSERT INTO send_log (profile_id, group_id, message_idx, status, sent_text) "
+                "VALUES (?, ?, 0, 'sent', ?)",
+                (pid, gid, "SECRET-BODY"),
+            )
+
+        groups = asyncio.run(list_groups())
+        assert groups
+        assert "proxy" not in groups[0]
+        assert groups[0]["name"] == "G1"
+
+        gp = asyncio.run(list_group_profiles(gid))
+        assert gp["items"]
+        assert "proxy" not in gp["items"][0]
+
+        listed = asyncio.run(list_profiles())
+        assert listed["items"]
+        assert "proxy" not in listed["items"][0]
+
+        one = asyncio.run(get_profile(pid))
+        assert "proxy" not in one
+        assert one["phone"] == "+79001234567"
+
+        log = asyncio.run(get_send_log())
+        assert log["items"]
+        assert "sent_text" not in log["items"][0]
+        assert log["items"][0]["status"] == "sent"
+
+        dash = asyncio.run(dashboard())
+        assert dash["items"]
+        assert "proxy" not in dash["items"][0]
+
+
+def test_admin_imp_get_serializers_keep_proxy_and_sent_text(tmp_path, monkeypatch):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_dashboard import get_send_log
+    from app.routes_groups import list_groups
+    from app.routes_profiles import get_profile
+
+    proxy = "socks5://user:pass@203.0.113.10:1080"
+    with tenant_scope(tenant_id=1, role="admin", impersonating=True):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as c:
+            gcur = c.execute(
+                "INSERT INTO groups (name, invite_link, proxy) VALUES (?, ?, ?)",
+                ("G1", "https://max.ru/join/abc", proxy),
+            )
+            gid = int(gcur.lastrowid)
+            pcur = c.execute(
+                "INSERT INTO profiles (phone, label, status, proxy) VALUES (?, ?, ?, ?)",
+                ("+79001234567", "A", m.ProfileStatus.PENDING, proxy),
+            )
+            pid = int(pcur.lastrowid)
+            c.execute(
+                "INSERT INTO send_log (profile_id, group_id, message_idx, status, sent_text) "
+                "VALUES (?, ?, 0, 'sent', ?)",
+                (pid, gid, "SECRET-BODY"),
+            )
+
+        groups = asyncio.run(list_groups())
+        assert groups[0]["proxy"] == proxy
+        one = asyncio.run(get_profile(pid))
+        assert one["proxy"] == proxy
+        log = asyncio.run(get_send_log())
+        assert log["items"][0]["sent_text"] == "SECRET-BODY"
 
 
 def test_server_mode_vault_password_endpoints_gone(tmp_path, monkeypatch):

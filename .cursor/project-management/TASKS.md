@@ -10,6 +10,8 @@ _(none)_
 - Optional: CI install from `*.lock` (today lockfiles are Docker-only; CI uses `requirements*.txt`).
 
 ## Done
+- **FEATURE-REVIEW-FIX-WAVE4-2026 (2026-08-17):** campaign pool deadlock/capacity/claims/flood; tenant delete quarantine; backup paths + volume umask/WAL/restore rollback; deploy immutable SHA + Celery profile; cabinet redact; WS revalidate; logout await. Skip F-14/F-15. Verifier [PASS WITH NOTES](c17b2ac0-bee8-4375-8cf2-e5ab9545413a). Pytest **231 passed, 26 skipped**. Compose config OK.
+- **Self-registration restored (2026-08-17):** Compose / `.env.example` default `REGISTRATION_OPEN=1`; Python unset still fail-closed 403. Verifier [PASS WITH NOTES](6c42ee13-07bc-45e6-8dcd-d51e2ab90306). Pytest **11 passed, 1 skipped**.
 - **UI polish / web-design-guidelines (2026-08-16):** installed official Vercel skill into `.agents/skills/` + harness copy `.cursor/skills/web-design-guidelines`; unified static panels (auth/admin → tenant chrome). `test_saas_ux_static.py` **14 passed**. Verifier PASS WITH NOTES.
 - **FEATURE-CABINET-ACTIVITY-2026** (2026-08-16): full admin pacing UI (all `GLOBAL_PACING_SETTING_KEYS`); cabinet human `activity` journal; per-tenant in-flight group lock (no even/odd). Verifier [PASS WITH NOTES](0a8eaed0-248a-4e34-bda6-312127ca3641). Targeted pytest **68 passed**.
 - **FEATURE-P3-REVIEW-FIX-2026** (2026-08-16): delete unused `campaign_store`; flood-wait sleep N; per-tenant `claim_lock`; backup archive verify; compose sidecar digest pins; mocked MAX login + `send_with_retry` success. Verifier [PASS WITH NOTES](ceb43ba6-7e23-4fc7-b5d1-4270fb71cb39). Pytest **197 passed, 26 skipped**. Compose config OK.

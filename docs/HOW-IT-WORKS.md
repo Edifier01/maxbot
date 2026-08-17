@@ -495,9 +495,8 @@ antiban_state  — состояние антибана по каждому пр�
 
 Опционально можно включить Celery (`USE_CELERY=1`) — это позволяет:
 - Запускать кампании по расписанию через внешний планировщик
-- Горизонтальное масштабирование в будущем
 
-Celery-воркер (`celery_worker.py`) при выполнении задачи делает HTTP POST на сам FastAPI-сервер с `INTERNAL_SERVICE_TOKEN`. Middleware видит service token, проверяет `X-Tenant-Id` и запускает кампанию для указанного тенанта.
+Celery только ставит задачу: HTTP POST на **один** in-process FastAPI (`INTERNAL_SERVICE_TOKEN` + `X-Tenant-Id`). Несколько app-реплик с воркерами не поддерживаются.
 
 ---
 

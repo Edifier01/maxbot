@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from app.runtime import main as m
+from app.tenant import redact_cabinet_row
 
 router = APIRouter(tags=["dashboard"])
 
@@ -96,7 +97,7 @@ async def dashboard():
             qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
         items = []
         for p in profiles:
-            d = m._profile_auth_view(p)
+            d = redact_cabinet_row(m._profile_auth_view(p))
             d["circuit_open"] = m._is_circuit_open(p["id"])
             items.append(d)
         if m._campaign_goal() == "daily_limits":
@@ -175,7 +176,7 @@ async def get_send_log(
             [*params, limit, offset],
         ).fetchall()
     return {
-        "items": [dict(r) for r in rows],
+        "items": [redact_cabinet_row(dict(r)) for r in rows],
         "total": total,
         "offset": offset,
         "limit": limit,

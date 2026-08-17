@@ -276,3 +276,45 @@ def test_stop_worker_from_inside_worker_task_does_not_hang(m):
     with m._conn() as c:
         row = c.execute("SELECT running FROM queue_state WHERE id=1").fetchone()
     assert int(row["running"]) == 0
+
+
+def test_stop_worker_from_pool_child_does_not_await_supervisor(m):
+    import app.campaign_worker as cw
+
+    rt = REGISTRY.worker_for(None)
+    with m._conn() as c:
+        c.execute("UPDATE queue_state SET running=1 WHERE id=1")
+
+    done = asyncio.Event()
+
+    async def dummy_supervisor():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            for t in list(rt.pool_tasks):
+                t.cancel()
+            await asyncio.gather(*rt.pool_tasks, return_exceptions=True)
+            raise
+
+    async def dummy_sibling():
+        await asyncio.Event().wait()
+
+    async def fake_child():
+        await cw.stop_worker(finish_status="stopped", reason="ban from pool")
+        done.set()
+
+    async def run_test():
+        supervisor = asyncio.create_task(dummy_supervisor())
+        sibling = asyncio.create_task(dummy_sibling())
+        child = asyncio.create_task(fake_child())
+        rt.worker_task = supervisor
+        rt.pool_tasks = [child, sibling]
+        await asyncio.wait_for(done.wait(), timeout=2.0)
+        supervisor.cancel()
+        sibling.cancel()
+        await asyncio.gather(supervisor, sibling, child, return_exceptions=True)
+
+    asyncio.run(run_test())
+    with m._conn() as c:
+        row = c.execute("SELECT running FROM queue_state WHERE id=1").fetchone()
+    assert int(row["running"]) == 0

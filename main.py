@@ -927,6 +927,8 @@ def _drain_queue(q: asyncio.Queue) -> None:
 
 
 def _profile_auth_view(p: sqlite3.Row | dict) -> dict:
+    from app.tenant import redact_cabinet_row
+
     d = dict(p)
     sess = _auth_sessions.get(_auth_session_key(int(d["id"])), {})
     d["auth_step"] = sess.get("step", "idle")
@@ -943,7 +945,7 @@ def _profile_auth_view(p: sqlite3.Row | dict) -> dict:
         (get_setting("warmup_enabled") or "1").strip() in ("1", "true", "yes")
         and age < wdays
     )
-    return d
+    return redact_cabinet_row(d)
 
 
 class _QueueSmsProvider:
@@ -1771,6 +1773,20 @@ def _can_send(profile: sqlite3.Row) -> bool:
     return profile["messages_sent_today"] < limit
 
 
+def _reserved_hits_daily_limit(profile: sqlite3.Row) -> bool:
+    """True if today's sends plus in-flight reservations meet the daily cap."""
+    pid = int(profile["id"])
+    reserved = int(RUNTIME.profile_reserved.get(pid, 0))
+    if reserved <= 0:
+        return False
+    limit = _ensure_daily_limit(pid, log=False)
+    if limit <= 0:
+        return True
+    today = _local_today().isoformat()
+    sent = int(profile["messages_sent_today"] or 0) if profile["sent_day"] == today else 0
+    return sent + reserved >= limit
+
+
 def _has_enabled_active_profiles() -> bool:
     """Есть ли enabled+active профили без учёта ролей дня."""
     with _conn() as c:
@@ -2354,14 +2370,15 @@ from app.campaign_worker import (
 def backup_database() -> Path | None:
     """Снимок SQLite в data/backups/. Возвращает путь или None."""
     try:
-        BACKUPS.mkdir(parents=True, exist_ok=True)
+        backups = _backups_dir()
+        backups.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        dest = BACKUPS / f"app-{ts}.db"
+        dest = backups / f"app-{ts}.db"
         # checkpoint WAL перед копированием
         with _conn() as c:
             c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         shutil.copy2(_db_path(), dest)
-        files = sorted(BACKUPS.glob("app-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+        files = sorted(backups.glob("app-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
         for old in files[BACKUP_KEEP:]:
             old.unlink(missing_ok=True)
         append_log(f"Резервная копия: {dest.name}")
@@ -2586,25 +2603,55 @@ async def _send_with_retry(
     )
 
 
+def _run_scheduled_backups() -> None:
+    """Desktop: one DB. Server: each tenant + global, never no-tenant ROOT/data."""
+    if not _is_server_mode():
+        backup_database()
+        return
+    from app.tenant import tenant_scope
+
+    for db_path in _tenant_sqlite_paths():
+        parent = db_path.parent
+        grand = parent.parent
+        if parent.name.isdigit() and grand.name == "tenants":
+            with tenant_scope(tenant_id=int(parent.name), role="user"):
+                backup_database()
+        elif parent.name == "global" and grand.name == "data":
+            with tenant_scope(use_global_data=True, role="admin"):
+                backup_database()
+
+
+def _backup_interval_hours() -> float:
+    """Interval from global/admin settings; never open ROOT/data/app.db in server mode."""
+    try:
+        if _is_server_mode():
+            from app.tenant import tenant_scope
+
+            with tenant_scope(use_global_data=True, role="admin"):
+                raw = get_setting("backup_interval_hours") or "24"
+        else:
+            raw = get_setting("backup_interval_hours") or "24"
+        return float(raw)
+    except ValueError:
+        return 24.0
+
+
 async def _backup_loop() -> None:
     last_backup = 0.0
     while True:
         await asyncio.sleep(60)
         if REGISTRY.app.shutting_down:
             return
-        try:
-            hours = float(get_setting("backup_interval_hours") or "24")
-        except ValueError:
-            hours = 24.0
+        hours = _backup_interval_hours()
         if hours <= 0:
             continue
         now = time.monotonic()
         if last_backup == 0.0:
-            backup_database()
+            _run_scheduled_backups()
             last_backup = now
             continue
         if now - last_backup >= hours * 3600:
-            backup_database()
+            _run_scheduled_backups()
             last_backup = now
 
 

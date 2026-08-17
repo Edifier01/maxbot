@@ -14,6 +14,7 @@ from app.runtime import main as m
 router = APIRouter(tags=["monitor"])
 
 _WS_AUTH_TIMEOUT = 5.0
+_WS_REVALIDATE_EVERY = 30
 
 
 async def _authenticate_ws(ws: WebSocket) -> bool:
@@ -58,6 +59,23 @@ async def _authenticate_ws(ws: WebSocket) -> bool:
 
     pin = (data.get("pin") or "").strip()
     return m._ws_pin_ok(pin)
+
+
+def _ws_cookie_session_ok(ws: WebSocket) -> bool:
+    """Re-check cookie JWT + session. Desktop (no server JWT) always ok."""
+    from app.auth import cached_validate_token_session, decode_token
+    from app.config import is_server_mode
+
+    if not is_server_mode():
+        return True
+    token = (ws.cookies.get("max_token") or "").strip()
+    if not token:
+        return False
+    try:
+        payload = decode_token(token)
+    except jwt.PyJWTError:
+        return False
+    return cached_validate_token_session(payload) is None
 
 
 def _health_public(db_ok: bool) -> dict:
@@ -222,10 +240,15 @@ async def ws_status(ws: WebSocket):
     if not await _authenticate_ws(ws):
         await ws.close(code=4401)
         return
+    ticks = 0
     try:
         while not m.RUNTIME.shutting_down:
             await ws.send_json(m._build_status_payload())
             await asyncio.sleep(1.0)
+            ticks += 1
+            if ticks % _WS_REVALIDATE_EVERY == 0 and not _ws_cookie_session_ok(ws):
+                await ws.close(code=4401)
+                break
     except WebSocketDisconnect:
         pass
     except Exception:

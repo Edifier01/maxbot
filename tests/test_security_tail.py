@@ -221,6 +221,52 @@ def test_ws_auth_rejects_server_without_cookie_or_token(monkeypatch):
     asyncio.run(run())
 
 
+def test_ws_cookie_session_ok_valid(monkeypatch):
+    from app.routes_monitor import _ws_cookie_session_ok
+
+    monkeypatch.setattr("app.config.is_server_mode", lambda: True)
+    ws = MagicMock()
+    ws.cookies = {"max_token": "good-jwt"}
+    payload = {"sub": "1", "role": "user", "tenant_id": 2, "jti": "j", "tv": 0}
+    with patch("app.auth.decode_token", return_value=payload) as dec, patch(
+        "app.auth.cached_validate_token_session", return_value=None
+    ) as val:
+        assert _ws_cookie_session_ok(ws) is True
+        dec.assert_called_once_with("good-jwt")
+        val.assert_called_once_with(payload)
+
+
+def test_ws_cookie_session_ok_revoked_or_missing(monkeypatch):
+    from app.routes_monitor import _ws_cookie_session_ok
+
+    monkeypatch.setattr("app.config.is_server_mode", lambda: True)
+    ws = MagicMock()
+    ws.cookies = {"max_token": "stale-jwt"}
+    payload = {"sub": "1", "jti": "j"}
+    with patch("app.auth.decode_token", return_value=payload), patch(
+        "app.auth.cached_validate_token_session", return_value="Сессия отозвана"
+    ):
+        assert _ws_cookie_session_ok(ws) is False
+
+    ws.cookies = {}
+    assert _ws_cookie_session_ok(ws) is False
+
+    import jwt
+
+    ws.cookies = {"max_token": "bad"}
+    with patch("app.auth.decode_token", side_effect=jwt.InvalidTokenError("x")):
+        assert _ws_cookie_session_ok(ws) is False
+
+
+def test_ws_cookie_session_ok_desktop_skips(monkeypatch):
+    from app.routes_monitor import _ws_cookie_session_ok
+
+    monkeypatch.setattr("app.config.is_server_mode", lambda: False)
+    ws = MagicMock()
+    ws.cookies = {}
+    assert _ws_cookie_session_ok(ws) is True
+
+
 def _health_request(*, authorization: str = "", cookie: str = "") -> MagicMock:
     req = MagicMock()
     headers = {}

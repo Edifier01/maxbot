@@ -92,11 +92,13 @@ let openGroupId = null;
       location.href = '/admin.html';
     }
 
-    function logoutUser() {
-      fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'same-origin',
-      }).catch(() => {});
+    async function logoutUser() {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+      } catch (_) {}
       sessionStorage.removeItem('maxImpersonating');
       location.href = '/auth.html';
     }

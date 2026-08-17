@@ -50,7 +50,7 @@ Multi-tenant SaaS для controlled массовой рассылки в мес�
 
 ### Milestone 4 — Integrations (partial)
 
-- Celery profile (optional horizontal scale)
+- Celery profile (optional trigger worker; one app replica)
 - Telegram notifications
 - [ ] Billing / payments (out of scope — manual subscriptions)
 

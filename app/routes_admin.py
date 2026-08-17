@@ -154,18 +154,49 @@ async def revoke_subscription(tenant_id: int):
     return {"ok": True, "active": False, "expires_at": expires.isoformat()}
 
 
-def _drop_tenant_sqlite(tenant_id: int) -> None:
+def _tenant_sqlite_dir(tenant_id: int) -> Path:
+    return app_main.ROOT / "data" / "tenants" / str(tenant_id)
+
+
+def _evict_tenant_sqlite_conn(data_dir: Path) -> None:
     from app import sqlite_backend
 
-    data_dir = app_main.ROOT / "data" / "tenants" / str(tenant_id)
     key = str(data_dir)
     with sqlite_backend._db_lock:
         conn = sqlite_backend._tenant_db_conns.pop(key, None)
         if conn is not None:
             with contextlib.suppress(Exception):
                 conn.close()
-    if data_dir.is_dir():
-        shutil.rmtree(data_dir, ignore_errors=True)
+
+
+def _quarantine_tenant_sqlite(tenant_id: int) -> Path | None:
+    """Rename live tenant dir to {id}.deleting. None if live dir is missing."""
+    live = _tenant_sqlite_dir(tenant_id)
+    quarantine = live.with_name(f"{live.name}.deleting")
+    _evict_tenant_sqlite_conn(live)
+    _evict_tenant_sqlite_conn(quarantine)
+    if not live.is_dir():
+        return None
+    live.rename(quarantine)
+    return quarantine
+
+
+def _restore_tenant_sqlite(live: Path, quarantine: Path | None) -> None:
+    if quarantine is None or not quarantine.is_dir():
+        return
+    if live.exists():
+        logger.error(
+            "delete_user: cannot restore tenant files, live path exists live=%s quarantine=%s",
+            live,
+            quarantine,
+        )
+        return
+    quarantine.rename(live)
+
+
+def _purge_quarantine(quarantine: Path | None) -> None:
+    if quarantine is not None and quarantine.exists():
+        shutil.rmtree(quarantine, ignore_errors=True)
 
 
 @router.delete("/users/{tenant_id}")
@@ -180,7 +211,7 @@ async def delete_user(tenant_id: int):
     from app.campaign_worker import stop_worker
     from app.tenant import tenant_scope
 
-    orphan_path = app_main.ROOT / "data" / "tenants" / str(tenant_id)
+    live = _tenant_sqlite_dir(tenant_id)
 
     with tenant_scope(tenant_id=tenant_id, role="admin"):
         await stop_worker(
@@ -192,23 +223,31 @@ async def delete_user(tenant_id: int):
     db_pg.bump_tenant_token_version(tenant_id)
     auth.clear_session_cache()
 
-    await asyncio.to_thread(_drop_tenant_sqlite, tenant_id)
+    quarantine = await asyncio.to_thread(_quarantine_tenant_sqlite, tenant_id)
     try:
-        if not db_pg.delete_tenant(tenant_id):
-            raise HTTPException(404, "Учреждение не найдено")
-    except HTTPException:
-        raise
+        deleted = db_pg.delete_tenant(tenant_id)
     except Exception as exc:
         logger.exception(
-            "delete_user: PG delete failed after SQLite drop tenant_id=%s orphan_path=%s",
+            "delete_user: PG delete failed, restoring tenant files tenant_id=%s path=%s",
             tenant_id,
-            orphan_path,
+            live,
         )
+        try:
+            await asyncio.to_thread(_restore_tenant_sqlite, live, quarantine)
+        except Exception:
+            logger.exception(
+                "delete_user: restore after PG failure failed tenant_id=%s quarantine=%s",
+                tenant_id,
+                quarantine,
+            )
         raise HTTPException(
             500,
-            "Учреждение частично удалено (файлы удалены, запись в БД осталась). "
-            "Сообщите администратору.",
+            "Не удалось удалить учреждение (запись в БД). Файлы сохранены.",
         ) from exc
+    if not deleted:
+        await asyncio.to_thread(_restore_tenant_sqlite, live, quarantine)
+        raise HTTPException(404, "Учреждение не найдено")
+    await asyncio.to_thread(_purge_quarantine, quarantine)
     return {"ok": True}
 
 

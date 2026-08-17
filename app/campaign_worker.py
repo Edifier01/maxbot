@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import random
+import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -236,6 +237,16 @@ async def notify_campaign_end(status: str, reason: str) -> None:
         ],
     )
 
+def _done_or_wait() -> str | None:
+    """DONE only when the bag is empty and no other worker holds a claim."""
+    if RUNTIME.jobs_in_flight > 0:
+        return None
+    if not RUNTIME.pool_done_announced:
+        RUNTIME.pool_done_announced = True
+        return "DONE"
+    return "STOP"
+
+
 def _claim_next_job_sync() -> dict[str, Any] | str | None:
     """Синхронное тело claim_next_job (SQLite под asyncio.to_thread)."""
     with main._conn() as c:
@@ -259,15 +270,9 @@ def _claim_next_job_sync() -> dict[str, Any] | str | None:
             if main._message_pick_mode() == "random_norepeat":
                 bag = main._ensure_message_bag(c, len(messages))
                 if not bag:
-                    if not RUNTIME.pool_done_announced:
-                        RUNTIME.pool_done_announced = True
-                        return "DONE"
-                    return "STOP"
+                    return _done_or_wait()
             elif mi >= len(messages):
-                if not RUNTIME.pool_done_announced:
-                    RUNTIME.pool_done_announced = True
-                    return "DONE"
-                return "STOP"
+                return _done_or_wait()
 
         n_groups = len(groups)
         in_flight = RUNTIME.groups_in_flight
@@ -292,6 +297,8 @@ def _claim_next_job_sync() -> dict[str, Any] | str | None:
                     continue
                 if not main._can_send_in_group(cand, gid):
                     continue
+                if main._reserved_hits_daily_limit(cand):
+                    continue
                 profile = cand
                 break
             if profile is not None:
@@ -309,10 +316,7 @@ def _claim_next_job_sync() -> dict[str, Any] | str | None:
 
         picked = main._pick_next_message(c, messages, mi)
         if picked is None:
-            if not RUNTIME.pool_done_announced:
-                RUNTIME.pool_done_announced = True
-                return "DONE"
-            return "STOP"
+            return _done_or_wait()
 
         text, pool_idx, progress_next, bag_mode = picked
         gi_next = main.next_index(picked_gidx, n_groups)
@@ -350,6 +354,9 @@ async def claim_next_job() -> dict[str, Any] | str | None:
         job = await asyncio.to_thread(_claim_next_job_sync)
         if isinstance(job, dict):
             RUNTIME.groups_in_flight.add(int(job["group"]["id"]))
+            RUNTIME.jobs_in_flight += 1
+            pid = int(job["profile"]["id"])
+            RUNTIME.profile_reserved[pid] = RUNTIME.profile_reserved.get(pid, 0) + 1
         return job
 
 
@@ -405,19 +412,31 @@ async def poolworker_loop(worker_id: int) -> None:
             continue
 
         group_id = int(job["group"]["id"])
+        sent = False
         try:
-            sent = await send_with_retry(
-                job["profile"],
-                job["group"],
-                job["text"],
-                job["mi"],
-                job["pi"],
-                job["gi_next"],
-                job["mi_next"],
-                advance_queue=False,
-            )
+            try:
+                sent = await send_with_retry(
+                    job["profile"],
+                    job["group"],
+                    job["text"],
+                    job["mi"],
+                    job["pi"],
+                    job["gi_next"],
+                    job["mi_next"],
+                    advance_queue=False,
+                )
+            except asyncio.CancelledError:
+                main._return_to_message_bag(job["mi"])
+                raise
         finally:
             RUNTIME.groups_in_flight.discard(group_id)
+            RUNTIME.jobs_in_flight = max(0, RUNTIME.jobs_in_flight - 1)
+            pid = int(job["profile"]["id"])
+            left = int(RUNTIME.profile_reserved.get(pid, 0)) - 1
+            if left <= 0:
+                RUNTIME.profile_reserved.pop(pid, None)
+            else:
+                RUNTIME.profile_reserved[pid] = left
         if not sent:
             main._return_to_message_bag(job["mi"])
             await asyncio.sleep(3)
@@ -698,6 +717,7 @@ async def start_worker(
         restore_context(ctx_snap)
         rt.worker_ctx_snapshot = ctx_snap
         rt.tenant_id = tid
+        main._load_antiban_state()
         try:
             if main._pool_size() > 1:
                 await pool_supervisor()
@@ -746,42 +766,59 @@ async def stop_worker(
     reason: str = "Остановлено пользователем",
     tenant_id: int | None = None,
 ) -> None:
-    from app.tenant import get_tenant_id
+    from app.tenant import get_tenant_id, tenant_scope
 
     if tenant_id is None:
         tenant_id = get_tenant_id()
-    rt = REGISTRY.worker_for(tenant_id)
-    was_running = bool(rt.worker_task and not rt.worker_task.done())
-    with main._conn() as c:
-        c.execute("UPDATE queue_state SET running=0 WHERE id=1")
-    if rt.worker_task:
+    scope = (
+        tenant_scope(tenant_id=tenant_id)
+        if tenant_id is not None
+        else contextlib.nullcontext()
+    )
+    with scope:
+        rt = REGISTRY.worker_for(tenant_id)
+        was_running = bool(rt.worker_task and not rt.worker_task.done())
+        db_path = main._db_path()
+        if db_path.is_file():
+            try:
+                with main._conn() as c:
+                    c.execute("UPDATE queue_state SET running=0 WHERE id=1")
+            except sqlite3.OperationalError:
+                pass
         current = asyncio.current_task()
-        if current is rt.worker_task:
+        called_from_supervisor = current is not None and current is rt.worker_task
+        called_from_pool = current is not None and current in rt.pool_tasks
+        called_from_inside = called_from_supervisor or called_from_pool
+        if rt.worker_task:
             rt.worker_task.cancel()
+            if not called_from_inside:
+                try:
+                    await rt.worker_task
+                except asyncio.CancelledError:
+                    pass
             rt.worker_task = None
-        else:
-            rt.worker_task.cancel()
+        for t in list(rt.pool_tasks):
+            if t is current:
+                continue
+            t.cancel()
+        rt.pool_tasks = []
+        if was_running and finish_status and db_path.is_file():
+            still = None
             try:
-                await rt.worker_task
-            except asyncio.CancelledError:
-                pass
-            rt.worker_task = None
-    for t in list(rt.pool_tasks):
-        t.cancel()
-    rt.pool_tasks = []
-    if was_running and finish_status:
-        with main._conn() as c:
-            still = c.execute(
-                "SELECT 1 FROM campaigns WHERE status='running' LIMIT 1"
-            ).fetchone()
-        if still:
-            finish_campaign(finish_status, reason)
-            main._metric_inc("campaigns_finished_total")
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(notify_campaign_end(finish_status, reason))
-            except RuntimeError:
-                pass
+                with main._conn() as c:
+                    still = c.execute(
+                        "SELECT 1 FROM campaigns WHERE status='running' LIMIT 1"
+                    ).fetchone()
+            except sqlite3.OperationalError:
+                still = None
+            if still:
+                finish_campaign(finish_status, reason)
+                main._metric_inc("campaigns_finished_total")
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(notify_campaign_end(finish_status, reason))
+                except RuntimeError:
+                    pass
 
 
 async def stop_all_workers(

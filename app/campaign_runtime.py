@@ -30,6 +30,8 @@ class CampaignRuntime:
     human_burst_count: dict[int, int] = field(default_factory=dict)
     human_break_until: dict[int, datetime] = field(default_factory=dict)
     groups_in_flight: set[int] = field(default_factory=set)
+    jobs_in_flight: int = 0
+    profile_reserved: dict[int, int] = field(default_factory=dict)
 
     def touch_activity(self) -> None:
         self.worker_last_activity = time.monotonic()
@@ -50,6 +52,8 @@ class CampaignRuntime:
         self.human_burst_count.clear()
         self.human_break_until.clear()
         self.groups_in_flight.clear()
+        self.jobs_in_flight = 0
+        self.profile_reserved.clear()
 
 
 @dataclass

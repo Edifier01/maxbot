@@ -5,14 +5,31 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+umask 077
 STAMP=$(date +%Y%m%d-%H%M%S)
 DEST="${1:-./backups/$STAMP}"
 mkdir -p "$DEST"
+chmod 700 "$DEST"
 
 echo "Backup → $DEST"
 
 echo "  PostgreSQL dump…"
 docker compose exec -T postgres pg_dump -U maxsender -Fc maxsender > "$DEST/pg.dump"
+
+echo "  SQLite WAL checkpoint (best-effort)…"
+if docker compose exec -T app python -c 'import sqlite3
+from pathlib import Path
+for db in Path("/app/data").rglob("app.db"):
+    con = sqlite3.connect(str(db))
+    try:
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        con.close()
+'; then
+  echo "  WAL checkpoint done"
+else
+  echo "WARNING: app not running — skipping SQLite WAL checkpoint (pg_dump still needs postgres)" >&2
+fi
 
 echo "  max_server_data volume…"
 # App image has tar; compose has no alpine service. -T keeps the archive binary-clean.

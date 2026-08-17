@@ -11,7 +11,13 @@ from fastapi import APIRouter, HTTPException
 
 from app.routes_models import CodeIn, ProfilePatchIn
 from app.runtime import main as m
-from app.tenant import clear_context, is_cabinet_user, restore_context, snapshot_context
+from app.tenant import (
+    clear_context,
+    is_cabinet_user,
+    redact_cabinet_row,
+    restore_context,
+    snapshot_context,
+)
 
 router = APIRouter(tags=["profiles"])
 
@@ -22,6 +28,9 @@ _CABINET_DENIED = "Недоступно в личном кабинете"
 async def list_profiles(offset: int = 0, limit: int = 50, q: str = ""):
 
     """Только профили, привязанные хотя бы к одной группе."""
+    limit = min(max(int(limit), 1), 200)
+    offset = max(int(offset), 0)
+    q = (q or "")[:100]
     base = """
         FROM profiles p
         WHERE EXISTS (SELECT 1 FROM group_profiles gp WHERE gp.profile_id = p.id)
@@ -43,7 +52,7 @@ async def list_profiles(offset: int = 0, limit: int = 50, q: str = ""):
                 (limit, offset),
             ).fetchall()
             total = c.execute(f"SELECT COUNT(*) n {base}").fetchone()["n"]
-    return {"items": [dict(r) for r in rows], "total": total}
+    return {"items": [redact_cabinet_row(dict(r)) for r in rows], "total": total}
 
 
 @router.get("/api/profiles/{profile_id}")

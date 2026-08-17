@@ -50,6 +50,16 @@ Plan: `.cursor/project-management/FEATURE-SAAS-UX-2026.md`
 - **Session tab (superseded 2026-08-15 ADR 008):** user JWT is cookie-only; JS does not store Bearer. `remember_me=false` still sets a session cookie. Restore via `POST /api/auth/restore-session`.
 - **Impersonation (ADR 008):** session `max_token` + backup `max_admin_token`; `POST /api/auth/exit-impersonation`; restore отклоняет `imp=true`.
 
+## 2026-08-17: WAVE4 review fixes
+
+Campaign pool: reserve daily/warmup capacity, wait on in-flight before DONE, no child↔supervisor await on ban-stop. Tenant delete quarantines SQLite until PG commit. In-app backups use per-tenant `_backups_dir`. Cabinet GET redacts `proxy`/`sent_text`. Celery is trigger-only (one app replica). Registration default and ADR-006 vault stay as previously decided.
+
+Plan: `.cursor/project-management/FEATURE-REVIEW-FIX-WAVE4-2026.md`
+
+## 2026-08-17: Self-registration open by default
+
+Compose and `.env.example` use `REGISTRATION_OPEN=1`. Python still fail-closes to 403 if the var is unset in the app process. Set `0` to close sign-up. Subscriptions stay admin-granted.
+
 ## 2026-08-15: Cookie-only JWT (ADR 008)
 
 - User JWT only from HttpOnly `max_token`. `Authorization: Bearer` is `INTERNAL_SERVICE_TOKEN` only.

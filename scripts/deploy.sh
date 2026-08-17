@@ -34,14 +34,28 @@ if ((${#missing[@]})); then
 fi
 
 echo "Деплой MAX Sender → https://${DOMAIN}"
-if docker compose ps postgres --status running -q 2>/dev/null | grep -q .; then
-  echo "PostgreSQL already running — backing up volumes before rebuild…"
+pg_vol=$(docker volume ls -q | grep -E '(^|_)max_server_pg$' || true)
+pg_ctr=$(docker compose ps -a -q postgres 2>/dev/null || true)
+if [[ -n "$pg_vol" || -n "$pg_ctr" ]]; then
+  echo "PostgreSQL volume/data present — starting postgres, then backing up volumes…"
+  docker compose up -d postgres
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if docker compose exec -T postgres pg_isready -U maxsender -d maxsender >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
   bash scripts/backup-volumes.sh
 else
-  echo "First deploy (postgres not running) — skipping volume backup"
+  echo "No postgres volume/data — skipping volume backup (first deploy)"
 fi
-docker compose pull redis caddy postgres 2>/dev/null || true
-docker compose up --build -d
+if [[ "${USE_CELERY:-0}" == "1" || "${USE_CELERY:-0}" == "true" ]]; then
+  docker compose --profile celery pull redis caddy postgres 2>/dev/null || true
+  docker compose --profile celery up --build -d
+else
+  docker compose pull redis caddy postgres 2>/dev/null || true
+  docker compose up --build -d
+fi
 
 echo "Ожидание старта контейнеров…"
 sleep 8

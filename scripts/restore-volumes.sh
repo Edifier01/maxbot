@@ -19,6 +19,7 @@ docker compose stop app celery-worker 2>/dev/null || docker compose stop app
 echo "Восстановление data volume…"
 # python:3.12-slim has tar/python, not findutils. Extract to .incoming-restore,
 # verify, then swap live children into .outgoing-restore (same volume, rename).
+# Do not rmtree .outgoing-restore until PostgreSQL restore succeeds (rollback on PG fail).
 docker compose run --rm -T --no-deps \
   -v "$(cd "$SRC" && pwd):/backup:ro" \
   --entrypoint python \
@@ -43,13 +44,39 @@ for child in list(root.iterdir()):
     child.rename(outgoing / child.name)
 for child in list(incoming.iterdir()):
     child.rename(root / child.name)
-incoming.rmdir()
-shutil.rmtree(outgoing)'
+incoming.rmdir()'
 
 echo "Восстановление PostgreSQL…"
-# Data volume is already swapped. If pg_restore fails, data is new and PG may be old.
-docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner \
-  < "$SRC/pg.dump"
+if docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner --exit-on-error \
+  < "$SRC/pg.dump"; then
+  echo "pg_restore OK — removing .outgoing-restore"
+  docker compose run --rm -T --no-deps --entrypoint python app -c 'import pathlib, shutil
+outgoing = pathlib.Path("/app/data/.outgoing-restore")
+if outgoing.exists():
+    shutil.rmtree(outgoing)'
+else
+  echo "pg_restore failed — rolling data volume back from .outgoing-restore" >&2
+  docker compose run --rm -T --no-deps --entrypoint python app -c 'import pathlib, shutil
+root = pathlib.Path("/app/data")
+incoming = root / ".incoming-restore"
+outgoing = root / ".outgoing-restore"
+if not outgoing.exists():
+    raise SystemExit("pg_restore failed and .outgoing-restore missing; cannot rollback data")
+if incoming.exists():
+    shutil.rmtree(incoming)
+incoming.mkdir()
+for child in list(root.iterdir()):
+    if child.name in (".incoming-restore", ".outgoing-restore"):
+        continue
+    child.rename(incoming / child.name)
+for child in list(outgoing.iterdir()):
+    child.rename(root / child.name)
+for child in list(incoming.iterdir()):
+    child.rename(outgoing / child.name)
+incoming.rmdir()'
+  echo "Data volume rolled back. Inspect leftover .outgoing-restore before retry." >&2
+  exit 1
+fi
 
 echo "Запуск стека…"
 docker compose up -d

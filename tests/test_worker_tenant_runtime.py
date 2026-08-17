@@ -29,7 +29,14 @@ def test_claim_lock_is_per_tenant():
     REGISTRY.reset_test()
 
 
-def test_runtime_proxy_uses_tenant_context():
+def test_runtime_proxy_uses_tenant_context(monkeypatch):
+    monkeypatch.setenv("MAX_SERVER_MODE", "1")
+    monkeypatch.setenv("MAX_TEST", "1")
+    import importlib
+
+    import app.config as cfg
+
+    importlib.reload(cfg)
     REGISTRY.reset_test()
     with tenant_scope(tenant_id=7, role="user"):
         RUNTIME.consecutive_errors[3] = 1
@@ -114,6 +121,13 @@ def test_worker_start_captures_tenant_context(tmp_path, monkeypatch):
                 started_at TEXT, finished_at TEXT, reason TEXT, config_snapshot TEXT
             );
             CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE antiban_state (
+                profile_id INTEGER PRIMARY KEY,
+                burst_count INTEGER DEFAULT 0,
+                break_until TEXT,
+                consecutive_errors INTEGER DEFAULT 0,
+                circuit_opened_at REAL
+            );
             """
         )
 

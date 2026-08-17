@@ -460,6 +460,11 @@ def get_tenant_user(tenant_id: int) -> dict[str, Any] | None:
 
 
 def delete_tenant(tenant_id: int) -> bool:
+    """Delete SaaS tenant row (cascades users/subs).
+
+    Caller must quarantine SQLite first — never rmtree the live tenant dir
+    before this returns.
+    """
     with _cursor() as cur:
         cur.execute(
             "DELETE FROM impersonation_log WHERE target_tenant_id = %s",

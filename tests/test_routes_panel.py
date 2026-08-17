@@ -80,3 +80,34 @@ def test_list_backups(tmp_path, monkeypatch):
     names = [item["file"] for item in r.json()["items"]]
     assert "app-test.db" in names
 
+
+def test_backup_database_uses_tenant_backups_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("MAX_SERVER_MODE", "1")
+
+    import importlib
+
+    import app.config as cfg
+
+    importlib.reload(cfg)
+
+    import main as m
+
+    importlib.reload(m)
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    m._refresh_data_paths()
+    m.reset_test_runtime()
+
+    from app.tenant import tenant_scope
+
+    with tenant_scope(tenant_id=42, role="user"):
+        m.init_db()
+        dest = m.backup_database()
+
+    assert dest is not None
+    tenant_backups = tmp_path / "data" / "tenants" / "42" / "backups"
+    assert dest.parent == tenant_backups
+    assert dest.is_file()
+    global_backups = tmp_path / "data" / "backups"
+    assert not list(global_backups.glob("app-*.db")) if global_backups.exists() else True
+

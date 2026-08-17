@@ -45,13 +45,15 @@ bash scripts/restore-volumes.sh ./backups/<stamp>
 
 ### GitHub Actions deploy
 
-Workflow `.github/workflows/deploy.yml` — после успешного CI, SSH на VPS, `git reset --hard`, `docker compose up -d`, health с `db_ok`.
+Workflow `.github/workflows/deploy.yml` — после успешного CI, SSH на VPS, checkout immutable SHA (`workflow_run.head_sha` или `github.sha`), backup if postgres volume/data exists, `docker compose up -d` (`--profile celery` when `USE_CELERY=1`), health с `db_ok`.
 
 ---
 
 ## D-2 — Celery profile
 
-In-process worker pool достаточен по умолчанию (`USE_CELERY=0`). Celery — для горизонтального масштаба с общим Redis и volume.
+In-process worker pool is the campaign runtime (`USE_CELERY=0` by default). Celery is **trigger-only**: the worker HTTP-POSTs `/api/campaign/start` with `INTERNAL_SERVICE_TOKEN` + `X-Tenant-Id` into **one** in-process `app`. The campaign runtime registry is process-local. Multiple campaign-owning `app` replicas are **not** supported.
+
+Deploy with `--profile celery` only as a trigger worker, still one `app` replica. Do not scale campaigns across machines via extra app replicas.
 
 ### Включение
 
@@ -105,7 +107,7 @@ bash scripts/backup-volumes.sh
 # → ./backups/YYYYMMDD-HHMMSS/{pg.dump,data.tar.gz,README.txt}
 ```
 
-Backup is hot: the app stays up. The script verifies archive integrity (`pg.dump` non-empty + `PGDMP` magic; `data.tar.gz` `gzip -t` and at least one tar member). SQLite in the data volume may be crash-consistent, not freeze-consistent. Treat backup directories as secret (vault material).
+Backup is hot: the app stays up. The script sets `umask 077` and `chmod 700` on the destination so archives inherit restrictive perms. Before the data tar it best-effort `PRAGMA wal_checkpoint(TRUNCATE)` on `/app/data/**/app.db` (skipped with a warning if `app` is not running; `pg_dump` still needs postgres). The script verifies archive integrity (`pg.dump` non-empty + `PGDMP` magic; `data.tar.gz` `gzip -t` and at least one tar member). Treat backup directories as secret (vault material).
 
 Cron (ежедневно, 03:00):
 
@@ -121,12 +123,12 @@ Cron (ежедневно, 03:00):
 bash scripts/restore-volumes.sh ./backups/20260729-030000
 ```
 
-Скрипт останавливает `app`/`celery-worker`, сначала extract+verify+swap data volume, затем `pg_restore` (если PG упадёт, data уже новая), поднимает стек и вызывает `verify_deploy.sh`. Прерванный swap оставляет `.outgoing-restore` — повтор не пойдёт, пока каталог на месте.
+Скрипт останавливает `app`/`celery-worker`, сначала extract+verify+swap data volume (live children → `.outgoing-restore`, **without** deleting that dir yet), затем `pg_restore --exit-on-error`. If PG restore fails, live data is swapped back from `.outgoing-restore` and the script exits non-zero — a failed PG restore rolls the data volume back. The attempted restore stays in leftover `.outgoing-restore` (inspect/remove before retry). On success, `.outgoing-restore` is removed, the stack is started, and `verify_deploy.sh` runs. An interrupted swap also leaves `.outgoing-restore` — retry will not proceed while that directory exists.
 
 ### Ручной PG-only restore
 
 ```bash
-docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists \
+docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner --exit-on-error \
   < backups/<stamp>/pg.dump
 ```
 
@@ -219,6 +221,12 @@ Dedupe: 15 мин на тип алерта.
 | `AUTH_RATE_LIMIT` | 10 | Попыток login/register |
 | `AUTH_RATE_WINDOW_SEC` | 900 | Окно (сек) |
 | `REDIS_URL` | — | Если задан — INCR в Redis; иначе in-memory |
+
+### Self-registration (`REGISTRATION_OPEN`)
+
+Compose and `.env.example` default to `1` (open for new institutions). Set `0` to close registration (admin-created accounts only).
+
+If the var is **unset in the app process**, `POST /api/auth/register` still **403** (Python fail-closed). Compose `${REGISTRATION_OPEN:-1}` only applies when the var is omitted from the environment Compose interpolates — an existing production `.env` with `REGISTRATION_OPEN=0` stays closed until the operator changes it.
 
 ### Admin API
 

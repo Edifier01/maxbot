@@ -6,9 +6,11 @@ Enable:
   set USE_CELERY=1
   celery -A celery_worker.app worker --loglevel=info
 
-Tasks are thin wrappers: the main campaign loop still lives in asyncio
-inside main.py (worker pool). Use Celery when you need multi-process
-horizontal scale across machines sharing the same data volume / Redis.
+Tasks are trigger-only: enqueue HTTP-POSTs /api/campaign/start with
+INTERNAL_SERVICE_TOKEN + X-Tenant-Id into one in-process app. The
+campaign runtime registry is process-local. Multiple campaign-owning
+app replicas are not supported. Deploy --profile celery only as a
+trigger worker alongside a single app replica.
 """
 
 from __future__ import annotations

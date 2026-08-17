@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 from unittest.mock import AsyncMock
 
 import pytest
@@ -74,7 +75,10 @@ def test_circuit_breaker_opens_and_closes():
     )
 
 
-def _setup_local(tmp_path, monkeypatch):
+@pytest.fixture
+def setup_local(tmp_path, monkeypatch):
+    prev_server = os.environ.get("MAX_SERVER_MODE")
+    prev_test = os.environ.get("MAX_TEST")
     monkeypatch.setenv("MAX_TEST", "1")
     monkeypatch.setenv("MAX_SERVER_MODE", "0")
     import app.config as cfg
@@ -86,11 +90,23 @@ def _setup_local(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "ROOT", tmp_path)
     m._refresh_data_paths()
     m.init_db()
-    return m
+    try:
+        yield m
+    finally:
+        if prev_server is None:
+            os.environ.pop("MAX_SERVER_MODE", None)
+        else:
+            os.environ["MAX_SERVER_MODE"] = prev_server
+        if prev_test is None:
+            os.environ.pop("MAX_TEST", None)
+        else:
+            os.environ["MAX_TEST"] = prev_test
+        importlib.reload(cfg)
+        importlib.reload(m)
 
 
-def test_campaign_test_busy_conflict(tmp_path, monkeypatch):
-    m = _setup_local(tmp_path, monkeypatch)
+def test_campaign_test_busy_conflict(setup_local, monkeypatch):
+    m = setup_local
     monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
     monkeypatch.setattr(m.RUNTIME, "worker_busy", lambda: True)
 
@@ -102,8 +118,8 @@ def test_campaign_test_busy_conflict(tmp_path, monkeypatch):
     assert "кампания" in str(ei.value.detail).lower()
 
 
-def test_campaign_test_idle_does_not_advance_queue(tmp_path, monkeypatch):
-    m = _setup_local(tmp_path, monkeypatch)
+def test_campaign_test_idle_does_not_advance_queue(setup_local, monkeypatch):
+    m = setup_local
     group = {"id": 1, "name": "G1"}
     profile = {"id": 1, "phone": "+79991112233"}
     monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
