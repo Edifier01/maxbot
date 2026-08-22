@@ -182,7 +182,7 @@ def test_scheduler_logs_errors_in_the_tenant_journal(m, monkeypatch):
     monkeypatch.setattr(cw, "scheduler_tenant_ids", lambda: [42])
     monkeypatch.setattr(cw, "scheduler_tick", AsyncMock(side_effect=RuntimeError("boom")))
     seen_tenants = []
-    monkeypatch.setattr(m, "append_log", lambda _msg: seen_tenants.append(get_tenant_id()))
+    monkeypatch.setattr(cw.main, "append_log", lambda _msg: seen_tenants.append(get_tenant_id()))
     calls = 0
 
     async def stop_after_one_tick(_seconds):
