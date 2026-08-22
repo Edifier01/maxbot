@@ -29,8 +29,9 @@ echo "Восстановление data volume…"
 # Do not rmtree .outgoing-restore until PostgreSQL restore succeeds (rollback on PG fail).
 docker compose run --rm -T --no-deps \
   -v "$(cd "$SRC" && pwd):/backup:ro" \
+  --user root \
   --entrypoint python \
-  app -c 'import pathlib, shutil, tarfile
+  app -c 'import os, pathlib, shutil, tarfile
 root = pathlib.Path("/app/data")
 incoming = root / ".incoming-restore"
 outgoing = root / ".outgoing-restore"
@@ -40,6 +41,8 @@ if incoming.exists():
     shutil.rmtree(incoming)
 incoming.mkdir()
 with tarfile.open("/backup/data.tar.gz") as archive:
+    os.setegid(10001)
+    os.seteuid(10001)
     archive.extractall(incoming, filter="data")
 if not any(incoming.iterdir()):
     shutil.rmtree(incoming)

@@ -21,6 +21,7 @@ def _setup_server_main(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
     monkeypatch.setenv("JWT_SECRET", "test-jwt-secret-min-32-characters-long")
+    monkeypatch.setenv("WEBHOOK_ALLOWED_HOSTS", "global.example")
 
     import app.config as cfg
 

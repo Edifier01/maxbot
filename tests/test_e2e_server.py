@@ -38,12 +38,40 @@ def _cookie_token(resp) -> str:
     return token
 
 
+def _admin_token(client) -> str:
+    response = client.post(
+        "/api/auth/login",
+        json={"email": os.environ["ADMIN_EMAIL"], "password": "AdminPass123!"},
+    )
+    assert response.status_code == 200, response.text
+    return _cookie_token(response)
+
+
+def _create_user(
+    client, admin_token: str, institution_name: str, email: str
+) -> tuple[int, str]:
+    response = client.post(
+        "/api/admin/users",
+        cookies=_tok(admin_token),
+        json={
+            "institution_name": institution_name,
+            "login": email,
+            "password": "UserPass123!",
+        },
+    )
+    assert response.status_code == 200, response.text
+    login = client.post(
+        "/api/auth/login", json={"email": email, "password": "UserPass123!"}
+    )
+    assert login.status_code == 200, login.text
+    return response.json()["tenant_id"], _cookie_token(login)
+
+
 @pytest.fixture
 def e2e_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
-    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "e2e-jwt-secret-min-32-characters-long")
     monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")
@@ -79,39 +107,19 @@ def e2e_client(tmp_path, monkeypatch):
 
 def test_e2e_auth_admin_tenant_flow(e2e_client):
     client, main_mod, uid = e2e_client
-    admin_email = os.environ["ADMIN_EMAIL"]
 
     health = client.get("/api/health")
     assert health.status_code == 200
     assert health.json()["db_ok"] is True
     assert health.json()["server_mode"] is True
 
-    reg_a = client.post(
-        "/api/auth/register",
-        json={
-            "institution_name": f"School A {uid}",
-            "email": f"user-a-{uid}@example.com",
-            "password": "UserPass123!",
-            "password_confirm": "UserPass123!",
-        },
+    admin_token = _admin_token(client)
+    tenant_a, token_a = _create_user(
+        client, admin_token, f"School A {uid}", f"user-a-{uid}@example.com"
     )
-    assert reg_a.status_code == 200, reg_a.text
-    body_a = reg_a.json()
-    token_a = _cookie_token(reg_a)
-    tenant_a = body_a["tenant_id"]
-
-    reg_b = client.post(
-        "/api/auth/register",
-        json={
-            "institution_name": f"School B {uid}",
-            "email": f"user-b-{uid}@example.com",
-            "password": "UserPass123!",
-            "password_confirm": "UserPass123!",
-        },
+    tenant_b, token_b = _create_user(
+        client, admin_token, f"School B {uid}", f"user-b-{uid}@example.com"
     )
-    assert reg_b.status_code == 200
-    token_b = _cookie_token(reg_b)
-    tenant_b = reg_b.json()["tenant_id"]
     assert tenant_a != tenant_b
 
     me_a = client.get("/api/auth/me", cookies=_tok(token_a))
@@ -124,13 +132,6 @@ def test_e2e_auth_admin_tenant_flow(e2e_client):
     dir_b = main_mod.ROOT / "data" / "tenants" / str(tenant_b) / "app.db"
     assert dir_a.is_file()
     assert dir_b.is_file()
-
-    admin_login = client.post(
-        "/api/auth/login",
-        json={"email": admin_email, "password": "AdminPass123!"},
-    )
-    assert admin_login.status_code == 200
-    admin_token = _cookie_token(admin_login)
 
     users = client.get("/api/admin/users", cookies=_tok(admin_token))
     assert users.status_code == 200
@@ -199,18 +200,9 @@ def test_tenant_token_bump_revokes_session(e2e_client):
     """bump_tenant_token_version invalidates outstanding JWT (tv mismatch)."""
     client, _main_mod, uid = e2e_client
 
-    reg = client.post(
-        "/api/auth/register",
-        json={
-            "institution_name": f"Revoke Test {uid}",
-            "email": f"revoke-{uid}@example.com",
-            "password": "UserPass123!",
-            "password_confirm": "UserPass123!",
-        },
+    tenant_id, token = _create_user(
+        client, _admin_token(client), f"Revoke Test {uid}", f"revoke-{uid}@example.com"
     )
-    assert reg.status_code == 200
-    token = _cookie_token(reg)
-    tenant_id = reg.json()["tenant_id"]
 
     me_ok = client.get("/api/auth/me", cookies=_tok(token))
     assert me_ok.status_code == 200
@@ -227,27 +219,10 @@ def test_tenant_token_bump_revokes_session(e2e_client):
 
 def test_admin_tenant_worker_pool_settings(e2e_client):
     client, _main_mod, uid = e2e_client
-    admin_email = os.environ["ADMIN_EMAIL"]
-
-    reg = client.post(
-        "/api/auth/register",
-        json={
-            "institution_name": f"Worker Pool School {uid}",
-            "email": f"wp-{uid}@example.com",
-            "password": "UserPass123!",
-            "password_confirm": "UserPass123!",
-        },
+    admin_token = _admin_token(client)
+    tenant_id, token_user = _create_user(
+        client, admin_token, f"Worker Pool School {uid}", f"wp-{uid}@example.com"
     )
-    assert reg.status_code == 200, reg.text
-    token_user = _cookie_token(reg)
-    tenant_id = reg.json()["tenant_id"]
-
-    admin_login = client.post(
-        "/api/auth/login",
-        json={"email": admin_email, "password": "AdminPass123!"},
-    )
-    assert admin_login.status_code == 200
-    admin_token = _cookie_token(admin_login)
 
     default_settings = client.get(
         f"/api/admin/tenants/{tenant_id}/settings",
@@ -303,30 +278,13 @@ def test_admin_subscription_extend_and_revoke(e2e_client):
     from datetime import datetime, timedelta, timezone
 
     client, _main_mod, uid = e2e_client
-    admin_email = os.environ["ADMIN_EMAIL"]
-
-    reg = client.post(
-        "/api/auth/register",
-        json={
-            "institution_name": f"Sub School {uid}",
-            "email": f"sub-{uid}@example.com",
-            "password": "UserPass123!",
-            "password_confirm": "UserPass123!",
-        },
+    admin_token = _admin_token(client)
+    tenant_id, token_user = _create_user(
+        client, admin_token, f"Sub School {uid}", f"sub-{uid}@example.com"
     )
-    assert reg.status_code == 200, reg.text
-    token_user = _cookie_token(reg)
-    tenant_id = reg.json()["tenant_id"]
 
     me0 = client.get("/api/auth/me", cookies=_tok(token_user))
     assert me0.json()["subscription"] == {"active": False, "expires_at": None}
-
-    admin_login = client.post(
-        "/api/auth/login",
-        json={"email": admin_email, "password": "AdminPass123!"},
-    )
-    assert admin_login.status_code == 200
-    admin_token = _cookie_token(admin_login)
 
     missing = client.post(
         "/api/admin/users/999999/subscription/revoke",
