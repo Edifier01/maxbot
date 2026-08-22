@@ -60,6 +60,14 @@ def test_restore_defers_outgoing_rmtree_until_pg_ok():
     assert 'if [[ "$ASSUME_YES" != "1" ]]' in restore
 
 
+def test_dr_smoke_exercises_backup_then_restore():
+    smoke = (ROOT / "scripts" / "dr-smoke.sh").read_text(encoding="utf-8")
+    assert "backup-volumes.sh" in smoke
+    assert "restore-volumes.sh --yes" in smoke
+    assert "SELECT value FROM dr_smoke" in smoke
+    assert "/app/data/dr-smoke/value" in smoke
+
+
 def test_deploy_ssh_timeout_covers_image_build():
     deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
     assert "command_timeout: 30m" in deploy
@@ -67,8 +75,10 @@ def test_deploy_ssh_timeout_covers_image_build():
     assert "docker compose build app" in deploy
     assert "reset --hard origin/main" not in deploy
     assert "reset --hard origin/master" not in deploy
-    assert "workflow_run.head_sha" in deploy
+    assert "workflow_run" not in deploy
+    assert "workflow_dispatch:" in deploy
     assert "github.sha" in deploy
+    assert 'ref: ${{ github.sha }}' in deploy
     assert "checkout --force" in deploy
     assert "--profile celery" in deploy
     assert "up -d postgres" in deploy
@@ -101,6 +111,9 @@ def test_ci_actions_images_and_permissions_are_immutable():
     assert "appleboy/ssh-action@v" not in deploy
     assert "environment: production" in deploy
     assert "postgres:16-alpine@sha256:" in ci
+    assert "dependency-audit:" in ci
+    assert "pip-audit -r requirements.lock" in ci
+    assert "pip-audit -r requirements-server.lock" in ci
 
 
 def test_compose_has_runtime_resource_limits():

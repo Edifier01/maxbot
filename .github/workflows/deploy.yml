@@ -4,10 +4,6 @@ permissions:
   contents: read
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main, master]
   workflow_dispatch:
 
 concurrency:
@@ -19,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
@@ -36,9 +34,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: verify
     environment: production
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
@@ -54,7 +49,7 @@ jobs:
             if [[ ! -d .git && -d ../.git ]]; then
               cd ..
             fi
-            SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
+            SHA="${{ github.sha }}"
             git fetch origin "$SHA"
             git checkout --force "$SHA"
             cd "$(git rev-parse --show-toplevel)"

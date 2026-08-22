@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.config import is_server_mode
-from app.middleware import AuthRateLimitMiddleware, ServerAuthMiddleware
+from app.middleware import AuthRateLimitMiddleware, RequestLogMiddleware, ServerAuthMiddleware
 from app.routes_admin import router as admin_router
 from app.routes_auth import router as auth_router
 from app.routes_campaign import router as campaign_router
@@ -38,3 +38,4 @@ def register_server(app) -> None:
     app.include_router(admin_router)
     app.add_middleware(ServerAuthMiddleware)
     app.add_middleware(AuthRateLimitMiddleware)
+    app.add_middleware(RequestLogMiddleware)

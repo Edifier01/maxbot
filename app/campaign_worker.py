@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from fastapi import HTTPException
 
+from app.config import webhook_url_allowed
 from app.runtime import main
 from app.campaign_runtime import REGISTRY, RUNTIME
 from app.campaign_send import SendTracker, send_with_retry, sleep_send_delay
@@ -212,7 +213,9 @@ async def notify_campaign_end(status: str, reason: str) -> None:
         payload["campaign"] = dict(row)
 
     webhook = main.get_setting("webhook_url").strip()
-    if webhook:
+    if webhook and not webhook_url_allowed(webhook):
+        main.append_log("Вебхук отключён: URL не входит в WEBHOOK_ALLOWED_HOSTS")
+    elif webhook:
         try:
             await asyncio.to_thread(http_post_json, webhook, payload)
             main.append_log("Вебхук: уведомление отправлено")

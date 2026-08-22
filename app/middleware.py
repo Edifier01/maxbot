@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 import time
+import json
+import logging
+import uuid
 
 import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -15,6 +18,45 @@ from app.auth import cached_validate_token_session, decode_token
 from app.config import INTERNAL_SERVICE_TOKEN, is_server_mode
 from app.runtime import main as app_main
 from app.tenant import clear_context, set_context
+
+
+access_logger = logging.getLogger("maxsender.access")
+
+
+class RequestLogMiddleware(BaseHTTPMiddleware):
+    """Emit a small, secret-free access record for every server request."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = uuid.uuid4().hex
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            access_logger.exception(
+                json.dumps(
+                    {
+                        "event": "request_error",
+                        "method": request.method,
+                        "path": request.url.path,
+                        "request_id": request_id,
+                    }
+                )
+            )
+            raise
+        response.headers["X-Request-ID"] = request_id
+        access_logger.info(
+            json.dumps(
+                {
+                    "event": "request",
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": response.status_code,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+                    "request_id": request_id,
+                }
+            )
+        )
+        return response
 
 
 class AuthRateLimitMiddleware(BaseHTTPMiddleware):

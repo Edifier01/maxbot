@@ -49,7 +49,7 @@ bash scripts/restore-volumes.sh ./backups/<stamp>
 
 ### GitHub Actions deploy
 
-Workflow `.github/workflows/deploy.yml` — после успешного CI, SSH на VPS, checkout immutable SHA (`workflow_run.head_sha` или `github.sha`), backup if postgres volume/data exists, `docker compose up -d` (`--profile celery` when `USE_CELERY=1`), health с `db_ok`. Deploy job привязан к GitHub Environment `production`; включите для него Required reviewers в настройках репозитория, чтобы получить обязательное ручное подтверждение.
+Workflow `.github/workflows/deploy.yml` запускается только вручную (`workflow_dispatch`), проверяет и деплоит immutable `github.sha`, делает backup при наличии PostgreSQL volume/data, затем запускает `docker compose up -d` (`--profile celery` when `USE_CELERY=1`) и проверяет health с `db_ok`.
 
 ---
 
@@ -233,6 +233,10 @@ Dedupe: 15 мин на тип алерта.
 | `AUTH_RATE_LIMIT` | 10 | Попыток login/register |
 | `AUTH_RATE_WINDOW_SEC` | 900 | Окно (сек) |
 | `REDIS_URL` | — | Если задан — INCR в Redis; иначе in-memory |
+
+### Campaign webhook
+
+`webhook_url` accepts only HTTPS hosts explicitly listed in `WEBHOOK_ALLOWED_HOSTS` in `.env`, separated by commas. Leave it empty to disable webhooks. URLs outside that allowlist are rejected on save and skipped at runtime.
 
 ### Self-registration (`REGISTRATION_OPEN`)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from urllib.parse import urlsplit
 
 MAX_SERVER_MODE = os.environ.get("MAX_SERVER_MODE", "").strip().lower() in (
     "1",
@@ -22,6 +23,28 @@ ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip().lower()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
 INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "").strip()
+
+
+def webhook_url_allowed(value: str) -> bool:
+    """Allow explicit HTTPS webhook hosts only; unset allowlist disables webhooks."""
+    try:
+        url = urlsplit(value.strip())
+        host = (url.hostname or "").lower()
+        port = url.port
+    except ValueError:
+        return False
+    allowed = {
+        item.strip().lower()
+        for item in os.environ.get("WEBHOOK_ALLOWED_HOSTS", "").split(",")
+        if item.strip()
+    }
+    return (
+        url.scheme == "https"
+        and host in allowed
+        and not url.username
+        and not url.password
+        and port in (None, 443)
+    )
 
 
 def require_jwt_secret() -> str:

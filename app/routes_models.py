@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 import antiban_core
+from app.config import webhook_url_allowed
 
 
 class ProfileIn(BaseModel):
@@ -135,6 +136,12 @@ class SettingsIn(BaseModel):
 
     @model_validator(mode="after")
     def check_delays(self) -> SettingsIn:
+        if self.webhook_url is not None:
+            webhook = self.webhook_url.strip()
+            if webhook and not webhook_url_allowed(webhook):
+                raise ValueError(
+                    "Webhook разрешён только для HTTPS-хостов из WEBHOOK_ALLOWED_HOSTS"
+                )
         lo = self.delay_min_sec
         hi = self.delay_max_sec
         if lo is not None and hi is not None and lo > hi:
