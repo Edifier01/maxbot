@@ -99,8 +99,11 @@ async def dashboard():
             ).fetchone()["n"]
             qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
         items = []
+        today = m._local_today().isoformat()
         for p in profiles:
             d = redact_cabinet_row(m._profile_auth_view(p))
+            if p["sent_day"] != today:
+                d["messages_sent_today"] = 0
             d["circuit_open"] = m._is_circuit_open(p["id"])
             items.append(d)
         if m._campaign_goal() == "daily_limits":

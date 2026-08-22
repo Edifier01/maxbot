@@ -685,7 +685,8 @@ async def scheduler_loop() -> None:
                 with tenant_scope(tenant_id=tid):
                     await scheduler_tick()
             except Exception as e:
-                main.append_log(f"Ошибка планировщика (tenant={tid}): {e}")
+                with tenant_scope(tenant_id=tid):
+                    main.append_log(f"Ошибка планировщика: {e}")
 
 
 async def watchdog_loop() -> None:
@@ -731,12 +732,12 @@ async def start_worker(
     *,
     record_campaign: bool = True,
     scheduled_for: str | None = None,
-) -> None:
+) -> bool:
     """Запуск воркера / пула без сброса индексов прогресса."""
     from app.tenant import clear_context, get_tenant_id, restore_context, snapshot_context
 
     if REGISTRY.app.shutting_down:
-        return
+        return False
     ctx_snap = snapshot_context()
     tid = get_tenant_id()
     rt = REGISTRY.worker_for(tid)
@@ -756,9 +757,9 @@ async def start_worker(
 
     async with rt.worker_lock:
         if REGISTRY.app.shutting_down:
-            return
+            return False
         if rt.worker_task and not rt.worker_task.done():
-            return
+            return False
         rt.touch_activity()
         rt.pool_done_announced = False
         await main._preflight_group_proxies()
@@ -779,6 +780,7 @@ async def start_worker(
             rt.worker_task = asyncio.create_task(_worker_task())
         finally:
             restore_context(ctx_snap)
+    return True
 
 
 def reset_queue_progress() -> None:

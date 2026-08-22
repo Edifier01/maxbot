@@ -824,8 +824,14 @@ async def _try_auto_resume(*, log_prefix: str = "Автовозобновлен�
         return False
     if not _has_sendable_profile():
         return False
-    append_log(f"{log_prefix}: старт рассылки")
-    await _start_worker(record_campaign=True)
+    try:
+        started = await _start_worker(record_campaign=True)
+    except HTTPException as e:
+        append_log(f"{log_prefix}: запуск отменён — {e.detail}")
+        return False
+    if not started:
+        return False
+    append_log(f"{log_prefix}: рассылка запущена")
     return True
 
 

@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.campaign_runtime import REGISTRY
-from app.tenant import tenant_scope
+from app.tenant import get_tenant_id, tenant_scope
 
 
 @pytest.fixture
@@ -90,6 +90,36 @@ def test_campaign_start_sets_auto_run(m, monkeypatch):
     assert m.get_setting("auto_run") == "1"
 
 
+def test_auto_resume_logs_only_after_worker_starts(m, monkeypatch):
+    m.set_setting("auto_run", "1")
+    start_mock = AsyncMock(return_value=True)
+    log_mock = MagicMock()
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+    monkeypatch.setattr(m, "append_log", log_mock)
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["hello"])
+    monkeypatch.setattr(m, "_prepare_auto_resume_pool", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+
+    assert asyncio.run(m._try_auto_resume()) is True
+    start_mock.assert_awaited_once_with(record_campaign=True)
+    log_mock.assert_called_once_with("Автовозобновление: рассылка запущена")
+
+
+def test_auto_resume_does_not_claim_start_when_worker_is_busy(m, monkeypatch):
+    m.set_setting("auto_run", "1")
+    log_mock = MagicMock()
+    monkeypatch.setattr(m, "_start_worker", AsyncMock(return_value=False))
+    monkeypatch.setattr(m, "append_log", log_mock)
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["hello"])
+    monkeypatch.setattr(m, "_prepare_auto_resume_pool", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+
+    assert asyncio.run(m._try_auto_resume()) is False
+    log_mock.assert_not_called()
+
+
 def test_retry_failed_sets_auto_run(m, monkeypatch):
     m.set_setting("auto_run", "0")
     with m._conn() as c:
@@ -144,6 +174,28 @@ def test_scheduler_tick_sets_auto_run(m, monkeypatch):
     with m._conn() as c:
         row = c.execute("SELECT enabled FROM campaign_schedule WHERE id=1").fetchone()
     assert int(row["enabled"]) == 0
+
+
+def test_scheduler_logs_errors_in_the_tenant_journal(m, monkeypatch):
+    import app.campaign_worker as cw
+
+    monkeypatch.setattr(cw, "scheduler_tenant_ids", lambda: [42])
+    monkeypatch.setattr(cw, "scheduler_tick", AsyncMock(side_effect=RuntimeError("boom")))
+    seen_tenants = []
+    monkeypatch.setattr(m, "append_log", lambda _msg: seen_tenants.append(get_tenant_id()))
+    calls = 0
+
+    async def stop_after_one_tick(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise StopAsyncIteration
+
+    monkeypatch.setattr(cw.asyncio, "sleep", stop_after_one_tick)
+
+    with pytest.raises(StopAsyncIteration):
+        asyncio.run(cw.scheduler_loop())
+    assert seen_tenants == [42]
 
 
 def test_try_auto_resume_skips_expired_subscription(m, monkeypatch):
