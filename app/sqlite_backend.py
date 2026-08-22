@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 _db_conn: sqlite3.Connection | None = None
-_tenant_db_conns: dict[str, sqlite3.Connection] = {}
+_tenant_db_conns: dict[tuple[str, int], sqlite3.Connection] = {}
 _db_lock = threading.Lock()
 
 
@@ -42,10 +42,14 @@ def _reset_db_conn() -> None:
                     _db_conn.close()
                 _db_conn = None
         return
-    key = str(m._resolve_data_dir())
+    path = str(m._resolve_data_dir())
     with _db_lock:
-        conn = _tenant_db_conns.pop(key, None)
-        if conn is not None:
+        conns = [
+            _tenant_db_conns.pop(key)
+            for key in list(_tenant_db_conns)
+            if key[0] == path
+        ]
+        for conn in conns:
             with contextlib.suppress(Exception):
                 conn.close()
         if _db_conn is not None:
@@ -56,11 +60,13 @@ def _reset_db_conn() -> None:
 
 def _sqlite_connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    # Connections are still scoped per thread below. Cross-thread close is
+    # permitted so tenant quarantine/reset can evict every pooled connection.
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA synchronous=FULL")
     return conn
 
 
@@ -70,10 +76,11 @@ def _global_db_path() -> Path:
 
 def _global_conn() -> sqlite3.Connection:
     path = str(_global_db_path())
+    key = (path, threading.get_ident())
     with _db_lock:
-        if path not in _tenant_db_conns:
-            _tenant_db_conns[path] = _sqlite_connect(_global_db_path())
-        return _tenant_db_conns[path]
+        if key not in _tenant_db_conns:
+            _tenant_db_conns[key] = _sqlite_connect(_global_db_path())
+        return _tenant_db_conns[key]
 
 
 def _db_path() -> Path:
@@ -89,7 +96,7 @@ def _conn() -> sqlite3.Connection:
             "Уберите DATABASE_URL или не задайте MAX_USE_DATABASE_URL=1."
         )
     if m._is_server_mode():
-        key = str(m._resolve_data_dir())
+        key = (str(m._resolve_data_dir()), threading.get_ident())
         with _db_lock:
             if key not in _tenant_db_conns:
                 _tenant_db_conns[key] = _sqlite_connect(_db_path())
@@ -278,6 +285,79 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
     c.execute(
         "CREATE INDEX IF NOT EXISTS idx_send_log_profile_group "
         "ON send_log(profile_id, group_id, status)"
+    )
+    _install_integrity_triggers(c)
+
+
+def _install_integrity_triggers(c: sqlite3.Connection) -> None:
+    """Repair legacy orphans, then enforce FK-like behavior without table rebuilds."""
+    c.execute(
+        "DELETE FROM group_profiles WHERE group_id NOT IN (SELECT id FROM groups) "
+        "OR profile_id NOT IN (SELECT id FROM profiles)"
+    )
+    c.execute(
+        "UPDATE send_log SET profile_id=NULL WHERE profile_id IS NOT NULL "
+        "AND profile_id NOT IN (SELECT id FROM profiles)"
+    )
+    c.execute(
+        "UPDATE send_log SET group_id=NULL WHERE group_id IS NOT NULL "
+        "AND group_id NOT IN (SELECT id FROM groups)"
+    )
+    c.execute(
+        "DELETE FROM antiban_state WHERE profile_id NOT IN (SELECT id FROM profiles)"
+    )
+    c.executescript(
+        """
+        CREATE TRIGGER IF NOT EXISTS fk_group_profiles_insert
+        BEFORE INSERT ON group_profiles
+        WHEN NOT EXISTS (SELECT 1 FROM groups WHERE id=NEW.group_id)
+          OR NOT EXISTS (SELECT 1 FROM profiles WHERE id=NEW.profile_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'group_profiles foreign key violation');
+        END;
+        CREATE TRIGGER IF NOT EXISTS fk_group_profiles_update
+        BEFORE UPDATE OF group_id, profile_id ON group_profiles
+        WHEN NOT EXISTS (SELECT 1 FROM groups WHERE id=NEW.group_id)
+          OR NOT EXISTS (SELECT 1 FROM profiles WHERE id=NEW.profile_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'group_profiles foreign key violation');
+        END;
+        CREATE TRIGGER IF NOT EXISTS fk_send_log_insert
+        BEFORE INSERT ON send_log
+        WHEN (NEW.profile_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM profiles WHERE id=NEW.profile_id
+             ))
+          OR (NEW.group_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM groups WHERE id=NEW.group_id
+             ))
+        BEGIN
+            SELECT RAISE(ABORT, 'send_log foreign key violation');
+        END;
+        CREATE TRIGGER IF NOT EXISTS fk_send_log_update
+        BEFORE UPDATE OF profile_id, group_id ON send_log
+        WHEN (NEW.profile_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM profiles WHERE id=NEW.profile_id
+             ))
+          OR (NEW.group_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM groups WHERE id=NEW.group_id
+             ))
+        BEGIN
+            SELECT RAISE(ABORT, 'send_log foreign key violation');
+        END;
+        CREATE TRIGGER IF NOT EXISTS cascade_group_delete
+        AFTER DELETE ON groups
+        BEGIN
+            DELETE FROM group_profiles WHERE group_id=OLD.id;
+            UPDATE send_log SET group_id=NULL WHERE group_id=OLD.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS cascade_profile_delete
+        AFTER DELETE ON profiles
+        BEGIN
+            DELETE FROM group_profiles WHERE profile_id=OLD.id;
+            DELETE FROM antiban_state WHERE profile_id=OLD.id;
+            UPDATE send_log SET profile_id=NULL WHERE profile_id=OLD.id;
+        END;
+        """
     )
 
 

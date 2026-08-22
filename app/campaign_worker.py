@@ -17,7 +17,7 @@ from fastapi import HTTPException
 
 from app.runtime import main
 from app.campaign_runtime import REGISTRY, RUNTIME
-from app.campaign_send import send_with_retry, sleep_send_delay
+from app.campaign_send import SendTracker, send_with_retry, sleep_send_delay
 
 
 def worker_shutdown(reason: str) -> None:
@@ -247,8 +247,15 @@ def _done_or_wait() -> str | None:
     return "STOP"
 
 
+def _maybe_return_to_bag(pool_idx: int, tracker: SendTracker) -> None:
+    if tracker.may_requeue:
+        main._return_to_message_bag(pool_idx)
+
+
 def _claim_next_job_sync() -> dict[str, Any] | str | None:
     """Синхронное тело claim_next_job (SQLite под asyncio.to_thread)."""
+    if REGISTRY.app.shutting_down:
+        return "STOP"
     with main._conn() as c:
         qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
         if not qs or not qs["running"]:
@@ -375,6 +382,9 @@ async def poolworker_loop(worker_id: int) -> None:
     main._touch_worker_activity()
     while True:
         main._touch_worker_activity()
+        if REGISTRY.app.shutting_down:
+            main.append_log(f"Воркер пула #{worker_id} остановлен (shutdown)")
+            return
         if await main._wait_if_outside_send_window():
             continue
         await main._maybe_idle_presence()
@@ -413,6 +423,7 @@ async def poolworker_loop(worker_id: int) -> None:
 
         group_id = int(job["group"]["id"])
         sent = False
+        tracker = SendTracker()
         try:
             try:
                 sent = await send_with_retry(
@@ -424,9 +435,10 @@ async def poolworker_loop(worker_id: int) -> None:
                     job["gi_next"],
                     job["mi_next"],
                     advance_queue=False,
+                    tracker=tracker,
                 )
             except asyncio.CancelledError:
-                main._return_to_message_bag(job["mi"])
+                _maybe_return_to_bag(job["mi"], tracker)
                 raise
         finally:
             RUNTIME.groups_in_flight.discard(group_id)
@@ -438,7 +450,7 @@ async def poolworker_loop(worker_id: int) -> None:
             else:
                 RUNTIME.profile_reserved[pid] = left
         if not sent:
-            main._return_to_message_bag(job["mi"])
+            _maybe_return_to_bag(job["mi"], tracker)
             await asyncio.sleep(3)
             main._touch_worker_activity()
             continue
@@ -450,6 +462,9 @@ async def worker_loop() -> None:
     main._touch_worker_activity()
     while True:
         main._touch_worker_activity()
+        if REGISTRY.app.shutting_down:
+            main.append_log("Воркер остановлен (shutdown)")
+            return
         if await main._wait_if_outside_send_window():
             continue
         await main._maybe_idle_presence()
@@ -529,21 +544,28 @@ async def worker_loop() -> None:
             gi_next = main.next_index(gi, len(groups))
             gid = int(group["id"])
             RUNTIME.groups_in_flight.add(gid)
+            tracker = SendTracker()
             try:
-                sent = await send_with_retry(
-                    profile,
-                    group,
-                    text,
-                    pool_idx,
-                    pi,
-                    gi_next,
-                    progress_next,
-                    advance_queue=not bag_mode,
-                )
+                try:
+                    sent = await send_with_retry(
+                        profile,
+                        group,
+                        text,
+                        pool_idx,
+                        pi,
+                        gi_next,
+                        progress_next,
+                        advance_queue=not bag_mode,
+                        tracker=tracker,
+                    )
+                except asyncio.CancelledError:
+                    if bag_mode:
+                        _maybe_return_to_bag(pool_idx, tracker)
+                    raise
             finally:
                 RUNTIME.groups_in_flight.discard(gid)
             if not sent and bag_mode:
-                main._return_to_message_bag(pool_idx)
+                _maybe_return_to_bag(pool_idx, tracker)
             mi = progress_next
 
         if sent:
@@ -603,9 +625,10 @@ def scheduler_tenant_ids() -> list[int | None]:
 
     try:
         rows = db_pg.list_tenants_with_users()
-        return [int(r["tenant_id"]) for r in rows] or [None]
+        return [int(r["tenant_id"]) for r in rows]
     except Exception:
-        return [None]
+        main.append_log("Планировщик: PostgreSQL недоступен — tenant scan пропущен")
+        return []
 
 
 async def scheduler_tick() -> None:
@@ -709,6 +732,8 @@ async def start_worker(
     """Запуск воркера / пула без сброса индексов прогресса."""
     from app.tenant import clear_context, get_tenant_id, restore_context, snapshot_context
 
+    if REGISTRY.app.shutting_down:
+        return
     ctx_snap = snapshot_context()
     tid = get_tenant_id()
     rt = REGISTRY.worker_for(tid)
@@ -727,6 +752,8 @@ async def start_worker(
             clear_context()
 
     async with rt.worker_lock:
+        if REGISTRY.app.shutting_down:
+            return
         if rt.worker_task and not rt.worker_task.done():
             return
         rt.touch_activity()

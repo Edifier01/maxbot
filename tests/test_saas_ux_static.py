@@ -227,17 +227,12 @@ def test_admin_auth_skip_link_and_main_content():
 
 def test_auth_forms_enter_submit_and_errors():
     assert '<form id="formLogin"' in AUTH
-    assert '<form id="formRegister"' in AUTH
+    assert '<form id="formRegister"' not in AUTH
     assert "event.preventDefault()" in AUTH_ALL
     assert "formatApiError" in AUTH_ALL
     assert "Вход…" in AUTH_ALL
-    assert "Регистрация…" in AUTH_ALL
-    assert "Пароли не совпадают" in AUTH_ALL
     assert 'spellcheck="false"' in AUTH
-    assert 'autocomplete="organization"' in AUTH
     assert 'id="rememberMeLogin"' in AUTH
-    assert 'id="rememberMeRegister"' in AUTH
-    tabs_idx = AUTH.index('role="tablist"')
     login_form = AUTH.index('id="formLogin"')
     remember_idx = AUTH.index('id="rememberMeLogin"')
-    assert tabs_idx < login_form < remember_idx
+    assert login_form < remember_idx

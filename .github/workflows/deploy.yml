@@ -1,5 +1,8 @@
 name: Deploy
 
+permissions:
+  contents: read
+
 on:
   workflow_run:
     workflows: [CI]
@@ -15,14 +18,13 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt -r requirements-server.txt
-          pip install pytest httpx
+          pip install -r requirements.lock -r requirements-server.lock -r requirements-dev.txt
       - name: Server tests (pre-deploy gate)
         env:
           MAX_TEST: "1"
@@ -33,12 +35,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: verify
+    environment: production
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -56,8 +59,9 @@ jobs:
             git checkout --force "$SHA"
             cd "$(git rev-parse --show-toplevel)"
             if [[ ! -f .env && -f server/.env ]]; then
-              cp server/.env .env
+              install -m 600 server/.env .env
             fi
+            chmod 600 .env
             if [[ ! -f .env ]]; then
               echo "Missing .env at repo root (copy from server/.env or .env.example)"
               exit 1
@@ -71,12 +75,19 @@ jobs:
             if [[ -n "$pg_vol" || -n "$pg_ctr" ]]; then
               echo "PostgreSQL volume/data present — starting postgres, then backing up volumes…"
               docker compose up -d postgres
+              postgres_ready=0
               for _ in 1 2 3 4 5 6 7 8 9 10; do
                 if docker compose exec -T postgres pg_isready -U maxsender -d maxsender >/dev/null 2>&1; then
+                  postgres_ready=1
                   break
                 fi
                 sleep 2
               done
+              if [[ "$postgres_ready" != "1" ]]; then
+                echo "PostgreSQL not ready after 20 seconds; aborting deploy." >&2
+                docker compose logs --tail=80 postgres >&2 || true
+                exit 1
+              fi
               bash scripts/backup-volumes.sh
             else
               echo "No postgres volume/data — skipping volume backup (first deploy)"
@@ -84,10 +95,14 @@ jobs:
             if [[ "${USE_CELERY:-0}" == "1" || "${USE_CELERY:-0}" == "true" ]]; then
               docker compose --profile celery pull redis caddy postgres 2>/dev/null || true
               docker compose --profile celery build app celery-worker
+              docker compose --profile celery run --rm -T --no-deps --user root \
+                --entrypoint chown app -R 10001:10001 /app/data
               docker compose --profile celery up -d
             else
               docker compose pull redis caddy postgres 2>/dev/null || true
               docker compose build app
+              docker compose run --rm -T --no-deps --user root \
+                --entrypoint chown app -R 10001:10001 /app/data
               docker compose up -d
             fi
             CHECK_HTTPS=0 bash scripts/verify_deploy.sh

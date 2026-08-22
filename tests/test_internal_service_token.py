@@ -15,6 +15,7 @@ def auth_mw(monkeypatch):
     monkeypatch.setattr("app.middleware.is_server_mode", lambda: True)
     monkeypatch.setattr("app.middleware.INTERNAL_SERVICE_TOKEN", "svc-test-token")
     monkeypatch.setattr("app.middleware.db_pg.get_tenant", lambda tid: {"id": tid})
+    monkeypatch.setattr("app.middleware.db_pg.subscription_active", lambda tid: True)
 
     fake_main = MagicMock()
     fake_main._try_legacy_unlock = MagicMock()
@@ -68,6 +69,18 @@ def test_internal_token_rejects_wrong_token(auth_mw):
         call_next = AsyncMock(return_value="ok")
         resp = await auth_mw.dispatch(_request(token="wrong"), call_next)
         assert resp.status_code == 401
+        call_next.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_internal_token_rejects_expired_subscription(auth_mw, monkeypatch):
+    monkeypatch.setattr("app.middleware.db_pg.subscription_active", lambda tid: False)
+
+    async def run():
+        call_next = AsyncMock(return_value="ok")
+        resp = await auth_mw.dispatch(_request(), call_next)
+        assert resp.status_code == 402
         call_next.assert_not_awaited()
 
     asyncio.run(run())

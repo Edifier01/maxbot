@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 # Restore PostgreSQL + max_server_data from backup-volumes.sh output.
-# Usage: bash scripts/restore-volumes.sh ./backups/20260101-120000
+# Usage: bash scripts/restore-volumes.sh [--yes] ./backups/20260101-120000
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+ASSUME_YES=0
+if [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]]; then
+  ASSUME_YES=1
+  shift
+fi
 SRC="${1:?укажите каталог бэкапа (pg.dump + data.tar.gz)}"
 [[ -f "$SRC/pg.dump" ]] || { echo "нет $SRC/pg.dump"; exit 1; }
 [[ -f "$SRC/data.tar.gz" ]] || { echo "нет $SRC/data.tar.gz"; exit 1; }
 
 echo "ВНИМАНИЕ: перезапишет PG и volume max_server_data."
-read -r -p "Продолжить? [y/N] " ans
-[[ "$ans" == "y" || "$ans" == "Y" ]] || exit 0
+if [[ "$ASSUME_YES" != "1" ]]; then
+  read -r -p "Продолжить? [y/N] " ans
+  [[ "$ans" == "y" || "$ans" == "Y" ]] || exit 0
+fi
 
 echo "Остановка app и celery…"
 docker compose stop app celery-worker 2>/dev/null || docker compose stop app
@@ -47,7 +54,8 @@ for child in list(incoming.iterdir()):
 incoming.rmdir()'
 
 echo "Восстановление PostgreSQL…"
-if docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner --exit-on-error \
+if docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner \
+  --exit-on-error --single-transaction \
   < "$SRC/pg.dump"; then
   echo "pg_restore OK — removing .outgoing-restore"
   docker compose run --rm -T --no-deps --entrypoint python app -c 'import pathlib, shutil

@@ -112,9 +112,16 @@ class RuntimeRegistry:
     def worker_items(self) -> list[tuple[int, CampaignRuntime]]:
         return list(self._workers.items())
 
+    def drop_worker(self, tenant_id: int) -> None:
+        """Forget stopped per-tenant runtime after permanent tenant deletion."""
+        self._workers.pop(self._key(tenant_id), None)
+
     def reset_test(self) -> None:
         self._app.reset_test()
         self._workers.clear()
+        from app.shutdown import reset_test as reset_shutdown
+
+        reset_shutdown()
 
     @property
     def app(self) -> _AppRuntime:

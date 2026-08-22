@@ -4,6 +4,7 @@
 #   curl -fsSL ... | bash
 #   или: bash scripts/bootstrap-vps.sh /opt/maxsender git@github.com:Edifier01/maxbot.git
 set -euo pipefail
+umask 077
 
 DEPLOY_PATH="${1:-/opt/maxsender}"
 REPO_URL="${2:-git@github.com:Edifier01/maxbot.git}"
@@ -16,8 +17,21 @@ fi
 
 if ! command -v docker >/dev/null; then
   apt-get update -qq
-  apt-get install -y ca-certificates curl git
-  curl -fsSL https://get.docker.com | sh
+  apt-get install -y ca-certificates curl git gnupg
+  install -m 0755 -d /etc/apt/keyrings
+  . /etc/os-release
+  case "${ID:-}" in
+    ubuntu|debian) ;;
+    *) echo "Неподдерживаемый дистрибутив для Docker APT repo: ${ID:-unknown}" >&2; exit 1 ;;
+  esac
+  curl -fsSL "https://download.docker.com/linux/$ID/gpg" \
+    | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
+  chmod a+r /etc/apt/keyrings/docker.gpg
+  arch="$(dpkg --print-architecture)"
+  echo "deb [arch=$arch signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$ID ${VERSION_CODENAME:?} stable" \
+    > /etc/apt/sources.list.d/docker.list
+  apt-get update -qq
+  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   usermod -aG docker "$DEPLOY_USER"
 fi
 
@@ -47,10 +61,11 @@ sudo -u "$DEPLOY_USER" git -C "$DEPLOY_PATH" remote set-url origin "$REPO_URL" 2
 
 ENV_FILE="$DEPLOY_PATH/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
-  cp "$DEPLOY_PATH/.env.example" "$ENV_FILE"
+  install -m 600 "$DEPLOY_PATH/.env.example" "$ENV_FILE"
   chown "$DEPLOY_USER:$DEPLOY_USER" "$ENV_FILE"
   echo "Создан $ENV_FILE — заполните DOMAIN, JWT_SECRET, пароли."
 fi
+chmod 600 "$ENV_FILE"
 
 echo
 echo "=== Секреты GitHub Actions (Settings → Secrets → Actions) ==="

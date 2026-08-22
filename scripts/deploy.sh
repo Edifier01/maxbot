@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 cd "$(dirname "$0")/.."
 
 if [[ ! -f .env && -f server/.env ]]; then
-  cp server/.env .env
+  install -m 600 server/.env .env
   echo "Перенесён .env из server/.env (старый layout)"
 fi
 
 if [[ ! -f .env ]]; then
   echo "Создайте .env из .env.example:"
   echo "  cp .env.example .env && nano .env"
-  cp -n .env.example .env 2>/dev/null || true
+  install -m 600 .env.example .env 2>/dev/null || true
   exit 1
 fi
+
+chmod 600 .env
 
 # shellcheck disable=SC1091
 source .env
@@ -39,22 +42,35 @@ pg_ctr=$(docker compose ps -a -q postgres 2>/dev/null || true)
 if [[ -n "$pg_vol" || -n "$pg_ctr" ]]; then
   echo "PostgreSQL volume/data present — starting postgres, then backing up volumes…"
   docker compose up -d postgres
+  postgres_ready=0
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     if docker compose exec -T postgres pg_isready -U maxsender -d maxsender >/dev/null 2>&1; then
+      postgres_ready=1
       break
     fi
     sleep 2
   done
+  if [[ "$postgres_ready" != "1" ]]; then
+    echo "PostgreSQL не готов после 20 секунд; backup и deploy остановлены." >&2
+    docker compose logs --tail=80 postgres >&2 || true
+    exit 1
+  fi
   bash scripts/backup-volumes.sh
 else
   echo "No postgres volume/data — skipping volume backup (first deploy)"
 fi
 if [[ "${USE_CELERY:-0}" == "1" || "${USE_CELERY:-0}" == "true" ]]; then
   docker compose --profile celery pull redis caddy postgres 2>/dev/null || true
-  docker compose --profile celery up --build -d
+  docker compose --profile celery build app celery-worker
+  docker compose --profile celery run --rm -T --no-deps --user root \
+    --entrypoint chown app -R 10001:10001 /app/data
+  docker compose --profile celery up -d
 else
   docker compose pull redis caddy postgres 2>/dev/null || true
-  docker compose up --build -d
+  docker compose build app
+  docker compose run --rm -T --no-deps --user root \
+    --entrypoint chown app -R 10001:10001 /app/data
+  docker compose up -d
 fi
 
 echo "Ожидание старта контейнеров…"

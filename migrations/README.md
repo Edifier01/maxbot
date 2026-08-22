@@ -6,6 +6,8 @@
 2. `001_saas_core.sql` — SaaS-таблицы.
 
 При старте app `db_pg.init_schema()` применяет bootstrap и все неучтённые `*.sql` из этой папки.
+Для применённых миграций сохраняется SHA-256; изменение уже применённого SQL
+останавливает запуск с ошибкой checksum mismatch. Исправления оформляйте новой миграцией.
 
 Docker Postgres (initdb) монтирует те же файлы в `/docker-entrypoint-initdb.d/`.
 

@@ -61,6 +61,20 @@ class SubscriptionIn(BaseModel):
     days: int = Field(ge=1, le=3650)
 
 
+class CreateUserIn(BaseModel):
+    institution_name: str = Field(min_length=2, max_length=200)
+    login: str = Field(min_length=2, max_length=200)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("institution_name", "login")
+    @classmethod
+    def strip_required(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("Поле должно содержать минимум 2 символа")
+        return value
+
+
 class ProxyIn(BaseModel):
     proxy: str = Field(max_length=500)
 
@@ -129,6 +143,24 @@ async def list_users():
     return {"items": result}
 
 
+@router.post("/users")
+async def create_user(body: CreateUserIn):
+    _require_admin()
+    try:
+        info = auth.register_user(body.institution_name, body.login, body.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    from app.tenant_init import init_tenant_db, rollback_tenant_registration
+
+    try:
+        init_tenant_db(app_main, info["tenant_id"])
+    except Exception:
+        rollback_tenant_registration(info["tenant_id"], app_main.ROOT)
+        raise HTTPException(500, "Не удалось создать кабинет. Попробуйте позже.") from None
+    return {"ok": True, "tenant_id": info["tenant_id"], "user_id": info["user_id"]}
+
+
 @router.post("/users/{tenant_id}/subscription")
 async def grant_subscription(tenant_id: int, body: SubscriptionIn):
     admin_id = _require_admin()
@@ -151,6 +183,15 @@ async def revoke_subscription(tenant_id: int):
     if not tenant:
         raise HTTPException(404, "Учреждение не найдено")
     expires = db_pg.revoke_subscription(tenant_id, admin_id)
+    from app.campaign_worker import stop_worker
+    from app.tenant import tenant_scope
+
+    with tenant_scope(tenant_id=tenant_id, role="admin"):
+        await stop_worker(
+            finish_status="stopped",
+            reason="Подписка отозвана",
+            tenant_id=tenant_id,
+        )
     return {"ok": True, "active": False, "expires_at": expires.isoformat()}
 
 
@@ -161,10 +202,14 @@ def _tenant_sqlite_dir(tenant_id: int) -> Path:
 def _evict_tenant_sqlite_conn(data_dir: Path) -> None:
     from app import sqlite_backend
 
-    key = str(data_dir)
+    path = str(data_dir)
     with sqlite_backend._db_lock:
-        conn = sqlite_backend._tenant_db_conns.pop(key, None)
-        if conn is not None:
+        conns = [
+            sqlite_backend._tenant_db_conns.pop(key)
+            for key in list(sqlite_backend._tenant_db_conns)
+            if key[0] == path
+        ]
+        for conn in conns:
             with contextlib.suppress(Exception):
                 conn.close()
 
@@ -248,6 +293,9 @@ async def delete_user(tenant_id: int):
         await asyncio.to_thread(_restore_tenant_sqlite, live, quarantine)
         raise HTTPException(404, "Учреждение не найдено")
     await asyncio.to_thread(_purge_quarantine, quarantine)
+    from app.campaign_runtime import REGISTRY
+
+    REGISTRY.drop_worker(tenant_id)
     return {"ok": True}
 
 

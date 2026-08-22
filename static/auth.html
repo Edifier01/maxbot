@@ -171,15 +171,10 @@
       <h1 translate="no">MAX Sender</h1>
     </div>
     <p class="hint">Личный кабинет</p>
-    <div class="tabs" role="tablist" aria-label="Режим входа">
-      <button type="button" id="tabLogin" role="tab" aria-selected="true" aria-controls="panelLogin" tabindex="0" class="active">Вход</button>
-      <button type="button" id="tabRegister" role="tab" aria-selected="false" aria-controls="panelRegister" tabindex="-1" class="secondary">Регистрация</button>
-    </div>
-
-    <div id="panelLogin" class="panel active" role="tabpanel" aria-labelledby="tabLogin">
+    <div class="panel active">
       <form id="formLogin">
-      <label for="loginEmail">Email</label>
-      <input id="loginEmail" name="email" type="email" autocomplete="username" spellcheck="false">
+      <label for="login">Логин</label>
+      <input id="login" name="login" type="text" autocomplete="username" spellcheck="false">
       <label for="loginPass">Пароль</label>
       <input id="loginPass" name="password" type="password" autocomplete="current-password">
       <label class="remember-row">
@@ -188,25 +183,6 @@
       </label>
       <button type="submit" id="btnLogin">Войти</button>
       <p class="err" id="loginErr" aria-live="polite"></p>
-      </form>
-    </div>
-
-    <div id="panelRegister" class="panel" role="tabpanel" aria-labelledby="tabRegister" hidden>
-      <form id="formRegister">
-      <label for="regInstitution">Название учреждения</label>
-      <input id="regInstitution" name="institution_name" type="text" placeholder="Школа №1…" autocomplete="organization">
-      <label for="regEmail">Email</label>
-      <input id="regEmail" name="email" type="email" autocomplete="username" spellcheck="false">
-      <label for="regPass">Пароль</label>
-      <input id="regPass" name="password" type="password" autocomplete="new-password">
-      <label for="regPass2">Повтор пароля</label>
-      <input id="regPass2" name="password_confirm" type="password" autocomplete="new-password">
-      <label class="remember-row">
-        <input type="checkbox" id="rememberMeRegister" checked>
-        Запомнить меня
-      </label>
-      <button type="submit" id="btnRegister">Зарегистрироваться</button>
-      <p class="err" id="regErr" aria-live="polite"></p>
       </form>
     </div>
   </main>

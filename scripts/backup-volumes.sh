@@ -13,11 +13,36 @@ chmod 700 "$DEST"
 
 echo "Backup → $DEST"
 
+running_services="$(docker compose ps --status running --services 2>/dev/null || true)"
+restart_services=()
+if grep -qx "app" <<<"$running_services"; then
+  restart_services+=(app)
+fi
+if grep -qx "celery-worker" <<<"$running_services"; then
+  restart_services+=(celery-worker)
+fi
+
+restart_after_backup() {
+  rc=$?
+  trap - EXIT INT TERM
+  if ((${#restart_services[@]})); then
+    echo "  Restarting previously running services: ${restart_services[*]}"
+    docker compose start "${restart_services[@]}" || rc=1
+  fi
+  exit "$rc"
+}
+trap restart_after_backup EXIT INT TERM
+
+if ((${#restart_services[@]})); then
+  echo "  Entering maintenance window (app/celery stopped)…"
+  docker compose stop celery-worker app 2>/dev/null || docker compose stop app
+fi
+
 echo "  PostgreSQL dump…"
 docker compose exec -T postgres pg_dump -U maxsender -Fc maxsender > "$DEST/pg.dump"
 
-echo "  SQLite WAL checkpoint (best-effort)…"
-if docker compose exec -T app python -c 'import sqlite3
+echo "  SQLite WAL checkpoint…"
+docker compose run --rm -T --no-deps --entrypoint python app -c 'import sqlite3
 from pathlib import Path
 for db in Path("/app/data").rglob("app.db"):
     con = sqlite3.connect(str(db))
@@ -25,11 +50,8 @@ for db in Path("/app/data").rglob("app.db"):
         con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
         con.close()
-'; then
-  echo "  WAL checkpoint done"
-else
-  echo "WARNING: app not running — skipping SQLite WAL checkpoint (pg_dump still needs postgres)" >&2
-fi
+'
+echo "  WAL checkpoint done"
 
 echo "  max_server_data volume…"
 # App image has tar; compose has no alpine service. -T keeps the archive binary-clean.

@@ -327,6 +327,16 @@
       </div>
     </div>
     <div class="panel">
+      <h2 class="panel-title">Создать кабинет</h2>
+      <form id="createUserForm" class="row">
+        <input id="newInstitution" type="text" minlength="2" maxlength="200" placeholder="Название учреждения" required aria-label="Название учреждения">
+        <input id="newLogin" type="text" minlength="2" maxlength="200" placeholder="Логин" required autocomplete="username" aria-label="Логин">
+        <input id="newPassword" type="password" minlength="8" maxlength="128" placeholder="Пароль" required autocomplete="new-password" aria-label="Пароль">
+        <button type="submit" class="btn primary" id="btnCreateUser">Создать</button>
+      </form>
+      <p class="hint" id="createUserHint" aria-live="polite"></p>
+    </div>
+    <div class="panel">
       <div class="row" style="justify-content:space-between">
         <h2 class="panel-title" style="margin:0">Пользователи (учреждения)</h2>
       </div>
@@ -335,7 +345,7 @@
         <thead>
           <tr>
             <th>Учреждение</th>
-            <th>Email</th>
+            <th>Логин</th>
             <th>Подписка</th>
             <th>Статистика</th>
             <th>Воркеры</th>

@@ -22,7 +22,6 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
 
     AUTH_POST_PATHS = frozenset({
         "/api/auth/login",
-        "/api/auth/register",
         "/api/auth/restore-session",
     })
     _counters = auth_rate_limit._memory  # ponytail: test/e2e compat alias
@@ -62,7 +61,6 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         "/auth.html",
         "/admin.html",
         "/favicon.ico",
-        "/api/auth/register",
         "/api/auth/login",
         "/api/auth/restore-session",
         "/api/auth/exit-impersonation",
@@ -132,6 +130,14 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
                     return JSONResponse(
                         status_code=404,
                         content={"detail": "Учреждение не найдено"},
+                    )
+                if (
+                    path in self.SUBSCRIPTION_POST_PATHS
+                    and not db_pg.subscription_active(tenant_id)
+                ):
+                    return JSONResponse(
+                        status_code=402,
+                        content={"detail": "Подписка не активна"},
                     )
                 set_context(role="admin", tenant_id=tenant_id, use_global_data=False)
             else:

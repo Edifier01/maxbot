@@ -49,8 +49,11 @@ async def get_log():
                     "SELECT msg FROM app_log ORDER BY id DESC LIMIT 200"
                 ).fetchall()
             return {"lines": list(reversed([r["msg"] for r in rows]))}
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).exception("Failed to read tenant log")
+            raise HTTPException(503, "Журнал временно недоступен") from exc
     return {"lines": m._log[-200:]}
 
 

@@ -69,6 +69,7 @@ def test_internal_token_requires_tenant_header_server_mode(monkeypatch):
     monkeypatch.setattr("app.middleware.is_server_mode", lambda: True)
     monkeypatch.setattr("app.middleware.INTERNAL_SERVICE_TOKEN", "svc-test-token")
     monkeypatch.setattr("app.middleware.db_pg.get_tenant", lambda tid: {"id": tid})
+    monkeypatch.setattr("app.middleware.db_pg.subscription_active", lambda tid: True)
 
     fake_main = MagicMock()
     fake_main._try_legacy_unlock = MagicMock()

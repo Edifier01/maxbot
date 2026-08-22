@@ -1,6 +1,5 @@
 tools/
 docs/archive/
-.cursor/
 .git/
 venv/
 data/

@@ -9,7 +9,7 @@ def test_app_main_uses_runtime_shutting_down():
     import app.main as entry
 
     src = inspect.getsource(entry.main)
-    assert "RUNTIME.shutting_down" in src
+    assert "handle_process_signal" in src
     assert "app_main._shutting_down" not in src
 
 

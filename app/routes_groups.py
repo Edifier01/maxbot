@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 from fastapi import APIRouter, HTTPException
 
 from app.routes_models import BulkProfilesIn, GroupIn, GroupPatchIn, ProfileIn
@@ -11,6 +13,33 @@ from app.tenant import is_cabinet_user, redact_cabinet_row
 router = APIRouter(tags=["groups"])
 
 _CABINET_DENIED = "Недоступно в личном кабинете"
+
+
+def _delete_orphan_profile(c, profile_id: int) -> bool:
+    """Delete a profile only when no group still references it.
+
+    This runs in the caller's SQLite transaction so group membership and
+    profile cleanup either commit together or roll back together.
+    """
+    linked = c.execute(
+        "SELECT 1 FROM group_profiles WHERE profile_id=? LIMIT 1", (profile_id,)
+    ).fetchone()
+    if linked:
+        return False
+    c.execute("DELETE FROM antiban_state WHERE profile_id=?", (profile_id,))
+    c.execute("DELETE FROM profiles WHERE id=?", (profile_id,))
+    return True
+
+
+def _cleanup_profile_runtime(profile_id: int) -> None:
+    """Best-effort cleanup after the database transaction has committed."""
+    session_key = m._auth_session_key(profile_id)
+    m._auth_sessions.pop(session_key, None)
+    task = m._login_tasks.pop(session_key, None)
+    if task and not task.done():
+        task.cancel()
+    session_dir = m._resolve_data_dir() / "sessions" / str(profile_id)
+    shutil.rmtree(session_dir, ignore_errors=True)
 
 
 @router.get("/api/groups")
@@ -285,6 +314,7 @@ async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
 @router.delete("/api/groups/{group_id}")
 async def delete_group(group_id: int):
 
+    deleted_profiles: list[int] = []
     with m._conn() as c:
         if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
             raise HTTPException(404, "Группа не найдена")
@@ -296,8 +326,9 @@ async def delete_group(group_id: int):
         ]
         c.execute("DELETE FROM group_profiles WHERE group_id=?", (group_id,))
         c.execute("DELETE FROM groups WHERE id=?", (group_id,))
-    for pid in pids:
-        m._delete_profile_if_orphan(pid)
+        deleted_profiles = [pid for pid in pids if _delete_orphan_profile(c, pid)]
+    for pid in deleted_profiles:
+        _cleanup_profile_runtime(pid)
     m.append_log(f"Группа #{group_id} удалена")
     return {"ok": True}
 
@@ -305,6 +336,7 @@ async def delete_group(group_id: int):
 @router.delete("/api/groups/{group_id}/profiles/{profile_id}")
 async def remove_group_profile(group_id: int, profile_id: int):
 
+    deleted_profile = False
     with m._conn() as c:
         row = c.execute(
             "SELECT 1 FROM group_profiles WHERE group_id=? AND profile_id=?",
@@ -316,7 +348,9 @@ async def remove_group_profile(group_id: int, profile_id: int):
             "DELETE FROM group_profiles WHERE group_id=? AND profile_id=?",
             (group_id, profile_id),
         )
-    m._delete_profile_if_orphan(profile_id)
+        deleted_profile = _delete_orphan_profile(c, profile_id)
+    if deleted_profile:
+        _cleanup_profile_runtime(profile_id)
     m.append_log(f"Профиль #{profile_id} удалён из группы #{group_id}")
     return {"ok": True}
 

@@ -98,36 +98,10 @@ def test_clear_admin_backup_cookie_deletes_backup():
     assert "Max-Age=0" in raw
 
 
-def test_register_fail_closed_when_registration_open_unset(monkeypatch):
-    monkeypatch.delenv("REGISTRATION_OPEN", raising=False)
-    monkeypatch.setattr("app.routes_auth.is_server_mode", lambda: True)
-    from app.routes_auth import RegisterIn, register
+def test_public_registration_route_is_removed():
+    from app.routes_auth import router
 
-    body = RegisterIn(
-        institution_name="School",
-        email="closed@example.com",
-        password="Password1",
-        password_confirm="Password1",
-    )
-    with pytest.raises(HTTPException) as ei:
-        asyncio.run(register(body, MagicMock()))
-    assert ei.value.status_code == 403
-
-
-def test_register_fail_closed_when_registration_open_zero(monkeypatch):
-    monkeypatch.setenv("REGISTRATION_OPEN", "0")
-    monkeypatch.setattr("app.routes_auth.is_server_mode", lambda: True)
-    from app.routes_auth import RegisterIn, register
-
-    body = RegisterIn(
-        institution_name="School",
-        email="closed@example.com",
-        password="Password1",
-        password_confirm="Password1",
-    )
-    with pytest.raises(HTTPException) as ei:
-        asyncio.run(register(body, MagicMock()))
-    assert ei.value.status_code == 403
+    assert "/api/auth/register" not in {route.path for route in router.routes}
 
 
 def test_exit_impersonation_fails_closed_without_admin_cookie(monkeypatch):

@@ -18,6 +18,10 @@ bash scripts/deploy.sh          # build + up + health
 bash scripts/verify_deploy.sh   # полная проверка
 ```
 
+Образ запускает приложение как UID/GID `10001`. `deploy.sh` после сборки
+однократно выравнивает ownership существующего `max_server_data` через
+короткий root-контейнер и затем запускает постоянные сервисы без root.
+
 `verify_deploy.sh` проверяет:
 
 1. `docker compose config -q`
@@ -45,13 +49,19 @@ bash scripts/restore-volumes.sh ./backups/<stamp>
 
 ### GitHub Actions deploy
 
-Workflow `.github/workflows/deploy.yml` — после успешного CI, SSH на VPS, checkout immutable SHA (`workflow_run.head_sha` или `github.sha`), backup if postgres volume/data exists, `docker compose up -d` (`--profile celery` when `USE_CELERY=1`), health с `db_ok`.
+Workflow `.github/workflows/deploy.yml` — после успешного CI, SSH на VPS, checkout immutable SHA (`workflow_run.head_sha` или `github.sha`), backup if postgres volume/data exists, `docker compose up -d` (`--profile celery` when `USE_CELERY=1`), health с `db_ok`. Deploy job привязан к GitHub Environment `production`; включите для него Required reviewers в настройках репозитория, чтобы получить обязательное ручное подтверждение.
 
 ---
 
 ## D-2 — Celery profile
 
 In-process worker pool is the campaign runtime (`USE_CELERY=0` by default). Celery is **trigger-only**: the worker HTTP-POSTs `/api/campaign/start` with `INTERNAL_SERVICE_TOKEN` + `X-Tenant-Id` into **one** in-process `app`. The campaign runtime registry is process-local. Multiple campaign-owning `app` replicas are **not** supported.
+
+При server startup приложение берёт POSIX lock `/app/data/.app-instance.lock`.
+Второй `app`, подключённый к тому же `max_server_data`, завершится с ошибкой до
+инициализации кампаний. Это технически защищает Compose/VPS от случайного
+`--scale app=2`; для нескольких хостов всё равно нужен отдельный distributed
+campaign coordinator.
 
 Deploy with `--profile celery` only as a trigger worker, still one `app` replica. Do not scale campaigns across machines via extra app replicas.
 
@@ -107,7 +117,7 @@ bash scripts/backup-volumes.sh
 # → ./backups/YYYYMMDD-HHMMSS/{pg.dump,data.tar.gz,README.txt}
 ```
 
-Backup is hot: the app stays up. The script sets `umask 077` and `chmod 700` on the destination so archives inherit restrictive perms. Before the data tar it best-effort `PRAGMA wal_checkpoint(TRUNCATE)` on `/app/data/**/app.db` (skipped with a warning if `app` is not running; `pg_dump` still needs postgres). The script verifies archive integrity (`pg.dump` non-empty + `PGDMP` magic; `data.tar.gz` `gzip -t` and at least one tar member). Treat backup directories as secret (vault material).
+Backup uses a short maintenance window: it records which app/celery services are running, stops writers, creates the PostgreSQL dump, checkpoints every SQLite WAL, archives `max_server_data`, verifies both archives, and restarts only the services that were running. An EXIT/INT/TERM trap also attempts restart after failure. This makes the PostgreSQL + SQLite pair consistent relative to application writes. The script sets `umask 077` and `chmod 700` on the destination. Treat backup directories as secret (vault material).
 
 Cron (ежедневно, 03:00):
 
@@ -121,14 +131,16 @@ Cron (ежедневно, 03:00):
 
 ```bash
 bash scripts/restore-volumes.sh ./backups/20260729-030000
+# Автоматизированный DR (подтверждение принято вызывающей системой):
+bash scripts/restore-volumes.sh --yes ./backups/20260729-030000
 ```
 
-Скрипт останавливает `app`/`celery-worker`, сначала extract+verify+swap data volume (live children → `.outgoing-restore`, **without** deleting that dir yet), затем `pg_restore --exit-on-error`. If PG restore fails, live data is swapped back from `.outgoing-restore` and the script exits non-zero — a failed PG restore rolls the data volume back. The attempted restore stays in leftover `.outgoing-restore` (inspect/remove before retry). On success, `.outgoing-restore` is removed, the stack is started, and `verify_deploy.sh` runs. An interrupted swap also leaves `.outgoing-restore` — retry will not proceed while that directory exists.
+Скрипт останавливает `app`/`celery-worker`, сначала extract+verify+swap data volume (live children → `.outgoing-restore`, **without** deleting that dir yet), затем `pg_restore --exit-on-error --single-transaction`. If PG restore fails, live data is swapped back from `.outgoing-restore` and the script exits non-zero — a failed PG restore rolls the data volume back. The attempted restore stays in leftover `.outgoing-restore` (inspect/remove before retry). On success, `.outgoing-restore` is removed, the stack is started, and `verify_deploy.sh` runs. An interrupted swap also leaves `.outgoing-restore` — retry will not proceed while that directory exists.
 
 ### Ручной PG-only restore
 
 ```bash
-docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner --exit-on-error \
+docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner --exit-on-error --single-transaction \
   < backups/<stamp>/pg.dump
 ```
 
@@ -224,9 +236,11 @@ Dedupe: 15 мин на тип алерта.
 
 ### Self-registration (`REGISTRATION_OPEN`)
 
-Compose and `.env.example` default to `1` (open for new institutions). Set `0` to close registration (admin-created accounts only).
+Compose and `.env.example` default to `0` (closed; admin-created accounts only). Set `1` explicitly to enable self-registration for new institutions.
 
-If the var is **unset in the app process**, `POST /api/auth/register` still **403** (Python fail-closed). Compose `${REGISTRATION_OPEN:-1}` only applies when the var is omitted from the environment Compose interpolates — an existing production `.env` with `REGISTRATION_OPEN=0` stays closed until the operator changes it.
+If the var is **unset in the app process**, `POST /api/auth/register` returns **403**. Compose `${REGISTRATION_OPEN:-0}` follows the same fail-closed policy. An existing production `.env` with `REGISTRATION_OPEN=1` stays open until the operator changes it.
+
+При старте server также разбирает crash-leftovers `{tenant_id}.deleting`: если tenant ещё существует в PostgreSQL, каталог возвращается на место; если tenant уже удалён — quarantine очищается. Конфликт, когда существуют оба каталога, не удаляется автоматически и требует ручной проверки.
 
 ### Admin API
 

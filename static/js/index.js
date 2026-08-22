@@ -469,7 +469,6 @@ let openGroupId = null;
 
     document.getElementById('btnLogout').addEventListener('click', logoutUser);
     document.getElementById('dashFilter').addEventListener('change', () => loadDashboard());
-    document.getElementById('btnRefreshDash').addEventListener('click', () => loadDashboard());
     document.getElementById('btnStart').addEventListener('click', function() { withLoading(this, startCampaign); });
     document.getElementById('btnPause').addEventListener('click', function() { withLoading(this, pauseCampaign); });
     document.getElementById('btnStop').addEventListener('click', function() { withLoading(this, stopCampaign); });
@@ -482,7 +481,6 @@ let openGroupId = null;
       if (e.key === 'Enter') loadSendLog(0);
     });
     document.getElementById('sendLogStatus').addEventListener('change', () => loadSendLog(0));
-    document.getElementById('btnSendLogSearch').addEventListener('click', () => loadSendLog(0));
     document.getElementById('msgFile').addEventListener('change', onMsgFileChange);
     document.getElementById('btnUploadMessages').addEventListener('click', function() {
       withLoading(this, uploadMessages).then(() => onMsgFileChange());

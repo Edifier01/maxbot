@@ -93,6 +93,8 @@ def test_campaign_start_sets_auto_run(m, monkeypatch):
 def test_retry_failed_sets_auto_run(m, monkeypatch):
     m.set_setting("auto_run", "0")
     with m._conn() as c:
+        c.execute("INSERT INTO profiles (id, phone) VALUES (1, '+79000000001')")
+        c.execute("INSERT INTO groups (id, name) VALUES (1, 'retry-group')")
         c.execute(
             "INSERT INTO send_log (profile_id, group_id, message_idx, status) "
             "VALUES (1, 1, 4, 'failed')"
@@ -100,6 +102,7 @@ def test_retry_failed_sets_auto_run(m, monkeypatch):
 
     monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
     monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+    monkeypatch.setattr(m, "_preflight_group_proxies", AsyncMock())
     start_mock = AsyncMock()
     monkeypatch.setattr(m, "_start_worker", start_mock)
 

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.responses import JSONResponse
 
 from app import auth, db_pg
@@ -20,18 +18,18 @@ from app.runtime import main as app_main
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-class RegisterIn(BaseModel):
-    institution_name: str = Field(min_length=2, max_length=200)
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
-    password_confirm: str = Field(min_length=8, max_length=128)
-    remember_me: bool = True
-
-
 class LoginIn(BaseModel):
-    email: EmailStr
+    login: str = Field(min_length=2, max_length=200)
     password: str = Field(min_length=1, max_length=128)
     remember_me: bool = True
+
+    @field_validator("login")
+    @classmethod
+    def validate_login(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("Логин должен содержать минимум 2 символа")
+        return value
 
 
 def _session_payload(user: dict) -> dict:
@@ -69,49 +67,13 @@ def _auth_json_response(
     return response
 
 
-@router.post("/register")
-async def register(body: RegisterIn, request: Request):
-    if not is_server_mode():
-        raise HTTPException(400, "Регистрация доступна только на сервере")
-    if os.environ.get("REGISTRATION_OPEN", "0").strip().lower() not in (
-        "1",
-        "true",
-        "yes",
-    ):
-        raise HTTPException(
-            403, "Регистрация закрыта. Обратитесь к администратору."
-        )
-    if body.password != body.password_confirm:
-        raise HTTPException(400, "Пароли не совпадают")
-    try:
-        info = auth.register_user(body.institution_name, body.email, body.password)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-
-    from app.tenant_init import init_tenant_db, rollback_tenant_registration
-
-    try:
-        init_tenant_db(app_main, info["tenant_id"])
-    except Exception:
-        rollback_tenant_registration(info["tenant_id"], app_main.ROOT)
-        raise HTTPException(
-            500, "Не удалось инициализировать кабинет. Попробуйте позже."
-        ) from None
-
-    user = db_pg.get_user_by_id(info["user_id"])
-    if not user:
-        raise HTTPException(500, "Не удалось создать пользователя")
-    data, token = _token_response(user)
-    return _auth_json_response(data, request, remember_me=body.remember_me, token=token)
-
-
 @router.post("/login")
 async def login(body: LoginIn, request: Request):
     if not is_server_mode():
         raise HTTPException(400, "Вход доступен только на сервере")
-    user = auth.authenticate(body.email, body.password)
+    user = auth.authenticate(body.login, body.password)
     if not user:
-        raise HTTPException(401, "Неверный email или пароль")
+        raise HTTPException(401, "Неверный логин или пароль")
 
     if user.get("tenant_id"):
         from app.tenant_init import init_tenant_db
@@ -171,6 +133,17 @@ async def exit_impersonation(request: Request):
     user = db_pg.get_user_by_id(int(payload["sub"]))
     if not user:
         raise HTTPException(401, "Пользователь не найден")
+    impersonation_token = _user_cookie_token(request)
+    if impersonation_token:
+        try:
+            impersonation_payload = auth.decode_token(impersonation_token)
+        except Exception:
+            impersonation_payload = None
+        if impersonation_payload and impersonation_payload.get("imp"):
+            jti = impersonation_payload.get("jti")
+            if jti:
+                db_pg.revoke_token(jti, auth.token_expires_at(impersonation_payload))
+                auth.invalidate_session_cache(jti)
     data = _session_payload(user)
     response = JSONResponse(content=data)
     set_auth_cookie(response, admin_token, remember_me=False, request=request)

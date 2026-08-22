@@ -3,8 +3,37 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from cryptography.fernet import Fernet
+
+
+def reconcile_tenant_quarantines(
+    root: Path, tenant_exists: Callable[[int], bool]
+) -> dict[str, int]:
+    """Resolve crash leftovers from delete_user using PostgreSQL as authority."""
+    import shutil
+
+    tenants_root = root / "data" / "tenants"
+    result = {"restored": 0, "purged": 0, "conflicts": 0}
+    if not tenants_root.is_dir():
+        return result
+    for quarantine in tenants_root.glob("*.deleting"):
+        raw_id = quarantine.name.removesuffix(".deleting")
+        if not raw_id.isdigit() or not quarantine.is_dir():
+            continue
+        tenant_id = int(raw_id)
+        live = tenants_root / raw_id
+        if live.exists():
+            result["conflicts"] += 1
+            continue
+        if tenant_exists(tenant_id):
+            quarantine.rename(live)
+            result["restored"] += 1
+        else:
+            shutil.rmtree(quarantine)
+            result["purged"] += 1
+    return result
 
 
 def ensure_tenant_data(root: Path, tenant_id: int) -> Path:

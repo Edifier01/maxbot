@@ -33,13 +33,19 @@ def main(argv: list[str] | None = None) -> None:
     from app.campaign_runtime import RUNTIME
 
     def _handle_signal(signum, _frame):
-        if RUNTIME.shutting_down:
-            return
-        RUNTIME.shutting_down = True
-        app_main.append_log(f"Сигнал {signum}: шифрование сессий и выход…")
-        app_main._encrypt_all_sessions()
-        hooks.after_shutdown()
-        sys.exit(0)
+        from app.shutdown import handle_process_signal
+
+        def _exit(code: int = 0) -> None:
+            hooks.after_shutdown()
+            sys.exit(code)
+
+        handle_process_signal(
+            signum,
+            _frame,
+            encrypt_all=app_main._encrypt_all_sessions,
+            exit_fn=_exit,
+            log=app_main.append_log,
+        )
 
     with contextlib.suppress(ValueError, OSError):
         signal.signal(signal.SIGTERM, _handle_signal)
@@ -67,7 +73,10 @@ def main(argv: list[str] | None = None) -> None:
 
     import uvicorn
 
-    uvicorn.run(app_main.app, host=app_main.HOST, port=app_main.PORT, log_level="info")
+    try:
+        uvicorn.run(app_main.app, host=app_main.HOST, port=app_main.PORT, log_level="info")
+    finally:
+        hooks.after_shutdown()
 
 
 if __name__ == "__main__":

@@ -139,6 +139,29 @@ function jsonHeaders(json = true) {
       }).join('');
       await loadTenantWorkerPools(items);
     }
+    async function createUser(event) {
+      event.preventDefault();
+      const hint = document.getElementById('createUserHint');
+      const btn = document.getElementById('btnCreateUser');
+      const institution = document.getElementById('newInstitution');
+      const login = document.getElementById('newLogin');
+      const password = document.getElementById('newPassword');
+      hint.textContent = '';
+      btn.disabled = true;
+      try {
+        await api('/admin/users', { method: 'POST', body: JSON.stringify({
+          institution_name: institution.value.trim(), login: login.value.trim(), password: password.value,
+        }) });
+        event.target.reset();
+        hint.textContent = 'Кабинет создан.';
+        toast('Кабинет создан', 'success');
+        await loadUsers();
+      } catch (e) {
+        hint.textContent = 'Ошибка: ' + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
     async function loadTenantWorkerPools(items) {
       await Promise.all(items.map(async u => {
         try {
@@ -535,6 +558,7 @@ function jsonHeaders(json = true) {
     document.getElementById('btnSaveSettings').addEventListener('click', saveGlobalSettings);
     document.getElementById('msgFile').addEventListener('change', onAdminMsgFileChange);
     document.getElementById('btnUploadMessages').addEventListener('click', uploadAdminMessages);
+    document.getElementById('createUserForm').addEventListener('submit', createUser);
 
     document.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-action]');

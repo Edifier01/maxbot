@@ -88,19 +88,14 @@ Optional: Celery → POST /api/campaign/start (INTERNAL_SERVICE_TOKEN)
 | `docs/PRODUCTION-OPS.md` | Present — deploy, Celery, backup, monitoring |
 | `docs/PROJECT_PLAN.md` | Present — vision, milestones, risks, out-of-scope |
 | `docs/adr/001–003` | Present — tenant workers, pacing, worker extraction |
-| `docs/MASTER-AI-WORKFLOW.md` | **Present** (harness) |
 | `docs/deps/`, `docs/lessons/` | **Absent** (Phase 2/3 optional — N/A for now) |
-| `AGENTS.md` | **Present** |
-| `.cursor/**` | **Present** — 18 agents, 18 skills, 14 rules, hooks, PM, workflows |
-| `.cursor/skills/README.md` | **Missing** (referenced by routing) |
-| `maxserver-*` project skills (7) | **Missing** — routing broken; see `HARNESS-AUDIT.md` |
 
-**Doc gaps (product-facing, non-harness):**
+**Doc gaps (product-facing):**
 
 - No API OpenAPI/export doc beyond FastAPI autodocs (if enabled in runtime).
 - No dedicated security threat model doc (risks scattered in PROJECT_PLAN / HOW-IT-WORKS).
-- `main.py` remaining ownership map vs extracted `app/` modules not summarized for agents (would belong in AGENTS.md post-upgrade).
-- Billing explicitly manual — OK; should stay documented as out-of-scope for payment agents/skills.
+- `main.py` remaining ownership map vs extracted `app/` modules is not summarized.
+- Billing explicitly manual — OK; should stay documented as out-of-scope for payment integrations.
 
 ---
 
@@ -140,13 +135,12 @@ Payments/billing gateway: **N/A** (manual admin grant only).
 | Payments / billing | **N/A** (manual subscriptions) |
 | Deployment / ops (Docker, Caddy, scripts) | Required |
 | Admin / monitoring | Required |
-| Maintenance / PM workflow (`/start-feature`) | Required (harness) |
 
 ---
 
 ## 7. Suggested mechanical commands
 
-Document these in future `AGENTS.md`:
+Useful project commands:
 
 ```bash
 # Install
@@ -177,11 +171,4 @@ CI source of truth: `.github/workflows/ci.yml` (`server-smoke`, `compose-config`
 
 ## 8. Audit verdict
 
-Mature production-oriented FastAPI SaaS with solid product docs (HOW-IT-WORKS, PRODUCTION-OPS, ADRs, PROJECT_PLAN) and meaningful test coverage around auth, vault, and tenant isolation. Architecture risk concentrates on **tenant isolation**, **vault/secrets**, **campaign/anti-ban**, and residual **`main.py` monolith**. **AI harness shell is installed** (~85%) but **domain skills are broken** (seven `maxserver-*` skills referenced everywhere, zero on disk) — upgrade phase must fix routing before agents can follow checklists.
-
----
-
-## Related
-
-- Harness audit: `docs/HARNESS-AUDIT.md`
-- Gap Report: `knowledge-catalog/reports/max-sender-gap.md`
+Mature production-oriented FastAPI SaaS with solid product docs (HOW-IT-WORKS, PRODUCTION-OPS, ADRs, PROJECT_PLAN) and meaningful test coverage around auth, vault, and tenant isolation. Architecture risk concentrates on **tenant isolation**, **vault/secrets**, **campaign/anti-ban**, and residual **`main.py` monolith**.

@@ -148,6 +148,11 @@ def test_save_messages_resets_all_tenant_queue_indices(tmp_path, monkeypatch):
                     (json.dumps([7, 8, 9]),),
                 )
                 c.execute(
+                    "INSERT INTO profiles (id, phone) VALUES (1, ?)",
+                    (f"+7900000000{tid}",),
+                )
+                c.execute("INSERT INTO groups (id, name) VALUES (1, 'reset-test')")
+                c.execute(
                     "INSERT INTO send_log (profile_id, group_id, message_idx, status) "
                     "VALUES (1, 1, 5, 'sent')"
                 )

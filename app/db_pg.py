@@ -103,9 +103,25 @@ def ping() -> bool:
         return False
 
 
-def _migration_done(cur, version: str) -> bool:
-    cur.execute("SELECT 1 FROM schema_migrations WHERE version = %s", (version,))
-    return cur.fetchone() is not None
+def _migration_done(cur, version: str, checksum: str) -> bool:
+    cur.execute(
+        "SELECT checksum FROM schema_migrations WHERE version = %s", (version,)
+    )
+    row = cur.fetchone()
+    if row is None:
+        return False
+    stored = row.get("checksum")
+    if stored and stored != checksum:
+        raise RuntimeError(
+            f"Migration {version} checksum mismatch: applied SQL was modified"
+        )
+    if not stored:
+        # Adopt checksums for databases created before checksum tracking.
+        cur.execute(
+            "UPDATE schema_migrations SET checksum = %s WHERE version = %s",
+            (checksum, version),
+        )
+    return True
 
 
 def _apply_pending_migrations() -> None:
@@ -115,14 +131,16 @@ def _apply_pending_migrations() -> None:
     for path in sorted(migrations_dir.glob("*.sql")):
         version = path.stem
         sql = path.read_text(encoding="utf-8")
+        checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
         with _cursor(transaction=True) as cur:
             cur.execute("SELECT pg_advisory_xact_lock(%s)", (_MIGRATION_LOCK_ID,))
-            if _migration_done(cur, version):
+            if _migration_done(cur, version, checksum):
                 continue
             cur.execute(sql)
             cur.execute(
-                "INSERT INTO schema_migrations (version) VALUES (%s) ON CONFLICT DO NOTHING",
-                (version,),
+                "INSERT INTO schema_migrations (version, checksum) VALUES (%s, %s) "
+                "ON CONFLICT DO NOTHING",
+                (version, checksum),
             )
 
 

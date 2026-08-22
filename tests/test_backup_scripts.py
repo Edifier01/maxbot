@@ -42,7 +42,10 @@ def test_backup_umask_and_wal_checkpoint():
     assert backup.index("mkdir") < backup.index('chmod 700 "$DEST"')
     assert "PRAGMA wal_checkpoint(TRUNCATE)" in backup
     assert backup.index("wal_checkpoint") < backup.index("data.tar.gz")
-    assert "skipping SQLite WAL checkpoint" in backup
+    assert "docker compose stop celery-worker app" in backup
+    assert "trap restart_after_backup EXIT INT TERM" in backup
+    assert "docker compose start" in backup
+    assert backup.index("docker compose stop celery-worker app") < backup.index("pg_dump")
 
 
 def test_restore_defers_outgoing_rmtree_until_pg_ok():
@@ -53,6 +56,8 @@ def test_restore_defers_outgoing_rmtree_until_pg_ok():
     assert restore.index("shutil.rmtree(outgoing)") > pg_at
     assert "rolling data volume back" in restore
     assert "leftover .outgoing-restore" in restore
+    assert '"${1:-}" == "--yes"' in restore
+    assert 'if [[ "$ASSUME_YES" != "1" ]]' in restore
 
 
 def test_deploy_ssh_timeout_covers_image_build():
@@ -84,3 +89,22 @@ def test_ops_docs_pg_restore_rollback():
     assert "--exit-on-error" in ops
     assert "trigger-only" in ops
     assert "horizontal scale" not in ops.lower()
+
+
+def test_ci_actions_images_and_permissions_are_immutable():
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+    for workflow in (ci, deploy):
+        assert "permissions:\n  contents: read" in workflow
+        assert "actions/checkout@v" not in workflow
+        assert "actions/setup-python@v" not in workflow
+    assert "appleboy/ssh-action@v" not in deploy
+    assert "environment: production" in deploy
+    assert "postgres:16-alpine@sha256:" in ci
+
+
+def test_compose_has_runtime_resource_limits():
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert compose.count("mem_limit:") >= 5
+    assert compose.count("cpus:") >= 5
+    assert compose.count("pids_limit:") >= 5

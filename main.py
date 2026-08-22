@@ -797,6 +797,8 @@ def _prepare_auto_resume_pool() -> bool:
 
 
 async def _try_auto_resume(*, log_prefix: str = "Автовозобновление") -> bool:
+    if REGISTRY.app.shutting_down:
+        return False
     if not _auto_run_enabled():
         return False
     if _is_server_mode():
@@ -1290,6 +1292,9 @@ async def _with_client_unlocked(
     async def on_start(c: Client) -> None:
         try:
             box["result"] = await fn(c)
+        except asyncio.CancelledError as e:
+            box["err"] = e
+            raise
         except Exception as e:
             box["err"] = e
         finally:
@@ -2804,23 +2809,9 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        REGISTRY.app.shutting_down = True
-        if not _is_test_mode():
-            for task in (
-                RUNTIME.watchdog_task,
-                RUNTIME.scheduler_task,
-                RUNTIME.backup_task,
-                RUNTIME.ops_alert_task,
-                RUNTIME.subscription_task,
-            ):
-                if task:
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
-            RUNTIME.watchdog_task = RUNTIME.scheduler_task = RUNTIME.backup_task = None
-            RUNTIME.ops_alert_task = RUNTIME.subscription_task = None
-        await _stop_all_workers(finish_status="stopped", reason="Остановка сервера")
-        _encrypt_all_sessions()
+        from app.shutdown import graceful_shutdown
+
+        await graceful_shutdown()
 
 
 def _encrypt_sessions_for_data_dir(data_dir: Path) -> None:
@@ -2891,12 +2882,15 @@ if __name__ == "__main__":
     init_db()
 
     def _handle_signal(signum, _frame):
-        if REGISTRY.app.shutting_down:
-            return
-        REGISTRY.app.shutting_down = True
-        append_log(f"Сигнал {signum}: шифрование сессий и выход…")
-        _encrypt_all_sessions()
-        sys.exit(0)
+        from app.shutdown import handle_process_signal
+
+        handle_process_signal(
+            signum,
+            _frame,
+            encrypt_all=_encrypt_all_sessions,
+            exit_fn=sys.exit,
+            log=append_log,
+        )
 
     with contextlib.suppress(ValueError, OSError):
         signal.signal(signal.SIGTERM, _handle_signal)
