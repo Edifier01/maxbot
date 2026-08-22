@@ -41,7 +41,7 @@ def _cookie_token(resp) -> str:
 def _admin_token(client) -> str:
     response = client.post(
         "/api/auth/login",
-        json={"email": os.environ["ADMIN_EMAIL"], "password": "AdminPass123!"},
+        json={"login": os.environ["ADMIN_EMAIL"], "password": "AdminPass123!"},
     )
     assert response.status_code == 200, response.text
     return _cookie_token(response)
@@ -61,7 +61,7 @@ def _create_user(
     )
     assert response.status_code == 200, response.text
     login = client.post(
-        "/api/auth/login", json={"email": email, "password": "UserPass123!"}
+        "/api/auth/login", json={"login": email, "password": "UserPass123!"}
     )
     assert login.status_code == 200, login.text
     return response.json()["tenant_id"], _cookie_token(login)

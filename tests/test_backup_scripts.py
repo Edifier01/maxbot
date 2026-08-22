@@ -21,6 +21,7 @@ def test_backup_restore_do_not_compose_run_alpine():
     assert "for child in list(root.iterdir())" not in restore[:extract_at]
     assert restore.index("--entrypoint python") < restore.index("pg_restore")
     assert 'filter="data"' in restore
+    assert "os.chown(incoming, 10001, 10001)" in restore
 
 
 def test_backup_verifies_archive_integrity():

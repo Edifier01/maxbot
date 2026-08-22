@@ -49,7 +49,6 @@ def auth_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
-    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "remember-me-jwt-secret-min-32-chars")
     monkeypatch.setenv("JWT_EXPIRE_HOURS", "168")
     monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
@@ -83,15 +82,19 @@ def auth_client(tmp_path, monkeypatch):
     db_pg.close()
 
 
-def _register_user(client, uid: str, *, remember_me: bool = True):
+def _register_user(client, uid: str):
+    admin = client.post(
+        "/api/auth/login",
+        json={"login": os.environ["ADMIN_EMAIL"], "password": "AdminPass123!"},
+    )
+    assert admin.status_code == 200, admin.text
     return client.post(
-        "/api/auth/register",
+        "/api/admin/users",
+        cookies=_tok(_cookie_token(admin)),
         json={
             "institution_name": f"School {uid}",
-            "email": f"user-{uid}@example.com",
+            "login": f"user-{uid}@example.com",
             "password": "UserPass123!",
-            "password_confirm": "UserPass123!",
-            "remember_me": remember_me,
         },
     )
 
@@ -104,7 +107,7 @@ def test_login_remember_me_sets_httponly_cookie(auth_client):
     login = client.post(
         "/api/auth/login",
         json={
-            "email": f"user-{uid}@example.com",
+            "login": f"user-{uid}@example.com",
             "password": "UserPass123!",
             "remember_me": True,
         },
@@ -125,7 +128,7 @@ def test_login_remember_me_false_no_persistent_cookie(auth_client):
     login = client.post(
         "/api/auth/login",
         json={
-            "email": f"user-{uid}@example.com",
+            "login": f"user-{uid}@example.com",
             "password": "UserPass123!",
             "remember_me": False,
         },
@@ -144,7 +147,7 @@ def test_restore_session_with_valid_cookie(auth_client):
     login = client.post(
         "/api/auth/login",
         json={
-            "email": f"user-{uid}@example.com",
+            "login": f"user-{uid}@example.com",
             "password": "UserPass123!",
             "remember_me": True,
         },
@@ -173,7 +176,7 @@ def test_logout_clears_cookie(auth_client):
     login = client.post(
         "/api/auth/login",
         json={
-            "email": f"user-{uid}@example.com",
+            "login": f"user-{uid}@example.com",
             "password": "UserPass123!",
             "remember_me": True,
         },
@@ -198,7 +201,7 @@ def test_impersonate_does_not_set_persistent_cookie(auth_client):
 
     admin_login = client.post(
         "/api/auth/login",
-        json={"email": admin_email, "password": "AdminPass123!", "remember_me": True},
+        json={"login": admin_email, "password": "AdminPass123!", "remember_me": True},
     )
     assert admin_login.status_code == 200
     admin_token = _cookie_token(admin_login)

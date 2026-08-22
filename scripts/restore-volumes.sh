@@ -40,6 +40,7 @@ if outgoing.exists():
 if incoming.exists():
     shutil.rmtree(incoming)
 incoming.mkdir()
+os.chown(incoming, 10001, 10001)
 with tarfile.open("/backup/data.tar.gz") as archive:
     os.setegid(10001)
     os.seteuid(10001)

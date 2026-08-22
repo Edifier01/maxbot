@@ -40,7 +40,6 @@ def imp_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
-    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "imp-jwt-secret-min-32-characters-long")
     monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")
@@ -79,24 +78,23 @@ def test_impersonation_me_email_and_campaign_history(imp_client):
     user_email = f"tenant-{uid}@example.com"
     admin_email = os.environ["ADMIN_EMAIL"]
 
+    admin_login = client.post(
+        "/api/auth/login",
+        json={"login": admin_email, "password": "AdminPass123!"},
+    )
+    assert admin_login.status_code == 200
+    admin_token = _cookie_token(admin_login)
     reg = client.post(
-        "/api/auth/register",
+        "/api/admin/users",
+        cookies=_tok(admin_token),
         json={
             "institution_name": f"School {uid}",
-            "email": user_email,
+            "login": user_email,
             "password": "UserPass123!",
-            "password_confirm": "UserPass123!",
         },
     )
     assert reg.status_code == 200, reg.text
     tenant_id = reg.json()["tenant_id"]
-
-    admin_login = client.post(
-        "/api/auth/login",
-        json={"email": admin_email, "password": "AdminPass123!"},
-    )
-    assert admin_login.status_code == 200
-    admin_token = _cookie_token(admin_login)
 
     client.post(
         f"/api/admin/users/{tenant_id}/subscription",

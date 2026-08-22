@@ -30,7 +30,6 @@ def reg_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
-    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "rollback-jwt-secret-min-32-chars")
     monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
     monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")
@@ -64,18 +63,24 @@ def reg_client(tmp_path, monkeypatch):
     db_pg.close()
 
 
-def test_register_rollback_on_init_failure(reg_client):
+def test_admin_create_rollback_on_init_failure(reg_client):
     client, main_mod, uid = reg_client
     email = f"fail-{uid}@example.com"
 
+    admin = client.post(
+        "/api/auth/login",
+        json={"login": f"admin-{uid}@example.com", "password": "AdminPass123!"},
+    )
+    assert admin.status_code == 200, admin.text
+
     with patch("app.tenant_init.init_tenant_db", side_effect=RuntimeError("boom")):
         r = client.post(
-            "/api/auth/register",
+            "/api/admin/users",
+            cookies={"max_token": admin.cookies.get("max_token")},
             json={
                 "institution_name": "Test Org",
-                "email": email,
+                "login": email,
                 "password": "Password123!",
-                "password_confirm": "Password123!",
             },
         )
     assert r.status_code == 500

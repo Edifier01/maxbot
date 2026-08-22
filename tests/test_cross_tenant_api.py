@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 
 import pytest
@@ -26,15 +27,20 @@ def _truncate_saas() -> None:
 
 def _register(client, uid: str, n: int) -> tuple[dict, str]:
     email = f"user{n}-{uid}@example.com"
-    body = {
-        "institution_name": f"Org {n} {uid}",
-        "email": email,
-        "password": "CrossTestPass123!",
-        "password_confirm": "CrossTestPass123!",
-    }
-    r = client.post("/api/auth/register", json=body)
+    admin = client.post(
+        "/api/auth/login",
+        json={"login": os.environ["ADMIN_EMAIL"], "password": "AdminPass123!"},
+    )
+    assert admin.status_code == 200, admin.text
+    r = client.post(
+        "/api/admin/users",
+        cookies={"max_token": admin.cookies.get("max_token")},
+        json={"institution_name": f"Org {n} {uid}", "login": email, "password": "CrossTestPass123!"},
+    )
     assert r.status_code == 200, r.text
-    token = r.cookies.get("max_token")
+    login = client.post("/api/auth/login", json={"login": email, "password": "CrossTestPass123!"})
+    assert login.status_code == 200, login.text
+    token = login.cookies.get("max_token")
     assert token
     return r.json(), token
 
@@ -44,8 +50,9 @@ def cross_client(tmp_path, monkeypatch):
     uid = uuid.uuid4().hex[:8]
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
-    monkeypatch.setenv("REGISTRATION_OPEN", "1")
     monkeypatch.setenv("JWT_SECRET", "cross-tenant-jwt-secret-min-32-chars")
+    monkeypatch.setenv("ADMIN_EMAIL", f"admin-{uid}@example.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "AdminPass123!")
     monkeypatch.setenv("INTERNAL_SERVICE_TOKEN", "cross-internal-token")
 
     import importlib
