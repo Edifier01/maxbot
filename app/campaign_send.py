@@ -91,14 +91,14 @@ def classify_send_exception(exc: BaseException, outcome: str) -> str:
 def _setting_float(key: str, default: float) -> float:
     try:
         return float(main.get_setting(key) or str(default))
-    except ValueError:
+    except (ValueError, sqlite3.Error):
         return default
 
 
 def _setting_int(key: str, default: int) -> int:
     try:
         return int(float(main.get_setting(key) or str(default)))
-    except ValueError:
+    except (ValueError, sqlite3.Error):
         return default
 
 
@@ -354,12 +354,11 @@ async def send_with_retry(
                 f"Попытка {attempt + 1}/{main.MAX_RETRY} для #{profile['id']}, "
                 f"повтор через {delay}с: {last_err}"
             )
-            end_at = time.monotonic() + float(delay)
-            while time.monotonic() < end_at:
+            remaining = float(delay)
+            while remaining > 0:
                 main._touch_worker_activity()
-                left = end_at - time.monotonic()
-                if left <= 0:
-                    break
-                await asyncio.sleep(min(30.0, left))
+                chunk = min(30.0, remaining)
+                await asyncio.sleep(chunk)
+                remaining -= chunk
     state.mark_failed_unsent(last_err)
     return False
