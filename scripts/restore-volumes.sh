@@ -57,6 +57,21 @@ for child in list(incoming.iterdir()):
     child.rename(root / child.name)
 incoming.rmdir()'
 
+docker compose up -d postgres
+postgres_ready=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if docker compose exec -T postgres pg_isready -U maxsender -d maxsender >/dev/null 2>&1; then
+    postgres_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$postgres_ready" != "1" ]]; then
+  echo "PostgreSQL не готов после 20 секунд; restore остановлен." >&2
+  docker compose logs --tail=80 postgres >&2 || true
+  exit 1
+fi
+
 echo "Восстановление PostgreSQL…"
 if docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner \
   --exit-on-error --single-transaction \

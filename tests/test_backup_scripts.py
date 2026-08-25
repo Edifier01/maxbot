@@ -53,6 +53,9 @@ def test_restore_defers_outgoing_rmtree_until_pg_ok():
     restore = (ROOT / "scripts" / "restore-volumes.sh").read_text(encoding="utf-8")
     assert "--exit-on-error" in restore
     pg_at = restore.index("pg_restore")
+    start_at = restore.index("docker compose up -d postgres")
+    ready_at = restore.index("pg_isready")
+    assert start_at < ready_at < pg_at
     assert "shutil.rmtree(outgoing)" not in restore[:pg_at]
     assert restore.index("shutil.rmtree(outgoing)") > pg_at
     assert "rolling data volume back" in restore
@@ -67,6 +70,10 @@ def test_dr_smoke_exercises_backup_then_restore():
     assert "restore-volumes.sh --yes" in smoke
     assert "SELECT value FROM dr_smoke" in smoke
     assert "/app/data/dr-smoke/value" in smoke
+    backup_at = smoke.index("backup-volumes.sh")
+    stop_at = smoke.index("docker compose stop postgres")
+    restore_at = smoke.index("restore-volumes.sh --yes")
+    assert backup_at < stop_at < restore_at
 
 
 def test_deploy_ssh_reuses_hardened_script():
