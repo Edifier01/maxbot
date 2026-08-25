@@ -10,6 +10,17 @@ import pytest
 from app.tenant import tenant_scope
 
 
+@pytest.fixture(autouse=True)
+def reset_runtime_registry():
+    from app.campaign_runtime import REGISTRY
+
+    REGISTRY.reset_test()
+    try:
+        yield
+    finally:
+        REGISTRY.reset_test()
+
+
 def test_cancel_after_send_persists_sent_without_requeue(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
