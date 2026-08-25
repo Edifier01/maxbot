@@ -226,21 +226,12 @@ git commit -m "ops: make restore start postgres fail closed"
 **Files:**
 - Modify: `docs/PRODUCTION-OPS.md`
 - Modify: `migrations/README.md`
-- Modify: `tests/test_backup_scripts.py`
 
 **Interfaces:**
 - Consumes: the completed CI, deploy, verify, and restore behavior from Tasks 1–4.
 - Produces: one accurate operator checklist; no runtime interface.
 
-- [ ] **Step 1: Add narrow documentation contract assertions**
-
-Assert the runbook names `dependency-audit`, `backup-restore-smoke`,
-`DEPLOY_HOST_FINGERPRINT`, authenticated metrics, and the rule that code-only
-rollback is allowed only when schema compatibility is proven. Assert the
-migration README says Python applies migrations and does not claim migration
-files are mounted into `initdb.d`.
-
-- [ ] **Step 2: Update the runbook**
+- [ ] **Step 1: Update the runbook**
 
 Document all five CI jobs, the fingerprint secret, full HTTPS/service/Redis
 verification, the stopped-PostgreSQL restore smoke, and rollback safety:
@@ -256,16 +247,18 @@ Correct the metrics example to include:
 Clarify that Redis is reconstructed runtime state and is not part of the
 authoritative PG+SQLite backup pair.
 
-- [ ] **Step 3: Correct migration documentation**
+- [ ] **Step 2: Correct migration documentation**
 
 State that Compose mounts only `schema_pg.sql` into `initdb.d`; Python applies
 `migrations/*.sql` at application startup.
 
-- [ ] **Step 4: Verify and commit**
+- [ ] **Step 3: Verify and commit**
 
-Run `tests/test_backup_scripts.py`. Expected: PASS.
+Run `git diff --check` and review the two documentation diffs against the
+implemented Tasks 1–4. Human-facing prose intentionally has no source-string
+pytest assertions.
 
 ```powershell
-git add docs/PRODUCTION-OPS.md migrations/README.md tests/test_backup_scripts.py
+git add docs/PRODUCTION-OPS.md migrations/README.md
 git commit -m "docs: align production gates and rollback policy"
 ```
