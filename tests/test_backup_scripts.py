@@ -106,8 +106,8 @@ def test_deploy_sh_mirrors_backup_gate_and_celery_profile():
 
 def test_verify_deploy_requires_public_stack_and_authenticated_health():
     verify = (ROOT / "scripts" / "verify_deploy.sh").read_text(encoding="utf-8")
-    for service in ("app", "postgres", "redis", "caddy"):
-        assert service in verify
+    assert "for service in app postgres redis caddy; do" in verify
+    assert 'docker compose ps "$service" --status running -q' in verify
     assert "--status running" in verify
     assert "Authorization" in verify
     assert "Bearer" in verify
@@ -115,6 +115,8 @@ def test_verify_deploy_requires_public_stack_and_authenticated_health():
     assert "d.get('db_ok') is True" in verify
     assert "d.get('redis_configured') is not True or d.get('redis_ok') is True" in verify
     assert 'curl -sf "https://${DOMAIN}/api/health"' in verify
+    probe = verify.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    compile(probe, "verify_deploy_probe", "exec")
 
 
 def test_ops_docs_pg_restore_rollback():

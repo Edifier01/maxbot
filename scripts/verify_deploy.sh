@@ -29,11 +29,11 @@ done
 echo "=== health (app container) ==="
 health_json=""
 for i in $(seq 1 30); do
-  if health_json=$(docker compose exec -T app python -c "
+  if health_json=$(docker compose exec -T app python - 2>/dev/null <<'PY'
 import json, os, sys, urllib.request
 req = urllib.request.Request(
     'http://127.0.0.1:8765/api/health',
-    headers={'Authorization': f"Bearer {os.environ['INTERNAL_SERVICE_TOKEN']}"},
+    headers={'Authorization': 'Bearer ' + os.environ['INTERNAL_SERVICE_TOKEN']},
 )
 r = urllib.request.urlopen(req, timeout=10)
 d = json.loads(r.read())
@@ -42,7 +42,8 @@ ok = d.get('db_ok') is True and (
     d.get('redis_configured') is not True or d.get('redis_ok') is True
 )
 sys.exit(0 if ok else 1)
-" 2>/dev/null); then
+PY
+); then
     break
   fi
   sleep 3
