@@ -1,6 +1,6 @@
 # MAX Sender — production readiness ledger
 
-**Дата:** 2026-08-25  
+**Дата:** 2026-08-25
 **Решение:** **NO-GO** до закрытия external gates ниже.
 
 ## Release identity
@@ -65,8 +65,9 @@ environment gates ниже остаются блокирующими.
 - Graceful shutdown: `3 passed`; reversed event order failed as expected.
 - CI/deploy/DR policy file: `11 passed` after strengthening reusable CI,
   fingerprint preflight, health probe and stopped-PostgreSQL restore path.
-- Independent task and holistic reviews returned APPROVE after two review fixes:
-  empty fingerprint fail-closed and executable quoted health probe.
+- Independent task and holistic reviews returned APPROVE after three review
+  fixes: empty fingerprint fail-closed, executable quoted health probe and a
+  production preflight rejecting HTTPS opt-out/placeholder DOMAIN.
 
 ### Stage 3 — final local gate
 

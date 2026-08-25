@@ -8,6 +8,7 @@ Runbook для VPS после `bootstrap-vps.sh` и первого `deploy.sh`.
 
 - [ ] CI зелёный (`server-smoke`, `compose-config`, `dependency-audit`, `backup-restore-smoke`, `server-e2e`)
 - [ ] `.env` без `change-me*`
+- [ ] `DOMAIN` реальный (не `example.com`), `CHECK_HTTPS=1`; `deploy.sh` отклоняет opt-out
 - [ ] GitHub production secret `DEPLOY_HOST_FINGERPRINT` содержит SHA256 fingerprint SSH host key
 - [ ] `bash scripts/backup-volumes.sh` (перед каждым prod deploy)
 - [ ] DNS A-запись → IP VPS
@@ -35,7 +36,7 @@ bash scripts/verify_deploy.sh   # полная проверка
 
 | Var | Default | Описание |
 |-----|---------|----------|
-| `CHECK_HTTPS` | `1` | `0` — пропустить curl к DOMAIN |
+| `CHECK_HTTPS` | `1` | `0` разрешён только для прямого staging verify; production `deploy.sh` отклоняет opt-out |
 
 ### Rollback
 

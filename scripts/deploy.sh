@@ -36,6 +36,15 @@ if ((${#missing[@]})); then
   exit 1
 fi
 
+if [[ "${CHECK_HTTPS:-1}" != "1" ]]; then
+  echo "Production deploy requires CHECK_HTTPS=1" >&2
+  exit 1
+fi
+if [[ "$DOMAIN" == *example.com* ]]; then
+  echo "Production deploy requires a real DOMAIN, not example.com" >&2
+  exit 1
+fi
+
 echo "Деплой MAX Sender → https://${DOMAIN}"
 pg_vol=$(docker volume ls -q | grep -E '(^|_)max_server_pg$' || true)
 pg_ctr=$(docker compose ps -a -q postgres 2>/dev/null || true)

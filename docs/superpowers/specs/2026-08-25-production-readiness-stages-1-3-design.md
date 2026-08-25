@@ -1,7 +1,7 @@
 # MAX Sender production readiness — stages 1–3 design
 
-**Date:** 2026-08-25  
-**Status:** Approved in chat  
+**Date:** 2026-08-25
+**Status:** Approved in chat
 **Scope:** Release boundaries, current delta audit, and CI evidence
 
 ## Goal

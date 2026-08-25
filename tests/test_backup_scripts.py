@@ -102,6 +102,9 @@ def test_deploy_sh_mirrors_backup_gate_and_celery_profile():
     assert "postgres not running" not in deploy_sh
     assert "CHECK_HTTPS=0" not in deploy_sh
     assert "bash scripts/verify_deploy.sh" in deploy_sh
+    verify_at = deploy_sh.index("bash scripts/verify_deploy.sh")
+    assert '[[ "${CHECK_HTTPS:-1}" != "1" ]]' in deploy_sh[:verify_at]
+    assert '[[ "$DOMAIN" == *example.com* ]]' in deploy_sh[:verify_at]
 
 
 def test_verify_deploy_requires_public_stack_and_authenticated_health():
