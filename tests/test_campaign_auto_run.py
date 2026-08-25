@@ -1,4 +1,4 @@
-"""Pause must clear auto_run; start / retry / schedule-start enable daily continue."""
+"""Pause clears auto_run; start and scheduled start enable daily continuation; retry fails closed."""
 
 from __future__ import annotations
 

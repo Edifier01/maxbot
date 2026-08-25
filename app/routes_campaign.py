@@ -105,7 +105,7 @@ async def campaign_schedule_get():
 
 @router.post("/api/campaign/retry_failed")
 async def campaign_retry_failed():
-    raise HTTPException(409, "Повтор ошибочных сообщений отключен")
+    raise HTTPException(409, "Безопасный повтор временно недоступен")
 
 
 @router.post("/api/campaign/test")
