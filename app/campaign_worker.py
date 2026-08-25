@@ -755,31 +755,32 @@ async def start_worker(
         finally:
             clear_context()
 
-    async with rt.worker_lock:
-        if REGISTRY.app.shutting_down:
-            return False
-        if rt.worker_task and not rt.worker_task.done():
-            return False
-        rt.touch_activity()
-        rt.pool_done_announced = False
-        await main._preflight_group_proxies()
-        with main._conn() as c:
-            c.execute("UPDATE queue_state SET running=1 WHERE id=1")
-            msgs = main.load_message_pool()
-            if main._message_pick_mode() == "random_norepeat" and msgs:
-                qs = c.execute("SELECT message_idx FROM queue_state WHERE id=1").fetchone()
-                if int(qs["message_idx"] if qs else 0) == 0 and not main._get_message_bag(c):
-                    bag = list(range(len(msgs)))
-                    random.shuffle(bag)
-                    main._set_message_bag(c, bag)
-        if record_campaign:
-            begin_campaign(scheduled_for=scheduled_for)
-            main._metric_inc("campaigns_started_total")
-        clear_context()
-        try:
-            rt.worker_task = asyncio.create_task(_worker_task())
-        finally:
-            restore_context(ctx_snap)
+    async with REGISTRY.app.message_pool_lock:
+        async with rt.worker_lock:
+            if REGISTRY.app.shutting_down:
+                return False
+            if rt.worker_task and not rt.worker_task.done():
+                return False
+            rt.touch_activity()
+            rt.pool_done_announced = False
+            await main._preflight_group_proxies()
+            with main._conn() as c:
+                c.execute("UPDATE queue_state SET running=1 WHERE id=1")
+                msgs = main.load_message_pool()
+                if main._message_pick_mode() == "random_norepeat" and msgs:
+                    qs = c.execute("SELECT message_idx FROM queue_state WHERE id=1").fetchone()
+                    if int(qs["message_idx"] if qs else 0) == 0 and not main._get_message_bag(c):
+                        bag = list(range(len(msgs)))
+                        random.shuffle(bag)
+                        main._set_message_bag(c, bag)
+            if record_campaign:
+                begin_campaign(scheduled_for=scheduled_for)
+                main._metric_inc("campaigns_started_total")
+            clear_context()
+            try:
+                rt.worker_task = asyncio.create_task(_worker_task())
+            finally:
+                restore_context(ctx_snap)
     return True
 
 
