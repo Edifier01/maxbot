@@ -60,6 +60,8 @@ class CampaignRuntime:
 class _AppRuntime:
     """Process-wide: watchdog, scheduler, backup, shutdown flag."""
 
+    # ponytail: single-process lock; use a distributed lock if serving multiple processes.
+    message_pool_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     watchdog_task: asyncio.Task[Any] | None = None
     scheduler_task: asyncio.Task[Any] | None = None
     backup_task: asyncio.Task[Any] | None = None
@@ -68,6 +70,7 @@ class _AppRuntime:
     shutting_down: bool = False
 
     def reset_test(self) -> None:
+        self.message_pool_lock = asyncio.Lock()
         self.watchdog_task = None
         self.scheduler_task = None
         self.backup_task = None
@@ -111,6 +114,9 @@ class RuntimeRegistry:
 
     def worker_items(self) -> list[tuple[int, CampaignRuntime]]:
         return list(self._workers.items())
+
+    def any_worker_busy(self) -> bool:
+        return any(runtime.worker_busy() for _, runtime in self.worker_items())
 
     def drop_worker(self, tenant_id: int) -> None:
         """Forget stopped per-tenant runtime after permanent tenant deletion."""
