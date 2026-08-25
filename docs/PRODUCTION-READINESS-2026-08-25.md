@@ -70,6 +70,15 @@ environment gates ниже остаются блокирующими.
 
 ### Stage 3 — final local gate
 
+После создания commit `95148e4` и до ledger-only commit был выполнен полный
+прогон:
+
+```powershell
+& '.venv\Scripts\python.exe' -m pytest tests\ -q --basetemp '<writable-evidence-root>\pytest-full-final-3'
+```
+
+Его итог: `270 passed, 20 skipped in 175.48s`.
+
 | Check | Result |
 |---|---|
 | `python -m pytest tests/ -q` | `270 passed, 20 skipped in 175.48s` |
