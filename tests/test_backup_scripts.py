@@ -79,7 +79,6 @@ def test_deploy_ssh_timeout_covers_image_build():
     assert "workflow_run" not in deploy
     assert "workflow_dispatch:" in deploy
     assert "github.sha" in deploy
-    assert 'ref: ${{ github.sha }}' in deploy
     assert "checkout --force" in deploy
     assert "--profile celery" in deploy
     assert "up -d postgres" in deploy
@@ -115,6 +114,9 @@ def test_ci_actions_images_and_permissions_are_immutable():
     assert "dependency-audit:" in ci
     assert "pip-audit -r requirements.lock" in ci
     assert "pip-audit -r requirements-server.lock" in ci
+    assert "workflow_call:" in ci
+    assert "uses: ./.github/workflows/ci.yml" in deploy
+    assert "python -m pytest tests/ -q" not in deploy
 
 
 def test_compose_has_runtime_resource_limits():
