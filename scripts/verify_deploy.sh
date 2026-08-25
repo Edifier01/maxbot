@@ -18,16 +18,30 @@ docker compose config -q
 
 echo "=== services ==="
 docker compose ps
+for service in app postgres redis caddy; do
+  if ! docker compose ps "$service" --status running -q | grep -q .; then
+    echo "FAIL: $service not running"
+    docker compose logs --tail=80 "$service"
+    exit 1
+  fi
+done
 
 echo "=== health (app container) ==="
 health_json=""
 for i in $(seq 1 30); do
   if health_json=$(docker compose exec -T app python -c "
-import json, sys, urllib.request
-r = urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=10)
+import json, os, sys, urllib.request
+req = urllib.request.Request(
+    'http://127.0.0.1:8765/api/health',
+    headers={'Authorization': f"Bearer {os.environ['INTERNAL_SERVICE_TOKEN']}"},
+)
+r = urllib.request.urlopen(req, timeout=10)
 d = json.loads(r.read())
 print(json.dumps(d, ensure_ascii=False))
-sys.exit(0 if d.get('db_ok') else 1)
+ok = d.get('db_ok') is True and (
+    d.get('redis_configured') is not True or d.get('redis_ok') is True
+)
+sys.exit(0 if ok else 1)
 " 2>/dev/null); then
     break
   fi
