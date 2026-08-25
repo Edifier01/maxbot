@@ -7,3 +7,5 @@ data/
 __pycache__/
 *.pyc
 .pytest_cache/
+.audit-*
+.pytest-tmp
