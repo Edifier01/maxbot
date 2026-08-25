@@ -76,7 +76,7 @@ fi
 echo "Ожидание старта контейнеров…"
 sleep 8
 
-CHECK_HTTPS=0 bash scripts/verify_deploy.sh || {
+bash scripts/verify_deploy.sh || {
   echo "Проверка не прошла. Логи: docker compose logs --tail=80 app"
   exit 1
 }
@@ -84,5 +84,4 @@ CHECK_HTTPS=0 bash scripts/verify_deploy.sh || {
 echo
 echo "Панель:  https://${DOMAIN}/auth.html"
 echo "Админ:   https://${DOMAIN}/admin.html  (логин: ${ADMIN_EMAIL})"
-echo "Полная проверка (HTTPS): bash scripts/verify_deploy.sh"
 echo "Логи:    docker compose logs -f app"

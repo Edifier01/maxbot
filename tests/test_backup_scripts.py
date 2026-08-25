@@ -69,20 +69,20 @@ def test_dr_smoke_exercises_backup_then_restore():
     assert "/app/data/dr-smoke/value" in smoke
 
 
-def test_deploy_ssh_timeout_covers_image_build():
+def test_deploy_ssh_reuses_hardened_script():
     deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
     assert "command_timeout: 30m" in deploy
     assert "docker compose build --no-cache" not in deploy
-    assert "docker compose build app" in deploy
     assert "reset --hard origin/main" not in deploy
     assert "reset --hard origin/master" not in deploy
     assert "workflow_run" not in deploy
     assert "workflow_dispatch:" in deploy
     assert "github.sha" in deploy
     assert "checkout --force" in deploy
-    assert "--profile celery" in deploy
-    assert "up -d postgres" in deploy
-    assert "No postgres volume/data" in deploy
+    assert "fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}" in deploy
+    assert "bash scripts/deploy.sh" in deploy
+    assert "CHECK_HTTPS=0" not in deploy
+    assert "docker compose build app" not in deploy
 
 
 def test_deploy_sh_mirrors_backup_gate_and_celery_profile():
@@ -91,6 +91,8 @@ def test_deploy_sh_mirrors_backup_gate_and_celery_profile():
     assert "No postgres volume/data" in deploy_sh
     assert "--profile celery" in deploy_sh
     assert "postgres not running" not in deploy_sh
+    assert "CHECK_HTTPS=0" not in deploy_sh
+    assert "bash scripts/verify_deploy.sh" in deploy_sh
 
 
 def test_ops_docs_pg_restore_rollback():
