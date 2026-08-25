@@ -25,6 +25,7 @@ def test_send_with_retry_sleeps_flood_wait(tmp_path, monkeypatch):
     import app.campaign_send as cs
     from app.campaign_send import send_with_retry
 
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
     monkeypatch.setattr(m, "ROOT", tmp_path)
     tenant_dir = tmp_path / "data" / "tenants" / "8"
     tenant_dir.mkdir(parents=True)
