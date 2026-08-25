@@ -6,8 +6,9 @@ Runbook для VPS после `bootstrap-vps.sh` и первого `deploy.sh`.
 
 ### Pre-deploy checklist
 
-- [ ] CI зелёный (`server-smoke`, `compose-config`, `server-e2e`)
+- [ ] CI зелёный (`server-smoke`, `compose-config`, `dependency-audit`, `backup-restore-smoke`, `server-e2e`)
 - [ ] `.env` без `change-me*`
+- [ ] GitHub production secret `DEPLOY_HOST_FINGERPRINT` содержит SHA256 fingerprint SSH host key
 - [ ] `bash scripts/backup-volumes.sh` (перед каждым prod deploy)
 - [ ] DNS A-запись → IP VPS
 
@@ -25,8 +26,8 @@ bash scripts/verify_deploy.sh   # полная проверка
 `verify_deploy.sh` проверяет:
 
 1. `docker compose config -q`
-2. Статус сервисов (`docker compose ps`)
-3. `/api/health` внутри `app` (`db_ok: true`)
+2. `app`, `postgres`, `redis` и `caddy` находятся в состоянии running
+3. Авторизованный `/api/health` внутри `app`: `db_ok: true` и, если Redis настроен, `redis_ok: true`
 4. HTTPS через Caddy (если `DOMAIN` не example.com)
 5. Celery worker ping (если `USE_CELERY=1`)
 
@@ -38,18 +39,32 @@ bash scripts/verify_deploy.sh   # полная проверка
 
 ### Rollback
 
+SQL migrations — forward-only. Откат на предыдущий SHA безопасен только если
+предыдущее приложение явно совместимо с уже применённой схемой. Иначе нужен
+соответствующий pre-deploy backup PostgreSQL + `max_server_data`; не запускайте
+старый код поверх новой схемы по умолчанию.
+
+Если предыдущий SHA явно совместим с текущей схемой:
+
 ```bash
 cd /opt/maxsender
 git checkout <prev-commit>
 docker compose up --build -d
 bash scripts/verify_deploy.sh
-# при сбое данных:
-bash scripts/restore-volumes.sh ./backups/<stamp>
+```
+
+Если была forward-only migration или совместимость не доказана, после checkout
+не запускайте stack до restore matching pre-deploy backup:
+
+```bash
+cd /opt/maxsender
+git checkout <prev-commit>
+bash scripts/restore-volumes.sh --yes ./backups/<matching-pre-deploy-stamp>
 ```
 
 ### GitHub Actions deploy
 
-Workflow `.github/workflows/deploy.yml` запускается только вручную (`workflow_dispatch`), проверяет и деплоит immutable `github.sha`, делает backup при наличии PostgreSQL volume/data, затем запускает `docker compose up -d` (`--profile celery` when `USE_CELERY=1`) и проверяет health с `db_ok`.
+Workflow `.github/workflows/deploy.yml` запускается только вручную (`workflow_dispatch`). Перед SSH он выполняет весь reusable CI workflow, требует непустой `DEPLOY_HOST_FINGERPRINT`, проверяет host key и деплоит immutable `github.sha`. После exact-SHA checkout вызывается тот же `scripts/deploy.sh`: env preflight, backup, build/start и полная проверка сервисов, PostgreSQL, Redis и HTTPS.
 
 ---
 
@@ -100,9 +115,13 @@ Unit-тесты: `tests/test_celery_worker.py`.
 |--------|------------|---------------|
 | `max_server_data` | SQLite tenant DB, sessions, vault salt/key | compose volume |
 | `max_server_pg` | users, tenants, JWT revoke | PostgreSQL 16 |
-| `max_server_redis` | опционально | Celery broker state |
+| `max_server_redis` | Восстанавливаемое runtime/broker state; не авторитетные данные | compose volume, не входит в backup pair |
 
 **Критично:** `max_server_data` — ключ шифрования сессий. Без него сессии не расшифровать.
+
+Авторитетный backup pair — PostgreSQL dump + `max_server_data` (tenant SQLite,
+сессии и vault material). Redis восстанавливается как runtime state и не
+архивируется `backup-volumes.sh`.
 
 **Vault в server mode:** сессии шифруются автоматически ключом `.app_key` в data-dir tenant/global. Пароль vault в UI не используется — admin и пользователи работают без разблокировки.
 
@@ -135,7 +154,7 @@ bash scripts/restore-volumes.sh ./backups/20260729-030000
 bash scripts/restore-volumes.sh --yes ./backups/20260729-030000
 ```
 
-Скрипт останавливает `app`/`celery-worker`, сначала extract+verify+swap data volume (live children → `.outgoing-restore`, **without** deleting that dir yet), затем `pg_restore --exit-on-error --single-transaction`. If PG restore fails, live data is swapped back from `.outgoing-restore` and the script exits non-zero — a failed PG restore rolls the data volume back. The attempted restore stays in leftover `.outgoing-restore` (inspect/remove before retry). On success, `.outgoing-restore` is removed, the stack is started, and `verify_deploy.sh` runs. An interrupted swap also leaves `.outgoing-restore` — retry will not proceed while that directory exists.
+Скрипт останавливает `app`/`celery-worker`, сначала extract+verify+swap data volume (live children → `.outgoing-restore`, **without** deleting that dir yet), затем запускает PostgreSQL и ждёт `pg_isready` перед `pg_restore --exit-on-error --single-transaction`. If PG restore fails, live data is swapped back from `.outgoing-restore` and the script exits non-zero — a failed PG restore rolls the data volume back. The attempted restore stays in leftover `.outgoing-restore` (inspect/remove before retry). On success, `.outgoing-restore` is removed, the stack is started, and `verify_deploy.sh` runs. An interrupted swap also leaves `.outgoing-restore` — retry will not proceed while that directory exists. CI `backup-restore-smoke` специально останавливает PostgreSQL перед restore, поэтому этот путь проверяется на Linux/Docker runner.
 
 ### Ручной PG-only restore
 
@@ -258,7 +277,8 @@ If the var is **unset in the app process**, `POST /api/auth/register` returns **
 
 ```bash
 curl -s https://$DOMAIN/api/health | python3 -m json.tool
-curl -s https://$DOMAIN/metrics | rg 'max_sender_(pg_up|redis_up|subscriptions)'
+curl -s -H "Authorization: Bearer $INTERNAL_SERVICE_TOKEN" \
+  https://$DOMAIN/metrics | rg 'max_sender_(pg_up|redis_up|subscriptions)'
 # Admin panel uses HttpOnly cookie max_token (not Bearer).
 curl -s -b "max_token=$ADMIN_JWT" \
   "https://$DOMAIN/api/admin/subscriptions/expiring?days=7" | python3 -m json.tool
