@@ -3,10 +3,43 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 from conftest import requires_postgres as _PG
 
 from app import db_pg
+
+
+def test_extend_subscription_locks_tenant_row_before_history(monkeypatch):
+    now = datetime(2026, 8, 25, tzinfo=timezone.utc)
+    current = now + timedelta(days=5)
+    expected = now + timedelta(days=35)
+    tenant_id = 7
+    admin_id = 11
+    cur = MagicMock()
+    cur.fetchall.return_value = [{"expires_at": current}]
+    ctx = MagicMock()
+    ctx.__enter__.return_value = cur
+    ctx.__exit__.return_value = False
+    cursor_factory = MagicMock(return_value=ctx)
+    monkeypatch.setattr(db_pg, "_cursor", cursor_factory)
+    monkeypatch.setattr(db_pg, "_now", lambda: now)
+
+    assert db_pg.extend_subscription(tenant_id, 30, admin_id) == expected
+
+    cursor_factory.assert_called_once_with(transaction=True)
+    statements = [" ".join(call.args[0].split()) for call in cur.execute.call_args_list]
+    assert statements == [
+        "SELECT id FROM tenants WHERE id = %s FOR UPDATE",
+        "SELECT expires_at FROM subscriptions WHERE tenant_id = %s FOR UPDATE",
+        "INSERT INTO subscriptions (tenant_id, expires_at, granted_by) "
+        "VALUES (%s, %s, %s)",
+    ]
+    assert [call.args[1] for call in cur.execute.call_args_list] == [
+        (tenant_id,),
+        (tenant_id,),
+        (tenant_id, expected, admin_id),
+    ]
 
 
 def test_subscription_info_from_expires_active():

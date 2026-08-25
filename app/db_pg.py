@@ -285,6 +285,10 @@ def extend_subscription(tenant_id: int, days: int, granted_by: int) -> datetime:
     now = _now()
     with _cursor(transaction=True) as cur:
         cur.execute(
+            "SELECT id FROM tenants WHERE id = %s FOR UPDATE",
+            (tenant_id,),
+        )
+        cur.execute(
             """
             SELECT expires_at FROM subscriptions
             WHERE tenant_id = %s
