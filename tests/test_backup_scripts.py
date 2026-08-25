@@ -80,6 +80,8 @@ def test_deploy_ssh_reuses_hardened_script():
     assert "github.sha" in deploy
     assert "checkout --force" in deploy
     assert "fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}" in deploy
+    assert 'test -n "$DEPLOY_HOST_FINGERPRINT"' in deploy
+    assert deploy.index('test -n "$DEPLOY_HOST_FINGERPRINT"') < deploy.index("uses: appleboy/ssh-action@")
     assert "bash scripts/deploy.sh" in deploy
     assert "CHECK_HTTPS=0" not in deploy
     assert "docker compose build app" not in deploy

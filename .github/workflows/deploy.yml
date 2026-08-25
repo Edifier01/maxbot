@@ -19,6 +19,10 @@ jobs:
     needs: verify
     environment: production
     steps:
+      - name: Require SSH host fingerprint
+        env:
+          DEPLOY_HOST_FINGERPRINT: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
+        run: test -n "$DEPLOY_HOST_FINGERPRINT"
       - name: Deploy via SSH
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
