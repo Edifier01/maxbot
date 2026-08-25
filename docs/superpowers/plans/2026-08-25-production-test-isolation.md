@@ -4,7 +4,7 @@
 
 **Goal:** Restore a clean test baseline and add the two missing P1 regressions for cancelled sends and graceful shutdown.
 
-**Architecture:** Keep production code untouched. Isolate mutable pytest module state, then exercise the existing send and shutdown contracts through their real state transitions with only external MAX calls and irreversible side effects replaced by narrow fakes.
+**Architecture:** Keep production code untouched. Patch the cached server-mode boundary explicitly in the affected test, then exercise the existing send and shutdown contracts through their real state transitions with only external MAX calls and irreversible side effects replaced by narrow fakes.
 
 **Tech Stack:** Python 3.12, pytest
 
@@ -19,15 +19,15 @@
 
 ---
 
-### Task 1: Isolate campaign-module fixture state
+### Task 1: Make flood-wait test mode explicit
 
 **Files:**
-- Modify: `tests/test_campaign_modules.py:77-106`
-- Verify: `tests/test_flood_wait.py:20-95`
+- Modify: `tests/test_flood_wait.py:20-95`
+- Verify: `tests/test_campaign_modules.py:77-106`
 
 **Interfaces:**
-- Consumes: pytest's built-in `tmp_path` fixture and `pytest.MonkeyPatch.context()`.
-- Produces: a `setup_local` fixture that yields the reloaded `main` module and restores `app.config` and `main` after all test-local patches are gone.
+- Consumes: the existing `main._is_server_mode()` boundary used by SQLite path resolution.
+- Produces: a flood-wait test that explicitly selects tenant/server path resolution without reloading global modules.
 
 - [ ] **Step 1: Confirm the existing order-dependent failure**
 
@@ -39,31 +39,18 @@ Run:
 
 Expected: `test_send_with_retry_sleeps_flood_wait` fails with `assert False is True`; the same flood-wait test passes when run alone. This RED has already been observed on commit `70caf57`.
 
-- [ ] **Step 2: Replace the shared fixture monkeypatch with a local context**
+- [ ] **Step 2: Patch the cached server-mode boundary in the affected test**
 
-Change `setup_local` so it no longer consumes the test's `monkeypatch` fixture:
+Immediately after importing `main as m` in
+`test_send_with_retry_sleeps_flood_wait`, add:
 
 ```python
-@pytest.fixture
-def setup_local(tmp_path):
-    import app.config as cfg
-    import main as m
-
-    with pytest.MonkeyPatch.context() as local_patch:
-        local_patch.setenv("MAX_TEST", "1")
-        local_patch.setenv("MAX_SERVER_MODE", "0")
-        importlib.reload(cfg)
-        importlib.reload(m)
-        local_patch.setattr(m, "ROOT", tmp_path)
-        m._refresh_data_paths()
-        m.init_db()
-        yield m
-
-    importlib.reload(cfg)
-    importlib.reload(m)
+monkeypatch.setattr(m, "_is_server_mode", lambda: True)
 ```
 
-Remove the manual `prev_server` / `prev_test` save-and-restore block. Do not edit the two test bodies or production code.
+Do not reload modules, change the campaign-module fixture, or edit production
+code. The test already patches `ROOT`; the explicit boundary patch makes
+`tenant_scope(tenant_id=8)` resolve the SQLite path created by the test.
 
 - [ ] **Step 3: Verify GREEN in the failing order**
 
@@ -84,8 +71,8 @@ Expected: 6 passed.
 - [ ] **Step 5: Commit the test-only fix**
 
 ```powershell
-git add tests/test_campaign_modules.py
-git commit -m "test: isolate campaign module configuration"
+git add tests/test_flood_wait.py
+git commit -m "test: isolate flood wait server mode"
 ```
 
 ### Task 2: Prove cancel-after-send does not requeue

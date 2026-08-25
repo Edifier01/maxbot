@@ -32,9 +32,10 @@ verification or fail closed; they must not change application rules.
   `origin/main` when the worktree was created.
 - Prior merged verification: 267 passed and 20 skipped.
 - Fresh isolated baseline: 266 passed, 20 skipped, one order-dependent failure.
-- The failure reproduces only after `tests/test_campaign_modules.py`; its fixture
-  reloads cached configuration while tests mutate `MAX_SERVER_MODE`, so the next
-  test can inherit the wrong mode. The flood-wait production path passes alone.
+- The failure reproduces only after `tests/test_campaign_modules.py` because
+  `tests/test_flood_wait.py` changes `MAX_SERVER_MODE` after `app.config` has
+  already cached it. The test must patch the existing `_is_server_mode` boundary;
+  the flood-wait production path passes alone.
 - PostgreSQL, POSIX locking, Docker/Linux, dependency scanning, and external
   MAX/proxy behavior are not proven locally on this Windows host.
 
@@ -55,7 +56,7 @@ NO-GO gates; no placeholder is treated as evidence.
 
 Fix only confirmed blockers outside the frozen boundaries. Every behavior fix
 uses a failing test first. The known baseline contamination is corrected in
-test setup/teardown only; campaign sending and flood-wait behavior stay intact.
+test setup only; campaign sending and flood-wait behavior stay intact.
 
 If an audit finding crosses the frozen boundary, record it rather than editing
 it. In particular, role-percentage application and UTC/local-day rule behavior
