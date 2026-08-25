@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from app.campaign_runtime import REGISTRY
 from app.tenant import get_tenant_id, tenant_scope
@@ -120,7 +121,7 @@ def test_auto_resume_does_not_claim_start_when_worker_is_busy(m, monkeypatch):
     log_mock.assert_not_called()
 
 
-def test_retry_failed_sets_auto_run(m, monkeypatch):
+def test_retry_failed_fails_closed_without_state_change(m, monkeypatch):
     m.set_setting("auto_run", "0")
     with m._conn() as c:
         c.execute("INSERT INTO profiles (id, phone) VALUES (1, '+79000000001')")
@@ -128,6 +129,9 @@ def test_retry_failed_sets_auto_run(m, monkeypatch):
         c.execute(
             "INSERT INTO send_log (profile_id, group_id, message_idx, status) "
             "VALUES (1, 1, 4, 'failed')"
+        )
+        c.execute(
+            "UPDATE queue_state SET profile_idx=2, message_idx=9, group_idx=3 WHERE id=1"
         )
 
     monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
@@ -138,12 +142,13 @@ def test_retry_failed_sets_auto_run(m, monkeypatch):
 
     from app.routes_campaign import campaign_retry_failed
 
-    result = asyncio.run(campaign_retry_failed())
-    assert result["ok"] is True
-    assert result["message_idx"] == 4
-    assert m.get_setting("auto_run") == "1"
-    start_mock.assert_awaited_once()
-    assert _queue_indices(m)[1] == 4
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(campaign_retry_failed())
+
+    assert exc_info.value.status_code == 409
+    assert m.get_setting("auto_run") == "0"
+    assert _queue_indices(m) == (2, 9, 3)
+    start_mock.assert_not_awaited()
 
 
 def test_scheduler_tick_sets_auto_run(m, monkeypatch):
