@@ -8,11 +8,11 @@
 | Поле | Значение |
 |---|---|
 | Branch | `codex/production-readiness-wave2` |
-| Проверенный code HEAD до ledger-only commit | `95148e4809084ea09c449ca2a3846426042e3df9` |
+| Проверенный code HEAD до ledger-only commit | `fc9c35974505144032fa460a3ec4927ff7c714a7` |
 | `main` / merge base с `main` | `16d0ce08e2f69dc1b26b847b2bc3c2b349d86959` |
 | Merge base с `origin/main` | `9d16c62457eef20840f01dc5eec3f33d815d1d91` |
 | Remote | `https://github.com/Edifier01/maxbot.git` |
-| Delta к `origin/main` на проверенном HEAD | `0 behind / 27 ahead` |
+| Delta к `origin/main` на проверенном HEAD | `0 behind / 30 ahead` |
 | Tracked/index state | clean |
 | Полный worktree state | dirty: только два untracked pytest basetemp (`.pytest-production-final-1/`, `.pytest-production-final-2/`) |
 
@@ -71,18 +71,18 @@ environment gates ниже остаются блокирующими.
 
 ### Stage 3 — final local gate
 
-После создания commit `95148e4` и до ledger-only commit был выполнен полный
+После создания commit `fc9c359` и до следующего ledger-only commit был выполнен полный
 прогон:
 
 ```powershell
 & '.venv\Scripts\python.exe' -m pytest tests\ -q --basetemp '<writable-evidence-root>\pytest-full-final-3'
 ```
 
-Его итог: `270 passed, 20 skipped in 175.48s`.
+Его итог: `270 passed, 20 skipped in 175.76s`.
 
 | Check | Result |
 |---|---|
-| `python -m pytest tests/ -q` | `270 passed, 20 skipped in 175.48s` |
+| `python -m pytest tests/ -q` | `270 passed, 20 skipped in 175.76s` |
 | PostgreSQL skips | 19 tests: local `DATABASE_URL`/PostgreSQL evidence absent |
 | POSIX skip | 1 test: shared-volume instance lock cannot run on Windows |
 | `python -m pip check` | `No broken requirements found.` |
