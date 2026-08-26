@@ -1,7 +1,7 @@
 # MAX Sender audit remediation and mobile UI design
 
-**Date:** 2026-08-26  
-**Status:** Approved in chat  
+**Date:** 2026-08-26
+**Status:** Approved in chat
 **Branch:** `codex/audit-remediation-mobile`
 
 ## Goal
@@ -171,4 +171,3 @@ This work does not authorize a push, deploy, production service change, live
 MAX message, or live proxy check. PostgreSQL integration, Docker/Redis,
 real MAX/proxy behavior, backup/restore, and production CI remain separate
 release gates when they are unavailable locally.
-
