@@ -91,15 +91,19 @@ async def dashboard():
                 """
             ).fetchall()
             groups_n = c.execute("SELECT COUNT(*) n FROM groups").fetchone()["n"]
+            today = m._local_today().isoformat()
             sent_today = c.execute(
-                "SELECT COUNT(*) n FROM send_log WHERE date(sent_at)=date('now') AND status='sent'"
+                "SELECT COUNT(*) n FROM send_log "
+                "WHERE date(sent_at, '+3 hours')=? AND status='sent'",
+                (today,),
             ).fetchone()["n"]
             failed_today = c.execute(
-                "SELECT COUNT(*) n FROM send_log WHERE date(sent_at)=date('now') AND status='failed'"
+                "SELECT COUNT(*) n FROM send_log "
+                "WHERE date(sent_at, '+3 hours')=? AND status='failed'",
+                (today,),
             ).fetchone()["n"]
             qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
         items = []
-        today = m._local_today().isoformat()
         for p in profiles:
             d = redact_cabinet_row(m._profile_auth_view(p))
             if p["sent_day"] != today:
@@ -171,7 +175,8 @@ async def get_send_log(
         ).fetchone()["n"]
         rows = c.execute(
             f"""
-            SELECT sl.*, p.phone, p.label, g.name AS group_name
+            SELECT sl.*, datetime(sl.sent_at, '+3 hours') AS sent_at_utc3,
+                   p.phone, p.label, g.name AS group_name
             FROM send_log sl
             LEFT JOIN profiles p ON p.id = sl.profile_id
             LEFT JOIN groups g ON g.id = sl.group_id
@@ -181,8 +186,13 @@ async def get_send_log(
             """,
             [*params, limit, offset],
         ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["sent_at"] = item.pop("sent_at_utc3")
+        items.append(redact_cabinet_row(item))
     return {
-        "items": [redact_cabinet_row(dict(r)) for r in rows],
+        "items": items,
         "total": total,
         "offset": offset,
         "limit": limit,

@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+from typing import Literal
 
 import antiban_core
 from app import auth, db_pg
@@ -85,7 +86,7 @@ class ProxyIn(BaseModel):
 
 
 class AdminTenantSettingsIn(BaseModel):
-    worker_pool_size: int = Field(ge=1, le=32)
+    worker_pool_size: Literal[1] = 1
 
 
 def _require_admin() -> int:
@@ -339,6 +340,10 @@ async def impersonate(tenant_id: int, request: Request):
 @router.put("/tenants/{tenant_id}/groups/{group_id}/proxy")
 async def set_group_proxy(tenant_id: int, group_id: int, body: ProxyIn):
     _require_admin()
+    from app.tenant import tenant_scope
+
+    with tenant_scope(tenant_id=tenant_id, role="admin"):
+        app_main._require_worker_idle()
 
     def _update() -> bool:
         with tenant_conn(tenant_id, use_global_data=False) as c:
@@ -351,6 +356,23 @@ async def set_group_proxy(tenant_id: int, group_id: int, body: ProxyIn):
     if not await asyncio.to_thread(_update):
         raise HTTPException(404, "Группа не найдена")
     return {"ok": True}
+
+
+async def _stop_active_tenant_workers() -> None:
+    from app.campaign_runtime import REGISTRY
+    from app.campaign_worker import stop_worker
+    from app.tenant import tenant_scope
+
+    for _, runtime in REGISTRY.worker_items():
+        tenant_id = runtime.tenant_id
+        if tenant_id is None or not runtime.worker_busy():
+            continue
+        with tenant_scope(tenant_id=tenant_id, role="admin"):
+            await stop_worker(
+                finish_status="stopped",
+                reason="Администратор изменил активность групп",
+                tenant_id=tenant_id,
+            )
 
 
 def _tenant_stats_sync(tenant_id: int) -> dict:
@@ -391,7 +413,7 @@ def _set_tenant_worker_pool_size_sync(tenant_id: int, worker_pool_size: int) -> 
 
     with tenant_scope(tenant_id=tenant_id, role="admin"):
         old = app_main._pool_size()
-        app_main.set_setting("worker_pool_size", str(worker_pool_size))
+        app_main.set_setting("worker_pool_size", "1")
         return old
 
 
@@ -451,10 +473,12 @@ async def update_tenant_settings(tenant_id: int, body: AdminTenantSettingsIn):
 @router.post("/groups/activate-all")
 async def activate_all_groups():
     _require_admin()
+    await _stop_active_tenant_workers()
     return await asyncio.to_thread(_bulk_set_groups_active, 1)
 
 
 @router.post("/groups/deactivate-all")
 async def deactivate_all_groups():
     _require_admin()
+    await _stop_active_tenant_workers()
     return await asyncio.to_thread(_bulk_set_groups_active, 0)

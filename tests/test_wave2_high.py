@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -44,12 +45,87 @@ def test_normalize_proxy_field():
         antiban_core.normalize_proxy_field("bad-value")
 
 
+@pytest.mark.parametrize("scheme", ["socks5", "http", "https"])
+@pytest.mark.parametrize("credentials", ["user@", ":pass@"])
+def test_normalize_proxy_field_rejects_partial_credentials(scheme, credentials):
+    with pytest.raises(ValueError, match="логин и пароль"):
+        antiban_core.normalize_proxy_field(
+            f"{scheme}://{credentials}proxy.example:1080"
+        )
+
+
 def test_proxy_in_rejects_invalid():
     from app.routes_admin import ProxyIn
 
     ProxyIn(proxy="")
     with pytest.raises(ValidationError):
         ProxyIn(proxy="bad-value")
+    with pytest.raises(ValidationError):
+        ProxyIn(proxy="socks5://proxy.example:99999")
+
+
+class _SocketStub:
+    def __init__(self, response: bytes):
+        self.response = bytearray(response)
+        self.sent: list[bytes] = []
+        self.closed = False
+
+    def settimeout(self, _timeout):
+        pass
+
+    def sendall(self, data: bytes):
+        self.sent.append(data)
+
+    def recv(self, size: int) -> bytes:
+        data = bytes(self.response[:size])
+        del self.response[:size]
+        return data
+
+    def close(self):
+        self.closed = True
+
+
+def test_socks5_check_opens_target_tunnel(monkeypatch):
+    reply = b"\x05\x00" + b"\x05\x00\x00\x01\x7f\x00\x00\x01\x01\xbb"
+    sock = _SocketStub(reply)
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: sock)
+
+    ok, error = antiban_core.check_proxy("socks5://proxy.example:1080")
+
+    assert (ok, error) == (True, "")
+    assert any(b"api.oneme.ru" in request for request in sock.sent)
+    assert sock.sent[-1].endswith(b"\x01\xbb")
+
+
+def test_https_proxy_wraps_tls_before_connect(monkeypatch):
+    raw = _SocketStub(b"")
+    tunnel = _SocketStub(b"HTTP/1.1 200 Connection established\r\n\r\n")
+    wrapped = []
+
+    class Context:
+        def wrap_socket(self, sock, *, server_hostname):
+            wrapped.append((sock, server_hostname))
+            return tunnel
+
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: raw)
+    monkeypatch.setattr(antiban_core.ssl, "create_default_context", lambda: Context(), raising=False)
+
+    ok, error = antiban_core.check_proxy("https://proxy.example:8443")
+
+    assert (ok, error) == (True, "")
+    assert wrapped == [(raw, "proxy.example")]
+    assert b"CONNECT api.oneme.ru:443" in tunnel.sent[0]
+
+
+def test_proxy_error_redacts_credentials(monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise OSError("cannot connect user secret")
+
+    monkeypatch.setattr(socket, "create_connection", fail)
+    ok, error = antiban_core.check_proxy("socks5://user:secret@proxy.example:1080")
+    assert ok is False
+    assert "user" not in error
+    assert "secret" not in error
 
 
 def test_cached_validate_uses_cache():

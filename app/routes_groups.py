@@ -15,6 +15,13 @@ router = APIRouter(tags=["groups"])
 _CABINET_DENIED = "Недоступно в личном кабинете"
 
 
+def _phone_or_400(raw: str) -> str:
+    try:
+        return m._normalize_phone(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 def _delete_orphan_profile(c, profile_id: int) -> bool:
     """Delete a profile only when no group still references it.
 
@@ -70,7 +77,7 @@ async def list_group_profiles(
     phone: str | None = None,
 ):
 
-    phone_filter = m._normalize_phone(phone) if (phone or "").strip() else None
+    phone_filter = _phone_or_400(phone) if (phone or "").strip() else None
     with m._conn() as c:
         if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
             raise HTTPException(404, "Группа не найдена")
@@ -114,6 +121,7 @@ async def list_group_profiles(
 @router.post("/api/groups")
 async def add_group(body: GroupIn):
 
+    m._require_worker_idle()
     invite = (body.invite_link or "").strip()
     if not invite:
         raise HTTPException(400, "Укажите пригласительную ссылку группы")
@@ -139,6 +147,7 @@ async def add_group(body: GroupIn):
 @router.patch("/api/groups/{group_id}")
 async def patch_group(group_id: int, body: GroupPatchIn):
 
+    m._require_worker_idle()
     data = body.model_dump(exclude_unset=True)
     if not data:
         raise HTTPException(400, "Нечего обновлять")
@@ -185,7 +194,8 @@ async def patch_group(group_id: int, body: GroupPatchIn):
 @router.post("/api/groups/{group_id}/profiles")
 async def add_group_profile(group_id: int, body: ProfileIn):
 
-    phone = m._normalize_phone(body.phone)
+    m._require_worker_idle()
+    phone = _phone_or_400(body.phone)
     if is_cabinet_user() and (body.proxy or "").strip():
         raise HTTPException(403, _CABINET_DENIED)
     with m._conn() as c:
@@ -237,6 +247,7 @@ async def add_group_profile(group_id: int, body: ProfileIn):
 async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
 
     """Импорт phone,label. Пропускает уже существующие в группе."""
+    m._require_worker_idle()
     if is_cabinet_user():
         raise HTTPException(403, _CABINET_DENIED)
     if not body.profiles:
@@ -314,6 +325,7 @@ async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
 @router.delete("/api/groups/{group_id}")
 async def delete_group(group_id: int):
 
+    m._require_worker_idle()
     deleted_profiles: list[int] = []
     with m._conn() as c:
         if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
@@ -336,6 +348,7 @@ async def delete_group(group_id: int):
 @router.delete("/api/groups/{group_id}/profiles/{profile_id}")
 async def remove_group_profile(group_id: int, profile_id: int):
 
+    m._require_worker_idle()
     deleted_profile = False
     with m._conn() as c:
         row = c.execute(

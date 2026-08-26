@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+from io import BytesIO
+
+import pytest
 
 
 def test_panel_routes_registered():
@@ -50,6 +54,122 @@ def test_messages_upload(tmp_path, monkeypatch):
         )
     assert r.status_code == 200, r.text
     assert r.json()["count"] == 2
+
+
+def test_messages_upload_rejects_active_worker_before_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("MAX_SERVER_MODE", "0")
+
+    import app.config as cfg
+
+    importlib.reload(cfg)
+
+    import main as m
+
+    importlib.reload(m)
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    m._refresh_data_paths()
+    m.reset_test_runtime()
+    m.init_db()
+
+    from fastapi import HTTPException, UploadFile
+
+    from app.campaign_runtime import REGISTRY
+    from app.routes_messages import upload_messages
+
+    class UnfinishedTask:
+        @staticmethod
+        def done():
+            return False
+
+    try:
+        upload = UploadFile(filename="t.txt", file=BytesIO(b"hello\nworld\n"))
+        REGISTRY.worker_for(42).worker_task = UnfinishedTask()
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(upload_messages(upload))
+        assert exc.value.status_code == 409
+        assert upload.file.tell() == 0
+        assert not m._messages_file().exists()
+    finally:
+        m.reset_test_runtime()
+
+
+def test_messages_upload_waits_for_message_pool_lock_before_read(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("MAX_SERVER_MODE", "0")
+
+    import app.config as cfg
+
+    importlib.reload(cfg)
+
+    import main as m
+
+    importlib.reload(m)
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    m._refresh_data_paths()
+    m.reset_test_runtime()
+    m.init_db()
+
+    from fastapi import UploadFile
+
+    from app.campaign_runtime import REGISTRY
+    from app.routes_messages import upload_messages
+
+    class InMemoryFile(BytesIO):
+        _rolled = False
+
+    async def scenario():
+        upload = UploadFile(filename="t.txt", file=InMemoryFile(b"hello\nworld\n"))
+        lock = REGISTRY.app.message_pool_lock
+        await lock.acquire()
+        task = asyncio.create_task(upload_messages(upload))
+        try:
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert upload.file.tell() == 0
+        finally:
+            lock.release()
+            await asyncio.gather(task, return_exceptions=True)
+        assert task.result() == {"count": 2}
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        m.reset_test_runtime()
+
+
+def test_start_worker_waits_for_message_pool_lock_before_worker_check():
+    from app.campaign_runtime import REGISTRY
+    from app.campaign_worker import start_worker
+
+    class UnfinishedTask:
+        checked = 0
+
+        def done(self):
+            self.checked += 1
+            return False
+
+    async def scenario():
+        REGISTRY.reset_test()
+        worker = UnfinishedTask()
+        REGISTRY.worker_for(None).worker_task = worker
+        lock = REGISTRY.app.message_pool_lock
+        await lock.acquire()
+        task = asyncio.create_task(start_worker(record_campaign=False))
+        try:
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert worker.checked == 0
+        finally:
+            lock.release()
+            await asyncio.gather(task, return_exceptions=True)
+        assert task.result() is False
+        assert worker.checked == 1
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        REGISTRY.reset_test()
 
 
 def test_list_backups(tmp_path, monkeypatch):

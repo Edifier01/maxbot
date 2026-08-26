@@ -105,37 +105,7 @@ async def campaign_schedule_get():
 
 @router.post("/api/campaign/retry_failed")
 async def campaign_retry_failed():
-
-    m._require_vault_unlocked()
-    if m.RUNTIME.worker_busy():
-        raise HTTPException(400, "Сначала остановите текущую рассылку")
-    with m._conn() as c:
-        row = c.execute(
-            """
-            SELECT MIN(sl.message_idx) AS mi
-            FROM send_log sl
-            WHERE sl.status='failed'
-              AND NOT EXISTS (
-                SELECT 1 FROM send_log s2
-                WHERE s2.message_idx = sl.message_idx AND s2.status='sent'
-              )
-            """
-        ).fetchone()
-    if row is None or row["mi"] is None:
-        raise HTTPException(400, "Нет ошибочных сообщений для повтора")
-    mi = int(row["mi"])
-    with m._conn() as c:
-        c.execute(
-            "UPDATE queue_state SET message_idx=?, profile_idx=0, group_idx=0 WHERE id=1",
-            (mi,),
-        )
-    m.append_log(f"Повтор ошибок: продолжение с индекса={mi}")
-    if not m._has_sendable_profile():
-        raise HTTPException(400, "Нет доступных профилей для отправки")
-    await m._preflight_group_proxies()
-    m.set_setting("auto_run", "1")
-    await m._start_worker()
-    return {"ok": True, "message_idx": mi, "campaign_id": m.RUNTIME.current_campaign_id}
+    raise HTTPException(409, "Безопасный повтор временно недоступен")
 
 
 @router.post("/api/campaign/test")

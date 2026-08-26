@@ -59,13 +59,12 @@ def ensure_global_data(root: Path) -> Path:
 
 
 def init_tenant_db(main_module, tenant_id: int) -> None:
-    """Инициализировать SQLite для tenant (если ещё не создан)."""
+    """Инициализировать или мигрировать SQLite tenant."""
     from app.tenant import tenant_scope
 
     ensure_tenant_data(main_module.ROOT, tenant_id)
     with tenant_scope(tenant_id=tenant_id, role="user"):
-        if not main_module._db_path().exists():
-            main_module.init_db()
+        main_module.init_db()
         main_module._try_legacy_unlock()
 
 

@@ -74,9 +74,17 @@ def test_index_subscription_start_gate_and_no_svodka_tab():
     assert "Забанен" in INDEX_ALL
 
 
-def test_index_worker_pool_hidden_for_users():
-    assert "workerPoolRow" in INDEX
-    assert "settings-admin-only" in INDEX
+def test_fixed_runtime_controls_are_not_editable():
+    for dead_control in (
+        "workerPoolRow",
+        "workerPool",
+        "tzOffset",
+        "roleActivePct",
+        "roleQuietPct",
+        "btnRetryFailed",
+    ):
+        assert dead_control not in INDEX_ALL
+        assert dead_control not in ADMIN_ALL
 
 
 def test_admin_tab_navigation_and_subscription_ux():
@@ -93,7 +101,7 @@ def test_admin_tab_navigation_and_subscription_ux():
     assert 'data-action="delete-user"' in ADMIN_ALL
     assert 'onclick="deleteUser' not in ADMIN_ALL
     assert "deleteUser" in ADMIN_ALL
-    assert "worker_pool_size" in ADMIN_ALL
+    assert "worker_pool_size" not in ADMIN_ALL
     assert "index.html" not in ADMIN_ALL
 
 
@@ -189,13 +197,24 @@ def test_admin_global_pacing_form_covers_allowlist():
     assert "circuit_break_minutes" in ADMIN_JS
 
     body = _admin_save_global_body()
-    for key in GLOBAL_PACING_SETTING_KEYS:
+    fixed_keys = {
+        "day_skip_percent",
+        "role_plan_enabled",
+        "role_active_percent",
+        "role_quiet_percent",
+        "role_active_min",
+        "role_active_max",
+        "timezone_offset_hours",
+    }
+    for key in GLOBAL_PACING_SETTING_KEYS - fixed_keys:
         assert key in body, key
+    for key in fixed_keys:
+        assert key not in body, key
     for key in GLOBAL_PACING_NEVER_COPY:
         assert key not in body, key
     assert "worker_pool_size" not in body
-    assert "worker_pool_size" in ADMIN_JS
-    assert 'id="pool-' in ADMIN_JS or "pool-" in ADMIN_JS
+    assert "worker_pool_size" not in ADMIN_JS
+    assert 'id="pool-' not in ADMIN_JS
     assert "api_pin" not in ADMIN
     assert "webhookUrl" not in ADMIN
     assert "auto_run" not in body
@@ -236,3 +255,23 @@ def test_auth_forms_enter_submit_and_errors():
     login_form = AUTH.index('id="formLogin"')
     remember_idx = AUTH.index('id="rememberMeLogin"')
     assert login_form < remember_idx
+
+
+def test_mobile_tables_dialogs_and_touch_targets():
+    for name, html in (("index", INDEX), ("admin", ADMIN), ("auth", AUTH)):
+        assert "@media (max-width: 720px)" in html, name
+        assert "--touch-min: 44px" in html, name
+        assert "overflow-x: hidden" in html, name
+
+    assert "content: attr(data-label)" in INDEX
+    assert "content: attr(data-label)" in ADMIN
+    assert ".data-table thead" in INDEX
+    assert ".users-table thead" in ADMIN
+    assert "max-height: calc(100dvh - 2rem)" in INDEX
+    assert "overflow-wrap: anywhere" in INDEX
+    assert "overflow-wrap: anywhere" in ADMIN
+
+    for label in ("Время", "Профиль", "Группа", "Статус", "Ошибка", "Действия"):
+        assert f'data-label="{label}"' in INDEX_JS, label
+    for label in ("Учреждение", "Логин", "Подписка", "Статистика", "Действия"):
+        assert f'data-label="{label}"' in ADMIN_JS, label

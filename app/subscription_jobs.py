@@ -73,6 +73,10 @@ async def _tick() -> None:
             )
             _last_warn_day[key] = today
 
+    for tid in tuple(_stopped_expired):
+        if db_pg.subscription_active(tid):
+            _stopped_expired.discard(tid)
+
     for row in db_pg.tenants_recently_expired(since_hours=25):
         tid = int(row["tenant_id"])
         if tid in _stopped_expired:

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
+import antiban_core
 from app.tenant import tenant_scope
 
 
@@ -123,3 +124,50 @@ def test_extra_config_proxy_typeerror_fails_closed(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="прокси"):
         asyncio.run(_run())
     assert not any("работаем без него" in line for line in logs)
+
+
+def test_group_preflight_checks_every_pool_member(tmp_path, monkeypatch):
+    m = _setup_local(tmp_path, monkeypatch)
+    raw = "socks5://one.example:1080\nsocks5://two.example:1080"
+    with m._conn() as c:
+        gid = c.execute(
+            "INSERT INTO groups (name, invite_link, proxy) VALUES ('G', 'x', ?)",
+            (raw,),
+        ).lastrowid
+    calls = []
+
+    def check(url, **_kwargs):
+        calls.append(url)
+        return (not url.startswith("socks5://two"), "second failed")
+
+    monkeypatch.setattr(m.antiban_core, "check_proxy", check)
+    m._proxy_bad_until.clear()
+    ok, error = m._validate_proxy_for_group({"id": gid, "name": "G"}, None)
+
+    assert ok is False
+    assert "two.example" in error
+    assert "second failed" in error
+    assert calls == antiban_core.parse_proxy_list(raw)
+
+
+def test_proxy_bad_cache_is_tenant_scoped(tmp_path, monkeypatch):
+    m = _setup_local(tmp_path, monkeypatch)
+    proxy = "socks5://proxy.example:1080"
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
+    monkeypatch.setattr(m, "_group_proxy_raw", lambda _gid: proxy)
+    monkeypatch.setattr(m, "append_log", lambda _msg: None)
+    monkeypatch.setattr(m, "_schedule_telegram", lambda *_args, **_kwargs: None)
+    calls = []
+    monkeypatch.setattr(
+        m.antiban_core,
+        "check_proxy",
+        lambda url, **_kwargs: (calls.append(url) is None and False, "down"),
+    )
+    m._proxy_bad_until.clear()
+
+    with tenant_scope(tenant_id=1, role="admin"):
+        assert m._validate_proxy_for_group({"id": 1, "name": "G"}, None)[0] is False
+    with tenant_scope(tenant_id=2, role="admin"):
+        assert m._validate_proxy_for_group({"id": 1, "name": "G"}, None)[0] is False
+
+    assert calls == [proxy, proxy]

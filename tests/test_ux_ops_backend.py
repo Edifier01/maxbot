@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
+import sqlite3
+from datetime import date
+
+import pytest
 
 from app.tenant import tenant_scope
 from app.tenant_init import ensure_tenant_data, init_global_db, init_tenant_db
@@ -18,6 +23,7 @@ def _setup_local(tmp_path, monkeypatch):
     import main as m
 
     importlib.reload(m)
+    m.reset_test_runtime()
     monkeypatch.setattr(m, "ROOT", tmp_path)
     m._refresh_data_paths()
     m.init_db()
@@ -33,6 +39,7 @@ def _setup_server(tmp_path, monkeypatch):
     import main as m
 
     importlib.reload(m)
+    m.reset_test_runtime()
     monkeypatch.setattr(m, "ROOT", tmp_path)
     m._refresh_data_paths()
     return m
@@ -160,6 +167,7 @@ def test_save_messages_resets_all_tenant_queue_indices(tmp_path, monkeypatch):
     n = m.save_messages_file(b"one\ntwo\nthree\n")
     assert n == 3
     assert m.load_message_pool() == ["one", "two", "three"]
+    assert not (m.ROOT / "data" / "global" / "messages" / "active.txt").exists()
 
     for tid in (1, 2):
         with tenant_scope(tenant_id=tid, role="user"):
@@ -175,3 +183,73 @@ def test_save_messages_resets_all_tenant_queue_indices(tmp_path, monkeypatch):
             bag = json.loads(qs["message_bag"] or "[]")
             assert sorted(bag) == [0, 1, 2]
             assert send_n == 1
+
+
+def test_message_pool_reset_reports_failed_tenant_ids(tmp_path, monkeypatch):
+    m = _setup_server(tmp_path, monkeypatch)
+    init_global_db(m)
+    for tid in (1, 2):
+        init_tenant_db(m, tid)
+
+    from app.tenant import get_tenant_id
+
+    original = m._reset_current_queue_for_new_pool
+
+    def flaky_reset(n):
+        if get_tenant_id() == 2:
+            raise sqlite3.OperationalError("broken tenant db")
+        return original(n)
+
+    monkeypatch.setattr(m, "_reset_current_queue_for_new_pool", flaky_reset)
+
+    with pytest.raises(ValueError, match=r"\b2\b"):
+        m.save_messages_file(b"one\ntwo\n")
+    assert m.load_message_pool() == ["one", "two"]
+    assert not (m.ROOT / "data" / "global" / "messages" / "active.txt").exists()
+
+
+def test_existing_empty_tenant_db_is_migrated(tmp_path, monkeypatch):
+    m = _setup_server(tmp_path, monkeypatch)
+    data_dir = ensure_tenant_data(m.ROOT, 9)
+    (data_dir / "app.db").write_bytes(b"")
+
+    init_tenant_db(m, 9)
+
+    with tenant_scope(tenant_id=9, role="user"):
+        tables = {
+            row["name"]
+            for row in m._conn().execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    assert {"profiles", "groups", "settings", "queue_state"} <= tables
+
+
+def test_send_day_and_dashboard_use_utc_plus_three(tmp_path, monkeypatch):
+    m = _setup_local(tmp_path, monkeypatch)
+    monkeypatch.setattr(m, "_local_today", lambda: date(2026, 8, 26))
+    with m._conn() as c:
+        profile_id = c.execute(
+            "INSERT INTO profiles (phone, status) VALUES ('+79000000001', 'active')"
+        ).lastrowid
+        group_id = c.execute(
+            "INSERT INTO groups (name, is_active) VALUES ('utc3', 1)"
+        ).lastrowid
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) VALUES (?, ?, 1)",
+            (group_id, profile_id),
+        )
+        c.execute(
+            "INSERT INTO send_log (profile_id, group_id, message_idx, status, sent_at) "
+            "VALUES (?, ?, 0, 'sent', '2026-08-25 21:30:00')",
+            (profile_id, group_id),
+        )
+
+    assert m._group_sends_today(profile_id, group_id) == 1
+
+    from app.routes_dashboard import dashboard, get_send_log
+
+    body = asyncio.run(dashboard())
+    assert body["sent_today"] == 1
+    log = asyncio.run(get_send_log())
+    assert log["items"][0]["sent_at"] == "2026-08-26 00:30:00"

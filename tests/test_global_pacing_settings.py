@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -58,6 +59,15 @@ def test_settings_in_delay_min_floor():
         SettingsIn(delay_max_sec=1)
     assert SettingsIn(delay_min_sec=5).delay_min_sec == 5
     assert SettingsIn(delay_max_sec=5).delay_max_sec == 5
+
+
+def test_runtime_timezone_is_fixed_to_utc_plus_three(tmp_path, monkeypatch):
+    m = _setup_server_main(tmp_path, monkeypatch)
+    _init_tenant(m, 1)
+    with tenant_scope(tenant_id=1, role="admin"):
+        m.set_setting("timezone_offset_hours", "-8")
+        expected = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(tzinfo=None)
+        assert abs((m._local_now() - expected).total_seconds()) < 2
 
 
 def test_allowlist_classifies_every_default_key():
@@ -115,6 +125,13 @@ def test_admin_put_settings_changes_tenant_get_setting(tmp_path, monkeypatch):
         assert m.get_setting("delay_min_sec") == "9"
 
 
+def test_global_scope_reuses_one_sqlite_connection(tmp_path, monkeypatch):
+    m = _setup_server_main(tmp_path, monkeypatch)
+    _init_global(m)
+    with tenant_scope(use_global_data=True, role="admin"):
+        assert m._global_conn() is m._conn()
+
+
 def test_secrets_and_ops_keys_not_copied_to_tenants(tmp_path, monkeypatch):
     m = _setup_server_main(tmp_path, monkeypatch)
     _init_global(m)
@@ -140,7 +157,6 @@ def test_secrets_and_ops_keys_not_copied_to_tenants(tmp_path, monkeypatch):
                     delay_min_sec=8,
                     telegram_bot_token="global-bot-token",
                     webhook_url="https://global.example",
-                    worker_pool_size=16,
                 )
             )
         )
@@ -153,6 +169,7 @@ def test_secrets_and_ops_keys_not_copied_to_tenants(tmp_path, monkeypatch):
         assert m.get_setting("telegram_bot_token") == ""
         assert m.get_setting("webhook_url") == "https://tenant-a.example"
         assert m.get_setting("worker_pool_size") == "3"
+        assert m._pool_size() == 1
         assert m.get_setting("auto_run") == "1"
         assert m.get_setting("auto_run_pool_reset_day") == ""
 
@@ -252,6 +269,51 @@ def test_tenant_scoped_put_does_not_fan_out(tmp_path, monkeypatch):
         assert m.get_setting("delay_min_sec") == "11"
     with tenant_scope(tenant_id=62, role="user"):
         assert m.get_setting("delay_min_sec") == m.DEFAULTS["delay_min_sec"]
+
+
+def test_partial_range_update_validates_against_stored_value(tmp_path, monkeypatch):
+    m = _setup_server_main(tmp_path, monkeypatch)
+    _init_tenant(m, 71)
+    with tenant_scope(tenant_id=71, role="user"):
+        m.set_setting("delay_min_sec", "5")
+        m.set_setting("delay_max_sec", "10")
+
+    from app.routes_models import SettingsIn
+    from app.routes_settings import update_settings
+
+    set_context(user_id=1, tenant_id=71, role="admin", impersonating=True)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(update_settings(SettingsIn(delay_min_sec=11)))
+        assert exc.value.status_code == 400
+        assert m.get_setting("delay_min_sec") == "5"
+    finally:
+        clear_context()
+
+
+def test_global_partial_range_propagates_coherent_pair(tmp_path, monkeypatch):
+    m = _setup_server_main(tmp_path, monkeypatch)
+    _init_global(m)
+    _init_tenant(m, 72)
+    with tenant_scope(use_global_data=True, role="admin"):
+        m.set_setting("delay_min_sec", "5")
+        m.set_setting("delay_max_sec", "20")
+    with tenant_scope(tenant_id=72, role="user"):
+        m.set_setting("delay_min_sec", "5")
+        m.set_setting("delay_max_sec", "8")
+
+    from app.routes_models import SettingsIn
+    from app.routes_settings import update_settings
+
+    set_context(user_id=1, role="admin", use_global_data=True)
+    try:
+        asyncio.run(update_settings(SettingsIn(delay_min_sec=10)))
+    finally:
+        clear_context()
+
+    with tenant_scope(tenant_id=72, role="user"):
+        assert m.get_setting("delay_min_sec") == "10"
+        assert m.get_setting("delay_max_sec") == "20"
 
 
 def test_revoke_subscription_route_requires_admin():

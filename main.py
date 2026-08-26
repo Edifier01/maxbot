@@ -25,6 +25,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError, HTTPError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import uvicorn
@@ -227,6 +228,9 @@ DEFAULTS = {
     "auto_run_pool_reset_day": "",
 }
 
+LOCAL_UTC_OFFSET = timedelta(hours=3)
+LOCAL_TIMEZONE = timezone(LOCAL_UTC_OFFSET)
+
 _APP_KEY_PATH = DATA / ".app_key"
 _APP_SALT_PATH = DATA / ".app_salt"
 _APP_VAULT_PATH = DATA / ".app_vault"
@@ -286,29 +290,12 @@ def _metric_inc(name: str, value: float = 1) -> None:
 
 
 def _pool_size() -> int:
-    try:
-        raw = get_setting("worker_pool_size") or os.environ.get("WORKER_POOL_SIZE", "1")
-        n = int(raw)
-    except Exception:
-        try:
-            n = int(os.environ.get("WORKER_POOL_SIZE", "1") or "1")
-        except ValueError:
-            n = 1
-    return max(1, min(n, 32))
+    return 1
 
 
 def _local_now() -> datetime:
-    """Текущее «локальное» время с учётом timezone_offset_hours (по умолчанию UTC+3)."""
-    try:
-        offset = float(
-            get_setting("timezone_offset_hours") or DEFAULTS["timezone_offset_hours"]
-        )
-    except Exception:
-        try:
-            offset = float(DEFAULTS.get("timezone_offset_hours", "3"))
-        except ValueError:
-            offset = 3.0
-    return antiban_core.local_now(offset)
+    """Naive wall clock in the product's fixed UTC+3 operating timezone."""
+    return datetime.now(LOCAL_TIMEZONE).replace(tzinfo=None)
 
 
 def _local_today() -> date:
@@ -574,13 +561,14 @@ def _reset_current_queue_for_new_pool(n: int) -> None:
     _rebuild_message_bag(n)
 
 
-def _reset_all_tenants_queue_for_new_pool(n: int) -> None:
+def _reset_all_tenants_queue_for_new_pool(n: int) -> list[int]:
     """After global TXT replace, every tenant must restart pool indices."""
     from app.tenant import tenant_scope
 
     tenants_root = ROOT / "data" / "tenants"
     if not tenants_root.is_dir():
-        return
+        return []
+    failed: list[int] = []
     for entry in sorted(tenants_root.iterdir()):
         if not entry.is_dir() or not (entry / "app.db").is_file():
             continue
@@ -591,8 +579,9 @@ def _reset_all_tenants_queue_for_new_pool(n: int) -> None:
         with tenant_scope(tenant_id=tid, role="user"):
             try:
                 _reset_current_queue_for_new_pool(n)
-            except sqlite3.OperationalError:
-                continue
+            except Exception:
+                failed.append(tid)
+    return failed
 
 
 def save_messages_file(content: bytes) -> int:
@@ -600,10 +589,6 @@ def save_messages_file(content: bytes) -> int:
     messages = parse_messages_text(text)
     if not messages:
         raise ValueError("Файл пуст или не содержит сообщений")
-    global_dir = ROOT / "data" / "global" / "messages" if _is_server_mode() else MESSAGES_FILE.parent
-    global_dir.mkdir(parents=True, exist_ok=True)
-    msg_file = global_dir / "active.txt" if _is_server_mode() else MESSAGES_FILE
-    msg_file.write_bytes(content)
     if _is_server_mode():
         with _global_conn() as conn:
             conn.execute("DELETE FROM message_pool")
@@ -611,8 +596,13 @@ def save_messages_file(content: bytes) -> int:
                 "INSERT INTO message_pool (text, order_index) VALUES (?, ?)",
                 [(m, i) for i, m in enumerate(messages)],
             )
-        _reset_all_tenants_queue_for_new_pool(len(messages))
+        failed = _reset_all_tenants_queue_for_new_pool(len(messages))
+        if failed:
+            ids = ", ".join(str(tid) for tid in failed)
+            raise ValueError(f"Не удалось сбросить очередь учреждений: {ids}")
     else:
+        MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        MESSAGES_FILE.write_bytes(content)
         with _conn() as c:
             c.execute("DELETE FROM message_pool")
             c.executemany(
@@ -825,7 +815,7 @@ async def _try_auto_resume(*, log_prefix: str = "Автовозобновлен�
     if not _has_sendable_profile():
         return False
     try:
-        started = await _start_worker(record_campaign=True)
+        started = await _start_worker(record_campaign=RUNTIME.current_campaign_id is None)
     except HTTPException as e:
         append_log(f"{log_prefix}: запуск отменён — {e.detail}")
         return False
@@ -890,14 +880,20 @@ def _profile_client_lock(profile_id: int) -> asyncio.Lock:
 
 
 def _normalize_phone(phone: str) -> str:
-    phone = phone.strip().replace(" ", "")
-    if phone.startswith("8") and len(phone) == 11:
-        phone = "+7" + phone[1:]
-    elif phone.startswith("7") and len(phone) == 11:
-        phone = "+" + phone
-    elif not phone.startswith("+"):
-        phone = "+" + phone.lstrip("+")
-    return phone
+    raw = str(phone or "").strip()
+    if any(char.isalpha() for char in raw):
+        raise ValueError("Номер должен содержать только цифры и знаки форматирования")
+    digits = "".join(char for char in raw if char in "0123456789")
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    if not 10 <= len(digits) <= 15:
+        raise ValueError("Номер должен содержать от 10 до 15 цифр")
+    return "+" + digits
+
+
+def _require_worker_idle() -> None:
+    if REGISTRY.worker().worker_busy():
+        raise HTTPException(409, "Сначала остановите рассылку")
 
 
 def _auth_session_key(profile_id: int) -> Any:
@@ -1235,6 +1231,33 @@ async def _with_client_unlocked(
     group_id: int | None = None,
     proxy: str | None = None,
 ):
+    _decrypt_session(profile_id)
+    try:
+        return await _with_decrypted_client(
+            profile_id,
+            phone,
+            fn,
+            connect_timeout,
+            auth_timeout,
+            login_mode=login_mode,
+            group_id=group_id,
+            proxy=proxy,
+        )
+    finally:
+        _encrypt_session(profile_id)
+
+
+async def _with_decrypted_client(
+    profile_id: int,
+    phone: str,
+    fn,
+    connect_timeout: float = 90,
+    auth_timeout: float = 600,
+    *,
+    login_mode: bool = False,
+    group_id: int | None = None,
+    proxy: str | None = None,
+):
     from pymax import Client, ExtraConfig
 
     sess = _ensure_auth_session(profile_id)
@@ -1242,7 +1265,6 @@ async def _with_client_unlocked(
         _set_auth_step(profile_id, "connecting")
     else:
         _clear_stale_connecting_step(profile_id)
-    _decrypt_session(profile_id)
     if not login_mode and not _session_db_has_token(profile_id):
         raise RuntimeError(
             "Сессия MAX отсутствует — нажмите «Войти» у профиля. "
@@ -1325,13 +1347,14 @@ async def _with_client_unlocked(
     except TimeoutError as e:
         box["err"] = e
     finally:
-        await _safe_stop(client)
-        _encrypt_session(profile_id)
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        if not login_mode:
-            _clear_stale_connecting_step(profile_id)
+        try:
+            await _safe_stop(client)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            if not login_mode:
+                _clear_stale_connecting_step(profile_id)
 
     if box.get("err") and box.get("result") is None:
         raise box["err"]
@@ -1412,7 +1435,7 @@ def _human_rhythm_enabled() -> bool:
 
 
 def _role_plan_enabled() -> bool:
-    return _human_rhythm_enabled() and _setting_truthy("role_plan_enabled", "1")
+    return _human_rhythm_enabled()
 
 
 def _ensure_role_cycle_anchor() -> None:
@@ -1443,8 +1466,7 @@ def _role_cycle_anchor() -> date | None:
             dt = datetime.strptime(val[:19], "%Y-%m-%d %H:%M:%S").replace(
                 tzinfo=timezone.utc
             )
-        offset = float(get_setting("timezone_offset_hours") or DEFAULTS["timezone_offset_hours"])
-        return dt.astimezone(timezone(timedelta(hours=offset))).date()
+        return dt.astimezone(LOCAL_TIMEZONE).date()
     except (ValueError, TypeError):
         try:
             return date.fromisoformat(val[:10])
@@ -2066,7 +2088,7 @@ def _group_proxy(group_id: int, profile_id: int | None = None) -> str | None:
 
 
 _PROXY_RECHECK_SEC = 300.0
-_proxy_bad_until: dict[str, tuple[float, str]] = {}
+_proxy_bad_until: dict[tuple[int | None, int, str], tuple[float, str]] = {}
 _tg_notify_at: dict[str, float] = {}
 _TG_DEDUPE_SEC = 300.0
 
@@ -2083,7 +2105,12 @@ def _group_proxy_raw(group_id: int) -> str:
 
 
 def _proxy_host_label(proxy_url: str) -> str:
-    return proxy_url.split("@")[-1] if proxy_url else ""
+    try:
+        parsed = urlparse(proxy_url)
+        host = parsed.hostname or "proxy"
+        return f"{host}:{parsed.port}" if parsed.port else host
+    except ValueError:
+        return "некорректный proxy"
 
 
 def _validate_proxy_for_group(
@@ -2101,35 +2128,41 @@ def _validate_proxy_for_group(
         urls = [u for u in [_group_proxy(gid, profile_id)] if u]
     else:
         urls = antiban_core.parse_proxy_list(raw)
-    last_err = ""
+    tenant_id = None
+    if _is_server_mode():
+        from app.tenant import get_tenant_id
+
+        tenant_id = get_tenant_id()
+    errors: list[str] = []
     gname = str(group["name"])
     for proxy_url in urls:
-        key = f"{gid}:{_proxy_host_label(proxy_url)}"
+        label = _proxy_host_label(proxy_url)
+        key = (tenant_id, gid, proxy_url)
         now = time.time()
         bad = _proxy_bad_until.get(key)
         if bad and now < bad[0]:
-            last_err = bad[1]
+            errors.append(f"{label}: {bad[1]}")
             continue
         ok, err = antiban_core.check_proxy(proxy_url)
         if ok:
             _proxy_bad_until.pop(key, None)
-            return True, ""
+            continue
         _proxy_bad_until[key] = (now + _PROXY_RECHECK_SEC, err)
-        last_err = err
+        errors.append(f"{label}: {err}")
         append_log(
             f"Прокси недоступен: группа «{gname}» "
-            f"({_proxy_host_label(proxy_url)}): {err}"
+            f"({label}): {err}"
         )
         _schedule_telegram(
             "Прокси недоступен",
             [
                 f"Группа: {gname} (#{gid})",
-                f"Прокси: {_proxy_host_label(proxy_url)}",
+                f"Прокси: {label}",
                 f"Ошибка: {err}",
             ],
-            dedupe_key=f"proxy:{key}",
+            dedupe_key=f"proxy:{tenant_id}:{gid}:{label}",
         )
-    return False, last_err or "прокси недоступен"
+    return (False, "; ".join(errors)) if errors else (True, "")
 
 
 async def _preflight_group_proxies() -> None:
@@ -2176,7 +2209,7 @@ def _group_sends_today(profile_id: int, group_id: int) -> int:
             """
             SELECT COUNT(*) n FROM send_log
             WHERE profile_id=? AND group_id=? AND status='sent'
-              AND date(sent_at)=?
+              AND date(sent_at, '+3 hours')=?
             """,
             (profile_id, group_id, today),
         ).fetchone()

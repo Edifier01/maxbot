@@ -1,4 +1,4 @@
-"""Pause must clear auto_run; start / retry / schedule-start enable daily continue."""
+"""Pause clears auto_run; start and scheduled start enable daily continuation; retry fails closed."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from app.campaign_runtime import REGISTRY
 from app.tenant import get_tenant_id, tenant_scope
@@ -106,6 +107,20 @@ def test_auto_resume_logs_only_after_worker_starts(m, monkeypatch):
     log_mock.assert_called_once_with("Автовозобновление: рассылка запущена")
 
 
+def test_auto_resume_reuses_running_campaign(m, monkeypatch):
+    m.set_setting("auto_run", "1")
+    REGISTRY.worker_for(None).current_campaign_id = 7
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["hello"])
+    monkeypatch.setattr(m, "_prepare_auto_resume_pool", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+
+    assert asyncio.run(m._try_auto_resume()) is True
+    start_mock.assert_awaited_once_with(record_campaign=False)
+
+
 def test_auto_resume_does_not_claim_start_when_worker_is_busy(m, monkeypatch):
     m.set_setting("auto_run", "1")
     log_mock = MagicMock()
@@ -120,7 +135,7 @@ def test_auto_resume_does_not_claim_start_when_worker_is_busy(m, monkeypatch):
     log_mock.assert_not_called()
 
 
-def test_retry_failed_sets_auto_run(m, monkeypatch):
+def test_retry_failed_fails_closed_without_state_change(m, monkeypatch):
     m.set_setting("auto_run", "0")
     with m._conn() as c:
         c.execute("INSERT INTO profiles (id, phone) VALUES (1, '+79000000001')")
@@ -128,6 +143,9 @@ def test_retry_failed_sets_auto_run(m, monkeypatch):
         c.execute(
             "INSERT INTO send_log (profile_id, group_id, message_idx, status) "
             "VALUES (1, 1, 4, 'failed')"
+        )
+        c.execute(
+            "UPDATE queue_state SET profile_idx=2, message_idx=9, group_idx=3 WHERE id=1"
         )
 
     monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
@@ -138,12 +156,13 @@ def test_retry_failed_sets_auto_run(m, monkeypatch):
 
     from app.routes_campaign import campaign_retry_failed
 
-    result = asyncio.run(campaign_retry_failed())
-    assert result["ok"] is True
-    assert result["message_idx"] == 4
-    assert m.get_setting("auto_run") == "1"
-    start_mock.assert_awaited_once()
-    assert _queue_indices(m)[1] == 4
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(campaign_retry_failed())
+
+    assert exc_info.value.status_code == 409
+    assert m.get_setting("auto_run") == "0"
+    assert _queue_indices(m) == (2, 9, 3)
+    start_mock.assert_not_awaited()
 
 
 def test_scheduler_tick_sets_auto_run(m, monkeypatch):
@@ -162,7 +181,7 @@ def test_scheduler_tick_sets_auto_run(m, monkeypatch):
 
     import app.campaign_worker as cw
 
-    start_mock = AsyncMock()
+    start_mock = AsyncMock(return_value=True)
     monkeypatch.setattr(cw, "start_worker", start_mock)
     REGISTRY.reset_test()
 
@@ -174,6 +193,34 @@ def test_scheduler_tick_sets_auto_run(m, monkeypatch):
     with m._conn() as c:
         row = c.execute("SELECT enabled FROM campaign_schedule WHERE id=1").fetchone()
     assert int(row["enabled"]) == 0
+
+
+def test_scheduler_keeps_due_schedule_when_start_fails(m, monkeypatch):
+    m.set_setting("auto_run", "0")
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    with m._conn() as c:
+        c.execute(
+            "UPDATE campaign_schedule SET enabled=1, start_at=? WHERE id=1",
+            (past,),
+        )
+
+    monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["hello"])
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+    monkeypatch.setattr(m, "_preflight_group_proxies", AsyncMock())
+    monkeypatch.setattr(m, "_try_auto_resume", AsyncMock(return_value=False))
+
+    import app.campaign_worker as cw
+
+    monkeypatch.setattr(cw, "start_worker", AsyncMock(return_value=False))
+    REGISTRY.reset_test()
+
+    asyncio.run(cw.scheduler_tick())
+
+    assert m.get_setting("auto_run") == "0"
+    with m._conn() as c:
+        row = c.execute("SELECT enabled FROM campaign_schedule WHERE id=1").fetchone()
+    assert int(row["enabled"]) == 1
 
 
 def test_scheduler_logs_errors_in_the_tenant_journal(m, monkeypatch):
@@ -303,7 +350,104 @@ def test_watchdog_does_not_start_worker_when_auto_run_off(m, monkeypatch):
         loop.close()
 
     stop_mock.assert_awaited_once()
+    assert stop_mock.await_args.kwargs["finish_status"] is None
     start_mock.assert_not_awaited()
+
+
+def test_watchdog_restart_preserves_campaign_and_counts(m, monkeypatch):
+    import app.campaign_worker as cw
+
+    m.set_setting("auto_run", "1")
+    rt = REGISTRY.worker_for(None)
+    rt.worker_last_activity = time.monotonic() - m.WORKER_TIMEOUT - 10
+
+    async def hang_forever():
+        await asyncio.Event().wait()
+
+    stop_mock = AsyncMock()
+    start_mock = AsyncMock(return_value=True)
+    metric_mock = MagicMock()
+    monkeypatch.setattr(cw, "stop_worker", stop_mock)
+    monkeypatch.setattr(cw, "start_worker", start_mock)
+    monkeypatch.setattr(m, "_metric_inc", metric_mock)
+
+    sleep_calls = 0
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_sec):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 2:
+            raise StopAsyncIteration
+        await real_sleep(0)
+
+    monkeypatch.setattr(cw.asyncio, "sleep", fast_sleep)
+    loop = asyncio.new_event_loop()
+    hang_task = None
+    try:
+        hang_task = loop.create_task(hang_forever())
+        rt.worker_task = hang_task
+        with pytest.raises(StopAsyncIteration):
+            loop.run_until_complete(cw.watchdog_loop())
+    finally:
+        if hang_task is not None and not hang_task.done():
+            hang_task.cancel()
+            loop.run_until_complete(asyncio.gather(hang_task, return_exceptions=True))
+        rt.worker_task = None
+        loop.close()
+
+    assert stop_mock.await_args.kwargs["finish_status"] is None
+    start_mock.assert_awaited_once_with(record_campaign=False)
+    metric_mock.assert_called_once_with("worker_restarts_total")
+
+
+def test_watchdog_survives_failed_restart(m, monkeypatch):
+    import app.campaign_worker as cw
+
+    m.set_setting("auto_run", "1")
+    rt = REGISTRY.worker_for(None)
+    rt.worker_last_activity = time.monotonic() - m.WORKER_TIMEOUT - 10
+
+    async def hang_forever():
+        await asyncio.Event().wait()
+
+    async def stop_worker(**_kwargs):
+        rt.worker_task = None
+
+    stop_mock = AsyncMock(side_effect=stop_worker)
+    start_mock = AsyncMock(side_effect=RuntimeError("proxy down"))
+    metric_mock = MagicMock()
+    monkeypatch.setattr(cw, "stop_worker", stop_mock)
+    monkeypatch.setattr(cw, "start_worker", start_mock)
+    monkeypatch.setattr(m, "_metric_inc", metric_mock)
+
+    sleep_calls = 0
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_sec):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 2:
+            raise StopAsyncIteration
+        await real_sleep(0)
+
+    monkeypatch.setattr(cw.asyncio, "sleep", fast_sleep)
+    loop = asyncio.new_event_loop()
+    hang_task = None
+    try:
+        hang_task = loop.create_task(hang_forever())
+        rt.worker_task = hang_task
+        with pytest.raises(StopAsyncIteration):
+            loop.run_until_complete(cw.watchdog_loop())
+    finally:
+        if hang_task is not None and not hang_task.done():
+            hang_task.cancel()
+            loop.run_until_complete(asyncio.gather(hang_task, return_exceptions=True))
+        rt.worker_task = None
+        loop.close()
+
+    start_mock.assert_awaited_once_with(record_campaign=False)
+    metric_mock.assert_not_called()
 
 
 def test_stop_worker_from_inside_worker_task_does_not_hang(m):

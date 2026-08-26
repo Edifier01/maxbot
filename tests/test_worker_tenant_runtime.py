@@ -102,9 +102,15 @@ def test_worker_start_captures_tenant_context(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_SERVER_MODE", "1")
     monkeypatch.setenv("MAX_TEST", "1")
 
+    import importlib
+
+    import app.config as cfg
+
+    importlib.reload(cfg)
     import main as m
 
     monkeypatch.setattr(m, "ROOT", tmp_path)
+    m._refresh_data_paths()
     tenant_dir = tmp_path / "data" / "tenants" / "5"
     tenant_dir.mkdir(parents=True)
     db_path = tenant_dir / "app.db"
@@ -133,7 +139,7 @@ def test_worker_start_captures_tenant_context(tmp_path, monkeypatch):
 
     captured: list[int | None] = []
 
-    async def fake_worker_loop():
+    async def fake_pool_supervisor():
         from app.tenant import get_tenant_id
 
         captured.append(get_tenant_id())
@@ -141,7 +147,7 @@ def test_worker_start_captures_tenant_context(tmp_path, monkeypatch):
 
     import app.campaign_worker as cw
 
-    monkeypatch.setattr(cw, "worker_loop", fake_worker_loop)
+    monkeypatch.setattr(cw, "pool_supervisor", fake_pool_supervisor)
     monkeypatch.setattr(m, "_pool_size", lambda: 1)
     monkeypatch.setattr(m, "_preflight_group_proxies", lambda: asyncio.sleep(0))
     monkeypatch.setattr(m, "load_message_pool", lambda: ["hi"])

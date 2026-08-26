@@ -474,7 +474,6 @@ let openGroupId = null;
     document.getElementById('btnStop').addEventListener('click', function() { withLoading(this, stopCampaign); });
     document.getElementById('btnReset').addEventListener('click', function() { withLoading(this, resetCampaign); });
     document.getElementById('btnTestSend').addEventListener('click', function() { withLoading(this, testSend); });
-    document.getElementById('btnRetryFailed').addEventListener('click', function() { withLoading(this, retryFailed); });
     document.getElementById('btnSchedule').addEventListener('click', function() { withLoading(this, scheduleCampaign); });
     document.getElementById('btnCancelSchedule').addEventListener('click', function() { withLoading(this, cancelSchedule); });
     document.getElementById('sendLogQ').addEventListener('keydown', (e) => {
@@ -900,11 +899,11 @@ let openGroupId = null;
           <tbody>${d.items.map(r => {
             const cls = r.status === 'sent' ? 'ok' : (r.status === 'failed' ? 'fail' : '');
             return `<tr class="${cls}">
-              <td>${esc(r.sent_at || '')}</td>
-              <td>#${r.profile_id} ${esc(r.phone || '')}</td>
-              <td>${esc(r.group_name || '?')}</td>
-              <td>${esc(sendStatusRu(r.status))}</td>
-              <td>${esc(r.error || '')}</td>
+              <td data-label="Время">${esc(r.sent_at || '')}</td>
+              <td data-label="Профиль">#${r.profile_id} ${esc(r.phone || '')}</td>
+              <td data-label="Группа">${esc(r.group_name || '?')}</td>
+              <td data-label="Статус">${esc(sendStatusRu(r.status))}</td>
+              <td data-label="Ошибка">${esc(r.error || '')}</td>
             </tr>`;
           }).join('')}</tbody></table>`;
       }
@@ -1054,18 +1053,6 @@ let openGroupId = null;
       }
     }
 
-    async function retryFailed() {
-      if (!confirm('Повторить неотправленные ошибки с минимального индекса сообщения?')) return;
-      try {
-        const r = await api('/campaign/retry_failed', { method: 'POST' });
-        toast(`Повтор с индекса=${r.message_idx}`, 'success');
-        refreshStatus();
-        loadCampaigns();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    }
-
     async function scheduleCampaign() {
       const local = document.getElementById('scheduleAt').value;
       if (!local) return toast('Укажите дату/время', 'error');
@@ -1117,12 +1104,12 @@ let openGroupId = null;
           <thead><tr><th>ID</th><th>Статус</th><th>Старт</th><th>Финиш</th><th>Успех/Ошибки</th><th>Причина</th></tr></thead>
           <tbody>${d.items.map(c => `
             <tr class="${c.status === 'completed' ? 'ok' : (c.status === 'stopped' || c.status === 'paused' ? '' : '')}">
-              <td>#${c.id}</td>
-              <td>${esc(campaignStatusRu(c.status))}</td>
-              <td>${esc(c.started_at || '')}</td>
-              <td>${esc(c.finished_at || '—')}</td>
-              <td>${c.messages_sent || 0}/${c.messages_failed || 0} · всего ${c.messages_total || 0}</td>
-              <td>${esc((c.reason || '').slice(0, 80))}</td>
+              <td data-label="ID">#${c.id}</td>
+              <td data-label="Статус">${esc(campaignStatusRu(c.status))}</td>
+              <td data-label="Старт">${esc(c.started_at || '')}</td>
+              <td data-label="Финиш">${esc(c.finished_at || '—')}</td>
+              <td data-label="Успех/Ошибки">${c.messages_sent || 0}/${c.messages_failed || 0} · всего ${c.messages_total || 0}</td>
+              <td data-label="Причина">${esc((c.reason || '').slice(0, 80))}</td>
             </tr>`).join('')}
           </tbody></table>`;
       } catch (_) {}
@@ -1488,22 +1475,22 @@ let openGroupId = null;
         const total = pdata ? pdata.total : g.profiles_count;
         const body = open ? (profiles.length ? profiles.map(p => `
           <tr>
-            <td>${p.id}</td>
-            <td>
+            <td data-label="ID">${p.id}</td>
+            <td data-label="Телефон">
               <div class="phone-cell">
                 <span class="phone-num">${esc(p.phone)}${p.label ? ' ('+esc(p.label)+')' : ''}</span>
                 ${phoneBadges(p)}
               </div>
               ${p.in_cooldown ? `<div class="auth-error">пауза до ${esc((p.cooldown_until||'').slice(0,16))}</div>` : ''}
             </td>
-            <td>
+            <td data-label="Статус">
               <span class="status-${p.status}">${statusRu(p.status)}</span>
               ${p.circuit_open ? ' · <span class="auth-error">автопауза</span>' : ''}
               ${authLabel(p) ? `<div class="auth-wait">${esc(authLabel(p))}</div>` : ''}
               ${p.last_error ? `<div class="auth-error">${esc(p.last_error)}</div>` : ''}
             </td>
-            <td>${p.messages_sent_today || 0}${p.daily_limit != null ? '/'+p.daily_limit : ''}</td>
-            <td>${profileActions(p, g.id)}</td>
+            <td data-label="Сегодня">${p.messages_sent_today || 0}${p.daily_limit != null ? '/'+p.daily_limit : ''}</td>
+            <td data-label="Действия">${profileActions(p, g.id)}</td>
           </tr>`).join('') : `<tr><td colspan="5" class="hint">Профилей нет — ${isUserRole() ? 'добавьте номер' : 'добавьте номер или импортируйте CSV'}</td></tr>`) : '';
         const groupActive = g.is_active == null || Number(g.is_active) !== 0;
         return `
@@ -1591,15 +1578,8 @@ let openGroupId = null;
       document.getElementById('lazyDayPct').value = s.lazy_day_percent || '15';
       document.getElementById('lazyDayFactor').value = s.lazy_day_factor || '0.4';
       document.getElementById('rhythmOn').checked = String(s.human_rhythm_enabled || '1') === '1';
-      document.getElementById('tzOffset').value = s.timezone_offset_hours ?? '3';
       document.getElementById('windowsWeekday').value = s.send_windows_weekday || '9-13,16-21';
       document.getElementById('windowsWeekend').value = s.send_windows_weekend || '11-14,17-20';
-      document.getElementById('daySkipPct').value = s.day_skip_percent || '40';
-      document.getElementById('roleActivePct').value = s.role_active_percent || '30';
-      document.getElementById('roleQuietPct').value = s.role_quiet_percent || '30';
-      document.getElementById('rolePlanOn').checked = String(s.role_plan_enabled || '1') === '1';
-      document.getElementById('roleActiveMin').value = s.role_active_min || '5';
-      document.getElementById('roleActiveMax').value = s.role_active_max || '10';
       document.getElementById('roleQuietLimit').value = s.role_quiet_limit || '1';
       document.getElementById('pausesOn').checked = String(s.human_pauses_enabled || '1') === '1';
       document.getElementById('shortPauseChance').value = s.short_pause_chance || '8';
@@ -1641,7 +1621,6 @@ let openGroupId = null;
         ? 'Токен задан. Введите новый, чтобы заменить.'
         : 'Токен не задан.';
       document.getElementById('backupHours').value = s.backup_interval_hours || '24';
-      document.getElementById('workerPool').value = s.worker_pool_size || '1';
       document.getElementById('notifyDone').checked = localStorage.getItem('maxNotifyDone') === '1';
       loadScheduleHint();
       loadBackupHint();
@@ -1670,15 +1649,8 @@ let openGroupId = null;
         lazy_day_percent: +document.getElementById('lazyDayPct').value,
         lazy_day_factor: +document.getElementById('lazyDayFactor').value,
         human_rhythm_enabled: document.getElementById('rhythmOn').checked ? 1 : 0,
-        timezone_offset_hours: +document.getElementById('tzOffset').value,
         send_windows_weekday: document.getElementById('windowsWeekday').value.trim(),
         send_windows_weekend: document.getElementById('windowsWeekend').value.trim(),
-        day_skip_percent: +document.getElementById('daySkipPct').value,
-        role_plan_enabled: document.getElementById('rolePlanOn').checked ? 1 : 0,
-        role_active_percent: +document.getElementById('roleActivePct').value,
-        role_quiet_percent: +document.getElementById('roleQuietPct').value,
-        role_active_min: +document.getElementById('roleActiveMin').value,
-        role_active_max: +document.getElementById('roleActiveMax').value,
         role_quiet_limit: +document.getElementById('roleQuietLimit').value,
         human_pauses_enabled: document.getElementById('pausesOn').checked ? 1 : 0,
         short_pause_chance: +document.getElementById('shortPauseChance').value,
@@ -1713,9 +1685,6 @@ let openGroupId = null;
         telegram_chat_id: document.getElementById('tgChat').value.trim(),
         backup_interval_hours: +document.getElementById('backupHours').value,
       };
-      if (!isUserRole()) {
-        body.worker_pool_size = +document.getElementById('workerPool').value;
-      }
       const pin = document.getElementById('apiPin').value.trim();
       if (pin) body.api_pin = pin;
       const tg = document.getElementById('tgToken').value.trim();

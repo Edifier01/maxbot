@@ -267,6 +267,26 @@ def test_runtime_registry_can_drop_deleted_tenant():
     assert registry.worker_items() == []
 
 
+def test_runtime_registry_worker_busy_and_message_pool_lock_reset():
+    from app.campaign_runtime import RuntimeRegistry
+
+    async def scenario():
+        registry = RuntimeRegistry()
+        assert registry.any_worker_busy() is False
+        task = asyncio.create_task(asyncio.sleep(60))
+        registry.worker_for(42).worker_task = task
+        assert registry.any_worker_busy() is True
+        lock = registry.app.message_pool_lock
+        registry.reset_test()
+        assert registry.any_worker_busy() is False
+        assert registry.app.message_pool_lock is not lock
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+
 def test_reconcile_tenant_quarantines_restores_or_purges(tmp_path):
     from app.tenant_init import reconcile_tenant_quarantines
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 import antiban_core
@@ -91,7 +93,7 @@ class SettingsIn(BaseModel):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     backup_interval_hours: float | None = None
-    worker_pool_size: int | None = None
+    worker_pool_size: Literal[1] | None = None
     human_rhythm_enabled: int | None = None
     send_windows_weekday: str | None = None
     send_windows_weekend: str | None = None
@@ -177,8 +179,6 @@ class SettingsIn(BaseModel):
             raise ValueError("Макс. попыток пароля должно быть ≥ 1")
         if self.backup_interval_hours is not None and self.backup_interval_hours < 0:
             raise ValueError("Интервал резервной копии (ч) должен быть ≥ 0")
-        if self.worker_pool_size is not None and not (1 <= self.worker_pool_size <= 32):
-            raise ValueError("Пул воркеров должен быть от 1 до 32")
         if self.day_skip_percent is not None and not (0 <= self.day_skip_percent <= 100):
             raise ValueError("Пропуск дня (%) должен быть от 0 до 100")
         if self.role_active_percent is not None and not (
