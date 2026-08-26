@@ -876,14 +876,20 @@ def _profile_client_lock(profile_id: int) -> asyncio.Lock:
 
 
 def _normalize_phone(phone: str) -> str:
-    phone = phone.strip().replace(" ", "")
-    if phone.startswith("8") and len(phone) == 11:
-        phone = "+7" + phone[1:]
-    elif phone.startswith("7") and len(phone) == 11:
-        phone = "+" + phone
-    elif not phone.startswith("+"):
-        phone = "+" + phone.lstrip("+")
-    return phone
+    raw = str(phone or "").strip()
+    if any(char.isalpha() for char in raw):
+        raise ValueError("Номер должен содержать только цифры и знаки форматирования")
+    digits = "".join(char for char in raw if char in "0123456789")
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    if not 10 <= len(digits) <= 15:
+        raise ValueError("Номер должен содержать от 10 до 15 цифр")
+    return "+" + digits
+
+
+def _require_worker_idle() -> None:
+    if REGISTRY.worker().worker_busy():
+        raise HTTPException(409, "Сначала остановите рассылку")
 
 
 def _auth_session_key(profile_id: int) -> Any:

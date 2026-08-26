@@ -68,6 +68,7 @@ async def get_profile(profile_id: int):
 @router.patch("/api/profiles/{profile_id}")
 async def patch_profile(profile_id: int, body: ProfilePatchIn):
 
+    m._require_worker_idle()
     data = body.model_dump(exclude_unset=True)
     if not data:
         raise HTTPException(400, "Нечего обновлять")
@@ -99,6 +100,7 @@ async def patch_profile(profile_id: int, body: ProfilePatchIn):
 async def reset_login(profile_id: int):
 
     """Сброс зависшего входа и удаление сессии."""
+    m._require_worker_idle()
     task = m._login_tasks.get(m._auth_session_key(profile_id))
     if task and not task.done():
         task.cancel()
@@ -122,6 +124,7 @@ async def login_profile(
     profile_id: int, fresh: bool = False, group_id: int | None = None
 ):
 
+    m._require_worker_idle()
     m._require_vault_unlocked()
     with m._conn() as c:
         p = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
@@ -215,6 +218,7 @@ async def login_profile(
 @router.post("/api/profiles/{profile_id}/sms")
 async def submit_sms(profile_id: int, body: CodeIn):
 
+    m._require_worker_idle()
     sess = m._auth_sessions.get(m._auth_session_key(profile_id))
     if not sess:
         raise HTTPException(404, "Сначала нажмите «Войти»")
@@ -229,6 +233,7 @@ async def submit_sms(profile_id: int, body: CodeIn):
 @router.post("/api/profiles/{profile_id}/password")
 async def submit_password(profile_id: int, body: CodeIn):
 
+    m._require_worker_idle()
     sess = m._auth_sessions.get(m._auth_session_key(profile_id))
     if not sess:
         raise HTTPException(404, "Сначала нажмите «Войти»")
@@ -243,6 +248,7 @@ async def submit_password(profile_id: int, body: CodeIn):
 @router.patch("/api/profiles/{profile_id}/disable")
 async def disable_profile(profile_id: int):
 
+    m._require_worker_idle()
     with m._conn() as c:
         c.execute(
             "UPDATE profiles SET status=? WHERE id=?",

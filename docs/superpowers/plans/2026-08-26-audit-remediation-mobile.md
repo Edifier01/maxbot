@@ -253,27 +253,27 @@ fix: align daily accounting to utc3
   `+<10..15 digits>` or raising `ValueError`.
 - Produces: `_require_worker_idle() -> None` raising HTTP 409.
 
-- [ ] **Step 1: Write failing boundary tests**
+- [x] **Step 1: Write failing boundary tests**
 
 Test formatted Russian and international input, duplicate canonical forms,
 letters, and short/long input. For every mutating group/profile route, install
 an active worker task and assert HTTP 409 with no SQLite mutation.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 `python -m pytest tests/test_normalize_phone.py tests/test_live_mutation_safety.py -q --basetemp=.pytest-tmp/task6-red`
 
 Expected: invalid input is accepted and live routes mutate.
 
-- [ ] **Step 3: Implement shared boundaries**
+- [x] **Step 3: Implement shared boundaries**
 
 Normalize digits once in `_normalize_phone`; convert Russian `8` prefix only
 for 11-digit input and reject anything outside 10..15 digits. Reuse one busy
 guard in all user/admin mutation routes. For admin global disable, stop active
 tenant workers before updating groups.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run focused tests; expected PASS. Commit:
 
