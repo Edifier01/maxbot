@@ -120,12 +120,6 @@ function jsonHeaders(json = true) {
           <td>${subBadge}</td>
           <td id="stats-${u.tenant_id}"><button class="btn" data-action="load-stats" data-tenant-id="${u.tenant_id}">Статистика</button></td>
           <td>
-            <span class="row">
-              <input type="number" id="pool-${u.tenant_id}" min="1" max="32" value="1" style="width:3.2rem;text-align:center" aria-label="Пул воркеров">
-              <button class="btn" data-action="save-worker-pool" data-tenant-id="${u.tenant_id}">Сохранить</button>
-            </span>
-          </td>
-          <td>
             <div class="row">
               <button class="btn primary" data-action="impersonate" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Войти в кабинет</button>
               <button class="btn" data-action="grant-month" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">+30 дней</button>
@@ -137,7 +131,6 @@ function jsonHeaders(json = true) {
           </td>
         </tr>`;
       }).join('');
-      await loadTenantWorkerPools(items);
     }
     async function createUser(event) {
       event.preventDefault();
@@ -160,35 +153,6 @@ function jsonHeaders(json = true) {
         hint.textContent = 'Ошибка: ' + e.message;
       } finally {
         btn.disabled = false;
-      }
-    }
-    async function loadTenantWorkerPools(items) {
-      await Promise.all(items.map(async u => {
-        try {
-          const s = await api('/admin/tenants/' + u.tenant_id + '/settings');
-          const inp = document.getElementById('pool-' + u.tenant_id);
-          if (inp) inp.value = s.worker_pool_size || 1;
-        } catch (_) {}
-      }));
-    }
-    async function saveWorkerPool(tid, btn) {
-      const inp = document.getElementById('pool-' + tid);
-      const size = parseInt(inp && inp.value, 10);
-      if (!size || size < 1 || size > 32) {
-        toast('Пул воркеров: от 1 до 32', 'error');
-        return;
-      }
-      if (btn) btn.disabled = true;
-      try {
-        await api('/admin/tenants/' + tid + '/settings', {
-          method: 'PUT',
-          body: JSON.stringify({ worker_pool_size: size }),
-        });
-        toast('Пул воркеров сохранён', 'success');
-      } catch (e) {
-        toast(e.message, 'error');
-      } finally {
-        if (btn) btn.disabled = false;
       }
     }
     function esc(s) {
@@ -235,15 +199,8 @@ function jsonHeaders(json = true) {
       document.getElementById('lazyDayPct').value = s.lazy_day_percent || '15';
       document.getElementById('lazyDayFactor').value = s.lazy_day_factor || '0.4';
       document.getElementById('rhythmOn').checked = String(s.human_rhythm_enabled || '1') === '1';
-      document.getElementById('tzOffset').value = s.timezone_offset_hours ?? '3';
       document.getElementById('windowsWeekday').value = s.send_windows_weekday || '9-13,16-21';
       document.getElementById('windowsWeekend').value = s.send_windows_weekend || '11-14,17-20';
-      document.getElementById('daySkipPct').value = s.day_skip_percent || '40';
-      document.getElementById('roleActivePct').value = s.role_active_percent || '30';
-      document.getElementById('roleQuietPct').value = s.role_quiet_percent || '30';
-      document.getElementById('rolePlanOn').checked = String(s.role_plan_enabled || '1') === '1';
-      document.getElementById('roleActiveMin').value = s.role_active_min || '5';
-      document.getElementById('roleActiveMax').value = s.role_active_max || '10';
       document.getElementById('roleQuietLimit').value = s.role_quiet_limit || '1';
       document.getElementById('pausesOn').checked = String(s.human_pauses_enabled || '1') === '1';
       document.getElementById('shortPauseChance').value = s.short_pause_chance || '8';
@@ -293,15 +250,8 @@ function jsonHeaders(json = true) {
         lazy_day_percent: +document.getElementById('lazyDayPct').value,
         lazy_day_factor: +document.getElementById('lazyDayFactor').value,
         human_rhythm_enabled: document.getElementById('rhythmOn').checked ? 1 : 0,
-        timezone_offset_hours: +document.getElementById('tzOffset').value,
         send_windows_weekday: document.getElementById('windowsWeekday').value.trim(),
         send_windows_weekend: document.getElementById('windowsWeekend').value.trim(),
-        day_skip_percent: +document.getElementById('daySkipPct').value,
-        role_plan_enabled: document.getElementById('rolePlanOn').checked ? 1 : 0,
-        role_active_percent: +document.getElementById('roleActivePct').value,
-        role_quiet_percent: +document.getElementById('roleQuietPct').value,
-        role_active_min: +document.getElementById('roleActiveMin').value,
-        role_active_max: +document.getElementById('roleActiveMax').value,
         role_quiet_limit: +document.getElementById('roleQuietLimit').value,
         human_pauses_enabled: document.getElementById('pausesOn').checked ? 1 : 0,
         short_pause_chance: +document.getElementById('shortPauseChance').value,
@@ -578,7 +528,6 @@ function jsonHeaders(json = true) {
       } else if (action === 'revoke-sub') revokeSubscription(tid, name, btn);
       else if (action === 'impersonate') impersonate(tid, name);
       else if (action === 'load-stats') loadStats(tid);
-      else if (action === 'save-worker-pool') saveWorkerPool(tid, btn);
     });
 
     async function bulkGroups(active) {

@@ -38,7 +38,7 @@
 - Produces: `LOCAL_TIMEZONE = timezone(timedelta(hours=3))`; `_pool_size() -> int` always returns `1`.
 - Produces: settings responses expose fixed values but no mutable timezone, role-share, or pool controls.
 
-- [ ] **Step 1: Write failing policy tests**
+- [x] **Step 1: Write failing policy tests**
 
 ```python
 def test_pool_size_is_fixed_to_one(m):
@@ -53,25 +53,25 @@ def test_local_now_is_always_utc_plus_three(m):
 Update static tests to require the removal of `workerPool`, `tzOffset`,
 `roleActivePct`, `roleQuietPct`, and `btnRetryFailed` controls.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 `python -m pytest tests/test_admin_tenant_settings.py tests/test_global_pacing_settings.py tests/test_saas_ux_static.py -q --basetemp=.pytest-tmp/task1-red`
 
 Expected: FAIL because pool/timezone remain configurable and controls exist.
 
-- [ ] **Step 3: Implement fixed policies**
+- [x] **Step 3: Implement fixed policies**
 
 Use one UTC+3 timezone constant, return `1` from `_pool_size`, restrict the
 admin settings model to `Literal[1]`, and drop mutable timezone/role-share/pool
 keys from settings updates. Seed an idempotent test database in the test
 bootstrap instead of relying on ignored user `data/`.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run the same focused tests; expected PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```text
 fix: lock runtime policies to utc3 and one worker

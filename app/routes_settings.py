@@ -19,7 +19,17 @@ router = APIRouter(tags=["settings"])
 @router.get("/api/settings")
 async def get_settings():
 
-    hide = {"api_pin", "telegram_bot_token"}
+    hide = {
+        "api_pin",
+        "telegram_bot_token",
+        "worker_pool_size",
+        "timezone_offset_hours",
+        "role_plan_enabled",
+        "role_active_percent",
+        "role_quiet_percent",
+        "role_active_min",
+        "role_active_max",
+    }
     out = {k: m.get_setting(k) for k in m.DEFAULTS if k not in hide}
     out["api_pin_set"] = m._pin_is_set()
     out["telegram_bot_token_set"] = bool(m.get_setting("telegram_bot_token").strip())
@@ -34,6 +44,15 @@ async def get_settings():
 async def update_settings(body: SettingsIn):
 
     data = body.model_dump(exclude_unset=True)
+    for fixed_key in (
+        "timezone_offset_hours",
+        "role_plan_enabled",
+        "role_active_percent",
+        "role_quiet_percent",
+        "role_active_min",
+        "role_active_max",
+    ):
+        data.pop(fixed_key, None)
     if not is_admin():
         data.pop("worker_pool_size", None)
     if "api_pin" in data:

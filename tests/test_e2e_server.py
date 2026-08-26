@@ -217,7 +217,7 @@ def test_tenant_token_bump_revokes_session(e2e_client):
     assert "отозвана" in me_revoked.json()["detail"].lower()
 
 
-def test_admin_tenant_worker_pool_settings(e2e_client):
+def test_admin_tenant_worker_pool_is_fixed(e2e_client):
     client, _main_mod, uid = e2e_client
     admin_token = _admin_token(client)
     tenant_id, token_user = _create_user(
@@ -236,18 +236,14 @@ def test_admin_tenant_worker_pool_settings(e2e_client):
         cookies=_tok(admin_token),
         json={"worker_pool_size": 4},
     )
-    assert set_pool.status_code == 200, set_pool.text
-    body = set_pool.json()
-    assert body["ok"] is True
-    assert body["worker_pool_size"] == 4
-    assert body["worker_restarted"] is False
+    assert set_pool.status_code == 422, set_pool.text
 
     updated = client.get(
         f"/api/admin/tenants/{tenant_id}/settings",
         cookies=_tok(admin_token),
     )
     assert updated.status_code == 200
-    assert updated.json()["worker_pool_size"] == 4
+    assert updated.json()["worker_pool_size"] == 1
 
     user_settings = client.get("/api/settings", cookies=_tok(token_user))
     assert user_settings.status_code == 403
@@ -259,12 +255,12 @@ def test_admin_tenant_worker_pool_settings(e2e_client):
     )
     assert blocked.status_code == 403
 
-    still_four = client.get(
+    still_one = client.get(
         f"/api/admin/tenants/{tenant_id}/settings",
         cookies=_tok(admin_token),
     )
-    assert still_four.status_code == 200
-    assert still_four.json()["worker_pool_size"] == 4
+    assert still_one.status_code == 200
+    assert still_one.json()["worker_pool_size"] == 1
 
     out_of_range = client.put(
         f"/api/admin/tenants/{tenant_id}/settings",

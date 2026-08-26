@@ -649,7 +649,6 @@
         <div class="toolbar">
           <button type="button" class="small btn-ico" id="btnReset">Начать заново</button>
           <button type="button" class="small" id="btnTestSend">Тест</button>
-          <button type="button" class="small" id="btnRetryFailed">Повторить ошибки</button>
         </div>
         <div class="row" style="margin:.75rem 0 0">
           <label for="scheduleAt" class="hint" style="margin:0">Запланировать на</label>
@@ -794,26 +793,12 @@
       <details class="settings-panel">
         <summary>Ритм и роли дня</summary>
         <div class="settings-body">
-          <div class="settings-row"><label for="tzOffset"><span class="tip" title="UTC+N, Москва = 3">Часовой пояс UTC+</span></label><div class="controls"><input id="tzOffset" type="number" min="-12" max="14" step="0.5" style="max-width:80px"></div></div>
           <div class="settings-row"><label>Ритм</label><div class="controls">
             <label style="width:auto;max-width:none"><input type="checkbox" id="rhythmOn" style="width:auto;max-width:none"> вкл</label>
           </div></div>
           <div class="settings-row"><label for="windowsWeekday">Окна будни</label><div class="controls"><input id="windowsWeekday" placeholder="9-13,16-21…" style="max-width:280px"></div></div>
           <div class="settings-row"><label for="windowsWeekend">Окна выходные</label><div class="controls"><input id="windowsWeekend" placeholder="11-14,17-20…" style="max-width:280px"></div></div>
-          <div class="settings-row"><label>Пропуск / active / quiet (%)</label><div class="controls">
-            <input id="daySkipPct" type="number" min="0" max="100" step="1" style="max-width:70px" title="skip" aria-label="Пропуск %">
-            <input id="roleActivePct" type="number" min="0" max="100" step="1" style="max-width:70px" title="active" aria-label="Active %">
-            <input id="roleQuietPct" type="number" min="0" max="100" step="1" style="max-width:70px" title="quiet" aria-label="Quiet %">
-          </div></div>
-          <p class="hint" style="margin:.25rem 0 0 1rem">Роли дня: 3-дневная ротация active → quiet → skip по порядку профилей (~33% каждая часть). Legacy % ниже не используются при включённых ролях.</p>
-          <div class="settings-row"><label>Роли дня</label><div class="controls">
-            <label style="width:auto;max-width:none"><input type="checkbox" id="rolePlanOn" style="width:auto;max-width:none"> вкл</label>
-          </div></div>
-          <div class="settings-row"><label>Legacy active мин/макс</label><div class="controls">
-            <input id="roleActiveMin" type="number" min="0" style="max-width:70px" title="если active % = 0" aria-label="Legacy active мин">
-            <span class="hint" style="margin:0">–</span>
-            <input id="roleActiveMax" type="number" min="0" style="max-width:70px" aria-label="Legacy active макс">
-          </div></div>
+          <p class="hint" style="margin:.25rem 0 0 1rem">Время системы: UTC+3. Роли дня фиксированы: active → quiet → skip, примерно по трети профилей.</p>
           <div class="settings-row"><label for="roleQuietLimit">Тихие: лимит</label><div class="controls"><input id="roleQuietLimit" type="number" min="0" style="max-width:80px"></div></div>
         </div>
       </details>
@@ -896,7 +881,6 @@
           <p class="hint" id="tgTokenHint"></p>
           <div class="settings-row"><label for="tgChat">ID чата Telegram</label><div class="controls"><input id="tgChat" placeholder="-100…"></div></div>
           <div class="settings-row"><label for="backupHours">Резервная копия каждые (ч)</label><div class="controls"><input id="backupHours" type="number" step="0.5" min="0"></div></div>
-          <div class="settings-row settings-admin-only" id="workerPoolRow"><label for="workerPool">Пул воркеров</label><div class="controls"><input id="workerPool" type="number" min="1" max="32"></div></div>
           <div class="settings-row"><label>Действия</label><div class="controls">
             <button type="button" class="small" id="btnBackupNow">Сделать бэкап</button>
             <span id="backupHint" class="hint" style="margin:0"></span>

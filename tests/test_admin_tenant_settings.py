@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
+from pydantic import ValidationError
+
 from app.tenant import tenant_scope
 
 
@@ -32,7 +35,7 @@ def _init_tenant_db(main_mod, tenant_id: int) -> None:
             main_mod.init_db()
 
 
-def test_admin_tenant_settings_sync(tmp_path, monkeypatch):
+def test_admin_tenant_settings_is_fixed_to_one(tmp_path, monkeypatch):
     m = _setup_server_main(tmp_path, monkeypatch)
     _init_tenant_db(m, 5)
     monkeypatch.setattr(
@@ -48,10 +51,10 @@ def test_admin_tenant_settings_sync(tmp_path, monkeypatch):
     assert _tenant_worker_pool_size_sync(5) == 1
     old = _set_tenant_worker_pool_size_sync(5, 3)
     assert old == 1
-    assert _tenant_worker_pool_size_sync(5) == 3
+    assert _tenant_worker_pool_size_sync(5) == 1
 
 
-def test_user_put_settings_ignores_worker_pool_size(tmp_path, monkeypatch):
+def test_user_put_settings_rejects_worker_pool_size(tmp_path, monkeypatch):
     m = _setup_server_main(tmp_path, monkeypatch)
     _init_tenant_db(m, 5)
 
@@ -64,17 +67,16 @@ def test_user_put_settings_ignores_worker_pool_size(tmp_path, monkeypatch):
 
     set_context(user_id=1, tenant_id=5, role="user")
     try:
-        import asyncio
-
-        asyncio.run(update_settings(SettingsIn(worker_pool_size=8)))
+        with pytest.raises(ValidationError):
+            SettingsIn(worker_pool_size=8)
     finally:
         clear_context()
 
     with tenant_scope(tenant_id=5, role="admin"):
-        assert m.get_setting("worker_pool_size") == "4"
+        assert m._pool_size() == 1
 
 
-def test_admin_put_settings_allows_worker_pool_size(tmp_path, monkeypatch):
+def test_admin_put_settings_cannot_raise_worker_pool_size(tmp_path, monkeypatch):
     m = _setup_server_main(tmp_path, monkeypatch)
     _init_tenant_db(m, 5)
 
@@ -84,11 +86,10 @@ def test_admin_put_settings_allows_worker_pool_size(tmp_path, monkeypatch):
 
     set_context(user_id=1, tenant_id=5, role="admin")
     try:
-        import asyncio
-
-        asyncio.run(update_settings(SettingsIn(worker_pool_size=2)))
+        with pytest.raises(ValidationError):
+            SettingsIn(worker_pool_size=2)
     finally:
         clear_context()
 
     with tenant_scope(tenant_id=5, role="admin"):
-        assert m.get_setting("worker_pool_size") == "2"
+        assert m._pool_size() == 1

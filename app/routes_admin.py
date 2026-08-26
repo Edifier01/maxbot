@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+from typing import Literal
 
 import antiban_core
 from app import auth, db_pg
@@ -85,7 +86,7 @@ class ProxyIn(BaseModel):
 
 
 class AdminTenantSettingsIn(BaseModel):
-    worker_pool_size: int = Field(ge=1, le=32)
+    worker_pool_size: Literal[1] = 1
 
 
 def _require_admin() -> int:
@@ -391,7 +392,7 @@ def _set_tenant_worker_pool_size_sync(tenant_id: int, worker_pool_size: int) -> 
 
     with tenant_scope(tenant_id=tenant_id, role="admin"):
         old = app_main._pool_size()
-        app_main.set_setting("worker_pool_size", str(worker_pool_size))
+        app_main.set_setting("worker_pool_size", "1")
         return old
 
 

@@ -52,6 +52,17 @@ def test_campaign_scale_v18_migration(tmp_path, monkeypatch):
     assert m.get_setting("long_pause_chance") == "3"
 
 
+def test_role_plan_is_always_fixed_thirds(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(m, "DATA", data)
+    monkeypatch.setattr(m, "DB_PATH", data / "app.db")
+    m._settings_cache.clear()
+    m.init_db()
+    m.set_setting("role_plan_enabled", "0")
+    assert m._role_plan_enabled() is True
+
+
 def test_migration_skips_custom_delay(tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()

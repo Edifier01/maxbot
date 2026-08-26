@@ -227,6 +227,9 @@ DEFAULTS = {
     "auto_run_pool_reset_day": "",
 }
 
+LOCAL_UTC_OFFSET = timedelta(hours=3)
+LOCAL_TIMEZONE = timezone(LOCAL_UTC_OFFSET)
+
 _APP_KEY_PATH = DATA / ".app_key"
 _APP_SALT_PATH = DATA / ".app_salt"
 _APP_VAULT_PATH = DATA / ".app_vault"
@@ -286,29 +289,12 @@ def _metric_inc(name: str, value: float = 1) -> None:
 
 
 def _pool_size() -> int:
-    try:
-        raw = get_setting("worker_pool_size") or os.environ.get("WORKER_POOL_SIZE", "1")
-        n = int(raw)
-    except Exception:
-        try:
-            n = int(os.environ.get("WORKER_POOL_SIZE", "1") or "1")
-        except ValueError:
-            n = 1
-    return max(1, min(n, 32))
+    return 1
 
 
 def _local_now() -> datetime:
-    """Текущее «локальное» время с учётом timezone_offset_hours (по умолчанию UTC+3)."""
-    try:
-        offset = float(
-            get_setting("timezone_offset_hours") or DEFAULTS["timezone_offset_hours"]
-        )
-    except Exception:
-        try:
-            offset = float(DEFAULTS.get("timezone_offset_hours", "3"))
-        except ValueError:
-            offset = 3.0
-    return antiban_core.local_now(offset)
+    """Naive wall clock in the product's fixed UTC+3 operating timezone."""
+    return datetime.now(LOCAL_TIMEZONE).replace(tzinfo=None)
 
 
 def _local_today() -> date:
@@ -1412,7 +1398,7 @@ def _human_rhythm_enabled() -> bool:
 
 
 def _role_plan_enabled() -> bool:
-    return _human_rhythm_enabled() and _setting_truthy("role_plan_enabled", "1")
+    return _human_rhythm_enabled()
 
 
 def _ensure_role_cycle_anchor() -> None:
@@ -1443,8 +1429,7 @@ def _role_cycle_anchor() -> date | None:
             dt = datetime.strptime(val[:19], "%Y-%m-%d %H:%M:%S").replace(
                 tzinfo=timezone.utc
             )
-        offset = float(get_setting("timezone_offset_hours") or DEFAULTS["timezone_offset_hours"])
-        return dt.astimezone(timezone(timedelta(hours=offset))).date()
+        return dt.astimezone(LOCAL_TIMEZONE).date()
     except (ValueError, TypeError):
         try:
             return date.fromisoformat(val[:10])

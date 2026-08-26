@@ -348,7 +348,6 @@
             <th>Логин</th>
             <th>Подписка</th>
             <th>Статистика</th>
-            <th>Воркеры</th>
             <th>Действия</th>
           </tr>
         </thead>
@@ -403,26 +402,12 @@
       <details class="settings-panel">
         <summary>Ритм и роли дня</summary>
         <div class="settings-body">
-          <div class="settings-row"><label for="tzOffset">Часовой пояс UTC+</label><div class="controls"><input id="tzOffset" type="number" min="-12" max="14" step="0.5" style="max-width:80px"></div></div>
           <div class="settings-row"><label>Ритм</label><div class="controls">
             <label style="color:var(--text);font-size:.85rem"><input type="checkbox" id="rhythmOn" style="width:auto;margin-right:.25rem"> вкл</label>
           </div></div>
           <div class="settings-row"><label for="windowsWeekday">Окна будни</label><div class="controls"><input id="windowsWeekday" placeholder="9-13,16-21…" style="max-width:280px"></div></div>
           <div class="settings-row"><label for="windowsWeekend">Окна выходные</label><div class="controls"><input id="windowsWeekend" placeholder="11-14,17-20…" style="max-width:280px"></div></div>
-          <div class="settings-row"><label>Пропуск / active / quiet (%)</label><div class="controls">
-            <input id="daySkipPct" type="number" min="0" max="100" step="1" style="max-width:70px" title="skip" aria-label="Пропуск %">
-            <input id="roleActivePct" type="number" min="0" max="100" step="1" style="max-width:70px" title="active" aria-label="Active %">
-            <input id="roleQuietPct" type="number" min="0" max="100" step="1" style="max-width:70px" title="quiet" aria-label="Quiet %">
-          </div></div>
-          <p class="hint">Роли дня: 3-дневная ротация active → quiet → skip по порядку профилей (~33% каждая часть). Legacy % ниже не используются при включённых ролях.</p>
-          <div class="settings-row"><label>Роли дня</label><div class="controls">
-            <label style="color:var(--text);font-size:.85rem"><input type="checkbox" id="rolePlanOn" style="width:auto;margin-right:.25rem"> вкл</label>
-          </div></div>
-          <div class="settings-row"><label>Legacy active мин/макс</label><div class="controls">
-            <input id="roleActiveMin" type="number" min="0" style="max-width:70px" title="если active % = 0" aria-label="Legacy active мин">
-            <span class="hint" style="margin:0">–</span>
-            <input id="roleActiveMax" type="number" min="0" style="max-width:70px" aria-label="Legacy active макс">
-          </div></div>
+          <p class="hint">Время системы: UTC+3. Роли дня фиксированы: active → quiet → skip, примерно по трети профилей.</p>
           <div class="settings-row"><label for="roleQuietLimit">Тихие: лимит</label><div class="controls"><input id="roleQuietLimit" type="number" min="0" style="max-width:80px"></div></div>
         </div>
       </details>
