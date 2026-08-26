@@ -132,28 +132,28 @@ fix: always reseal max sessions
 - Produces: each claimed job contains `queue_before: dict[str, object]`.
 - Produces: `_restore_claim(job: dict[str, object], tracker: SendTracker) -> None`.
 
-- [ ] **Step 1: Write failing queue tests**
+- [x] **Step 1: Write failing queue tests**
 
 Cover sequential and `random_norepeat` modes. Cancel after claim while
 `SendTracker.may_requeue` is true and assert exact restoration of
 `profile_idx`, `message_idx`, `group_idx`, and `message_bag`. Mark the tracker
 unknown and assert no restoration.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 `python -m pytest tests/test_inflight_groups.py -q --basetemp=.pytest-tmp/task3-red`
 
 Expected: queue index and/or bag remain advanced.
 
-- [ ] **Step 3: Implement minimal restoration**
+- [x] **Step 3: Implement minimal restoration**
 
 Call `_claim_next_job_sync()` directly inside the existing async claim lock.
 Capture the queue row before `_pick_next_message`. On safe cancellation or
 definitely-unsent failure, restore the snapshot with one `UPDATE queue_state`.
 Do not restore after `SEND_IN_FLIGHT`, `SEND_ACCEPTED`, or `SEND_UNKNOWN`.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run focused tests; expected PASS. Commit:
 

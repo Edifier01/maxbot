@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -159,25 +160,82 @@ def test_async_claim_marks_inflight(m):
     asyncio.run(_run())
 
 
-def test_cancelled_to_thread_does_not_mark(m, monkeypatch):
+def test_async_claim_does_not_leave_sqlite_work_in_background(m, monkeypatch):
     from app import campaign_worker as cw
 
     _seed(m, [1])
 
-    async def drop_result(fn, /, *args, **kwargs):
-        fn(*args, **kwargs)
-        raise asyncio.CancelledError
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("claim must finish on the event-loop thread")
 
-    monkeypatch.setattr(cw.asyncio, "to_thread", drop_result)
+    monkeypatch.setattr(cw.asyncio, "to_thread", forbidden)
 
     async def _run():
-        with pytest.raises(asyncio.CancelledError):
-            await cw.claim_next_job()
-        assert not RUNTIME.groups_in_flight
-        assert RUNTIME.jobs_in_flight == 0
-        assert RUNTIME.profile_reserved == {}
+        job = await cw.claim_next_job()
+        assert isinstance(job, dict)
+        assert RUNTIME.jobs_in_flight == 1
 
     asyncio.run(_run())
+
+
+def _queue_state(m):
+    with m._conn() as c:
+        row = c.execute(
+            "SELECT profile_idx, message_idx, group_idx, message_bag "
+            "FROM queue_state WHERE id=1"
+        ).fetchone()
+    return dict(row)
+
+
+def test_safe_cancel_restores_sequential_claim(m):
+    from app import campaign_worker as cw
+    from app.campaign_send import SendTracker
+
+    _seed(m, [1])
+    before = _queue_state(m)
+    job = cw._claim_next_job_sync()
+    assert _queue_state(m) != before
+
+    cw._restore_claim(job, SendTracker())
+
+    assert _queue_state(m) == before
+
+
+def test_safe_cancel_restores_exact_random_bag(m):
+    from app import campaign_worker as cw
+    from app.campaign_send import SendTracker
+
+    m.set_setting("message_pick_mode", "random_norepeat")
+    _seed(m, [1])
+    with m._conn() as c:
+        c.execute(
+            "UPDATE queue_state SET message_bag=?, message_idx=0 WHERE id=1",
+            (json.dumps([2, 0, 1]),),
+        )
+    before = _queue_state(m)
+    job = cw._claim_next_job_sync()
+    assert _queue_state(m) != before
+
+    cw._restore_claim(job, SendTracker())
+
+    assert _queue_state(m) == before
+
+
+def test_unknown_send_does_not_restore_claim(m):
+    from app import campaign_worker as cw
+    from app.campaign_send import SendTracker
+
+    _seed(m, [1])
+    before = _queue_state(m)
+    job = cw._claim_next_job_sync()
+    claimed = _queue_state(m)
+    tracker = SendTracker()
+    tracker.mark_unknown("network outcome unknown")
+
+    cw._restore_claim(job, tracker)
+
+    assert claimed != before
+    assert _queue_state(m) == claimed
 
 
 def test_poolworker_releases_inflight_on_cancel(m, monkeypatch):

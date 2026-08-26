@@ -250,9 +250,25 @@ def _done_or_wait() -> str | None:
     return "STOP"
 
 
-def _maybe_return_to_bag(pool_idx: int, tracker: SendTracker) -> None:
-    if tracker.may_requeue:
-        main._return_to_message_bag(pool_idx)
+def _restore_claim(job: dict[str, Any], tracker: SendTracker) -> None:
+    """Restore a pool claim only while MAX send is proven not started."""
+    if not tracker.may_requeue:
+        return
+    before = job.get("queue_before")
+    if not isinstance(before, dict):
+        main._return_to_message_bag(int(job["mi"]))
+        return
+    with main._conn() as c:
+        c.execute(
+            "UPDATE queue_state SET profile_idx=?, message_idx=?, group_idx=?, "
+            "message_bag=? WHERE id=1",
+            (
+                int(before["profile_idx"]),
+                int(before["message_idx"]),
+                int(before["group_idx"]),
+                str(before["message_bag"] or "[]"),
+            ),
+        )
 
 
 def _claim_next_job_sync() -> dict[str, Any] | str | None:
@@ -275,6 +291,12 @@ def _claim_next_job_sync() -> dict[str, Any] | str | None:
         if not qs or not qs["running"]:
             return "STOP"
         pi, mi, gi = qs["profile_idx"], qs["message_idx"], qs["group_idx"]
+        queue_before = {
+            "profile_idx": pi,
+            "message_idx": mi,
+            "group_idx": gi,
+            "message_bag": qs["message_bag"],
+        }
 
         if main._campaign_goal() == "message_pool":
             if main._message_pick_mode() == "random_norepeat":
@@ -348,6 +370,7 @@ def _claim_next_job_sync() -> dict[str, Any] | str | None:
             "pi": pi,
             "gi_next": gi_next,
             "mi_next": progress_next,
+            "queue_before": queue_before,
         }
 
 
@@ -361,7 +384,7 @@ async def claim_next_job() -> dict[str, Any] | str | None:
       None — временно нечего делать (группа занята другим воркером, нет профилей и т.п.)
     """
     async with RUNTIME.claim_lock:
-        job = await asyncio.to_thread(_claim_next_job_sync)
+        job = _claim_next_job_sync()
         if isinstance(job, dict):
             RUNTIME.groups_in_flight.add(int(job["group"]["id"]))
             RUNTIME.jobs_in_flight += 1
@@ -441,7 +464,7 @@ async def poolworker_loop(worker_id: int) -> None:
                     tracker=tracker,
                 )
             except asyncio.CancelledError:
-                _maybe_return_to_bag(job["mi"], tracker)
+                _restore_claim(job, tracker)
                 raise
         finally:
             RUNTIME.groups_in_flight.discard(group_id)
@@ -453,7 +476,7 @@ async def poolworker_loop(worker_id: int) -> None:
             else:
                 RUNTIME.profile_reserved[pid] = left
         if not sent:
-            _maybe_return_to_bag(job["mi"], tracker)
+            _restore_claim(job, tracker)
             await asyncio.sleep(3)
             main._touch_worker_activity()
             continue
@@ -562,13 +585,13 @@ async def worker_loop() -> None:
                         tracker=tracker,
                     )
                 except asyncio.CancelledError:
-                    if bag_mode:
-                        _maybe_return_to_bag(pool_idx, tracker)
+                    if bag_mode and tracker.may_requeue:
+                        main._return_to_message_bag(pool_idx)
                     raise
             finally:
                 RUNTIME.groups_in_flight.discard(gid)
-            if not sent and bag_mode:
-                _maybe_return_to_bag(pool_idx, tracker)
+            if not sent and bag_mode and tracker.may_requeue:
+                main._return_to_message_bag(pool_idx)
             mi = progress_next
 
         if sent:
