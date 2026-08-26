@@ -561,13 +561,14 @@ def _reset_current_queue_for_new_pool(n: int) -> None:
     _rebuild_message_bag(n)
 
 
-def _reset_all_tenants_queue_for_new_pool(n: int) -> None:
+def _reset_all_tenants_queue_for_new_pool(n: int) -> list[int]:
     """After global TXT replace, every tenant must restart pool indices."""
     from app.tenant import tenant_scope
 
     tenants_root = ROOT / "data" / "tenants"
     if not tenants_root.is_dir():
-        return
+        return []
+    failed: list[int] = []
     for entry in sorted(tenants_root.iterdir()):
         if not entry.is_dir() or not (entry / "app.db").is_file():
             continue
@@ -578,8 +579,9 @@ def _reset_all_tenants_queue_for_new_pool(n: int) -> None:
         with tenant_scope(tenant_id=tid, role="user"):
             try:
                 _reset_current_queue_for_new_pool(n)
-            except sqlite3.OperationalError:
-                continue
+            except Exception:
+                failed.append(tid)
+    return failed
 
 
 def save_messages_file(content: bytes) -> int:
@@ -587,10 +589,6 @@ def save_messages_file(content: bytes) -> int:
     messages = parse_messages_text(text)
     if not messages:
         raise ValueError("Файл пуст или не содержит сообщений")
-    global_dir = ROOT / "data" / "global" / "messages" if _is_server_mode() else MESSAGES_FILE.parent
-    global_dir.mkdir(parents=True, exist_ok=True)
-    msg_file = global_dir / "active.txt" if _is_server_mode() else MESSAGES_FILE
-    msg_file.write_bytes(content)
     if _is_server_mode():
         with _global_conn() as conn:
             conn.execute("DELETE FROM message_pool")
@@ -598,8 +596,13 @@ def save_messages_file(content: bytes) -> int:
                 "INSERT INTO message_pool (text, order_index) VALUES (?, ?)",
                 [(m, i) for i, m in enumerate(messages)],
             )
-        _reset_all_tenants_queue_for_new_pool(len(messages))
+        failed = _reset_all_tenants_queue_for_new_pool(len(messages))
+        if failed:
+            ids = ", ".join(str(tid) for tid in failed)
+            raise ValueError(f"Не удалось сбросить очередь учреждений: {ids}")
     else:
+        MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        MESSAGES_FILE.write_bytes(content)
         with _conn() as c:
             c.execute("DELETE FROM message_pool")
             c.executemany(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.routes_models import SettingsIn
 from app.runtime import main as m
@@ -14,6 +14,30 @@ from app.settings_scope import (
 from app.tenant import is_admin, use_global_data
 
 router = APIRouter(tags=["settings"])
+
+_RANGE_PAIRS = (
+    ("delay_min_sec", "delay_max_sec", "Пауза"),
+    ("daily_limit_min", "daily_limit_max", "Лимит/день"),
+    ("short_pause_min_sec", "short_pause_max_sec", "Короткая пауза"),
+    ("long_pause_min_sec", "long_pause_max_sec", "Длинная пауза"),
+    ("break_min_sec", "break_max_sec", "Перерыв"),
+    ("warmup_start_min", "warmup_start_max", "Прогрев старт"),
+)
+
+
+def _validate_merged_ranges(data: dict) -> None:
+    for low_key, high_key, label in _RANGE_PAIRS:
+        if low_key not in data and high_key not in data:
+            continue
+        low = data.get(low_key)
+        high = data.get(high_key)
+        try:
+            low = float(m.get_setting(low_key)) if low is None else float(low)
+            high = float(m.get_setting(high_key)) if high is None else float(high)
+        except (TypeError, ValueError):
+            continue
+        if low > high:
+            raise HTTPException(400, f"{label}: мин не может быть больше макс")
 
 
 @router.get("/api/settings")
@@ -55,6 +79,7 @@ async def update_settings(body: SettingsIn):
         data.pop(fixed_key, None)
     if not is_admin():
         data.pop("worker_pool_size", None)
+    _validate_merged_ranges(data)
     if "api_pin" in data:
         pin = data.pop("api_pin")
         if pin is None or str(pin).strip() == "":

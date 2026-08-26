@@ -125,6 +125,13 @@ def test_admin_put_settings_changes_tenant_get_setting(tmp_path, monkeypatch):
         assert m.get_setting("delay_min_sec") == "9"
 
 
+def test_global_scope_reuses_one_sqlite_connection(tmp_path, monkeypatch):
+    m = _setup_server_main(tmp_path, monkeypatch)
+    _init_global(m)
+    with tenant_scope(use_global_data=True, role="admin"):
+        assert m._global_conn() is m._conn()
+
+
 def test_secrets_and_ops_keys_not_copied_to_tenants(tmp_path, monkeypatch):
     m = _setup_server_main(tmp_path, monkeypatch)
     _init_global(m)
@@ -262,6 +269,26 @@ def test_tenant_scoped_put_does_not_fan_out(tmp_path, monkeypatch):
         assert m.get_setting("delay_min_sec") == "11"
     with tenant_scope(tenant_id=62, role="user"):
         assert m.get_setting("delay_min_sec") == m.DEFAULTS["delay_min_sec"]
+
+
+def test_partial_range_update_validates_against_stored_value(tmp_path, monkeypatch):
+    m = _setup_server_main(tmp_path, monkeypatch)
+    _init_tenant(m, 71)
+    with tenant_scope(tenant_id=71, role="user"):
+        m.set_setting("delay_min_sec", "5")
+        m.set_setting("delay_max_sec", "10")
+
+    from app.routes_models import SettingsIn
+    from app.routes_settings import update_settings
+
+    set_context(user_id=1, tenant_id=71, role="admin", impersonating=True)
+    try:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(update_settings(SettingsIn(delay_min_sec=11)))
+        assert exc.value.status_code == 400
+        assert m.get_setting("delay_min_sec") == "5"
+    finally:
+        clear_context()
 
 
 def test_revoke_subscription_route_requires_admin():

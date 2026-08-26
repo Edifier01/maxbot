@@ -75,7 +75,7 @@ def _global_db_path() -> Path:
 
 
 def _global_conn() -> sqlite3.Connection:
-    path = str(_global_db_path())
+    path = str(_global_db_path().parent)
     key = (path, threading.get_ident())
     with _db_lock:
         if key not in _tenant_db_conns:

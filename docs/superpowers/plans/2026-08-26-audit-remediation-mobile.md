@@ -338,14 +338,14 @@ fix: validate every assigned proxy
 - Produces: `_reset_all_tenants_queue_for_new_pool(n) -> list[int]` failed IDs.
 - Produces: `init_tenant_db` always runs idempotent `init_db()`.
 
-- [ ] **Step 1: Write failing storage tests**
+- [x] **Step 1: Write failing storage tests**
 
 Test a partial `delay_min_sec` update against a smaller stored max and expect
 HTTP 400 with no write. Make one tenant reset raise and assert upload does
 not report success silently. Pre-create an empty `app.db`, call
 `init_tenant_db`, and assert required tables exist.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 `python -m pytest tests/test_global_pacing_settings.py tests/test_routes_panel.py tests/test_ux_ops_backend.py tests/test_register_rollback.py -q --basetemp=.pytest-tmp/task8-red`
@@ -353,14 +353,14 @@ Run:
 Expected: partial inversion persists, reset error is swallowed, empty DB stays
 empty.
 
-- [ ] **Step 3: Implement minimal storage fixes**
+- [x] **Step 3: Implement minimal storage fixes**
 
 Merge only validated min/max pairs with current stored values before writing.
 Remove the unused server `active.txt` mirror. Collect queue-reset failures and
 raise one explicit error containing only tenant IDs. Always call idempotent
 `init_db()` inside tenant scope.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run focused tests; expected PASS. Commit:
 
