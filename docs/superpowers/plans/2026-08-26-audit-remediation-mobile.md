@@ -293,12 +293,12 @@ fix: validate phones and freeze live campaign data
 - Produces: `check_proxy(raw, timeout=8.0, target_host="api.oneme.ru", target_port=443)`.
 - Produces: bad-cache keys `(tenant_id, group_id, proxy_url)`.
 
-- [ ] **Step 1: Write failing proxy tests**
+- [x] **Step 1: Write failing proxy tests**
 
 Test invalid port `99999`, all pool members checked, tenant-separated cache,
 SOCKS5 CONNECT request/reply, HTTPS TLS wrapping, and redacted errors.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 `python -m pytest tests/test_group_proxy_server.py tests/test_wave2_high.py -q --basetemp=.pytest-tmp/task7-red`
@@ -306,7 +306,7 @@ Run:
 Expected: invalid port escapes validation, preflight accepts first healthy URL,
 and SOCKS stops after authentication.
 
-- [ ] **Step 3: Implement full preflight**
+- [x] **Step 3: Implement full preflight**
 
 Catch URL `ValueError`, validate host/port, and check every unique pool member.
 Include tenant identity in cache keys. After SOCKS negotiation send a CONNECT
@@ -314,7 +314,7 @@ request for the MAX target and require a success reply. For HTTPS proxy URLs,
 wrap the proxy socket using stdlib `ssl.create_default_context()` before HTTP
 CONNECT. Never include password-bearing URLs in returned messages.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run focused tests; expected PASS. Commit:
 

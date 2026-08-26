@@ -25,6 +25,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError, HTTPError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import uvicorn
@@ -2084,7 +2085,7 @@ def _group_proxy(group_id: int, profile_id: int | None = None) -> str | None:
 
 
 _PROXY_RECHECK_SEC = 300.0
-_proxy_bad_until: dict[str, tuple[float, str]] = {}
+_proxy_bad_until: dict[tuple[int | None, int, str], tuple[float, str]] = {}
 _tg_notify_at: dict[str, float] = {}
 _TG_DEDUPE_SEC = 300.0
 
@@ -2101,7 +2102,12 @@ def _group_proxy_raw(group_id: int) -> str:
 
 
 def _proxy_host_label(proxy_url: str) -> str:
-    return proxy_url.split("@")[-1] if proxy_url else ""
+    try:
+        parsed = urlparse(proxy_url)
+        host = parsed.hostname or "proxy"
+        return f"{host}:{parsed.port}" if parsed.port else host
+    except ValueError:
+        return "некорректный proxy"
 
 
 def _validate_proxy_for_group(
@@ -2119,35 +2125,41 @@ def _validate_proxy_for_group(
         urls = [u for u in [_group_proxy(gid, profile_id)] if u]
     else:
         urls = antiban_core.parse_proxy_list(raw)
-    last_err = ""
+    tenant_id = None
+    if _is_server_mode():
+        from app.tenant import get_tenant_id
+
+        tenant_id = get_tenant_id()
+    errors: list[str] = []
     gname = str(group["name"])
     for proxy_url in urls:
-        key = f"{gid}:{_proxy_host_label(proxy_url)}"
+        label = _proxy_host_label(proxy_url)
+        key = (tenant_id, gid, proxy_url)
         now = time.time()
         bad = _proxy_bad_until.get(key)
         if bad and now < bad[0]:
-            last_err = bad[1]
+            errors.append(f"{label}: {bad[1]}")
             continue
         ok, err = antiban_core.check_proxy(proxy_url)
         if ok:
             _proxy_bad_until.pop(key, None)
-            return True, ""
+            continue
         _proxy_bad_until[key] = (now + _PROXY_RECHECK_SEC, err)
-        last_err = err
+        errors.append(f"{label}: {err}")
         append_log(
             f"Прокси недоступен: группа «{gname}» "
-            f"({_proxy_host_label(proxy_url)}): {err}"
+            f"({label}): {err}"
         )
         _schedule_telegram(
             "Прокси недоступен",
             [
                 f"Группа: {gname} (#{gid})",
-                f"Прокси: {_proxy_host_label(proxy_url)}",
+                f"Прокси: {label}",
                 f"Ошибка: {err}",
             ],
-            dedupe_key=f"proxy:{key}",
+            dedupe_key=f"proxy:{tenant_id}:{gid}:{label}",
         )
-    return False, last_err or "прокси недоступен"
+    return (False, "; ".join(errors)) if errors else (True, "")
 
 
 async def _preflight_group_proxies() -> None:

@@ -7,6 +7,7 @@ import re
 import math
 import random
 import socket
+import ssl
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote, urlparse
 
@@ -108,9 +109,15 @@ def normalize_proxy_field(raw: str | None) -> str:
     if not urls:
         raise ValueError("Некорректный формат proxy URL")
     for url in urls:
-        parsed = urlparse(url)
+        try:
+            parsed = urlparse(url)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("Некорректный формат proxy URL") from exc
         scheme = (parsed.scheme or "socks5").lower()
         if not parsed.hostname:
+            raise ValueError("Некорректный формат proxy URL")
+        if port is not None and not 1 <= port <= 65535:
             raise ValueError("Некорректный формат proxy URL")
         if not scheme.startswith("socks") and scheme not in ("http", "https"):
             raise ValueError("Некорректный формат proxy URL")
@@ -134,6 +141,8 @@ def _check_socks5(
     password: str | None,
     *,
     timeout: float,
+    target_host: str,
+    target_port: int,
 ) -> tuple[bool, str]:
     sock = socket.create_connection((host, port), timeout=timeout)
     sock.settimeout(timeout)
@@ -161,6 +170,28 @@ def _check_socks5(
                 return False, "SOCKS5: неверный логин или пароль"
         elif method != 0x00:
             return False, f"SOCKS5: неподдерживаемый метод {method}"
+        target = target_host.encode("idna")
+        if len(target) > 255:
+            return False, "SOCKS5: адрес назначения слишком длинный"
+        sock.sendall(
+            b"\x05\x01\x00\x03"
+            + bytes([len(target)])
+            + target
+            + int(target_port).to_bytes(2, "big")
+        )
+        reply = _recv_exact(sock, 4)
+        if reply[0] != 0x05 or reply[1] != 0x00:
+            return False, f"SOCKS5 CONNECT отклонён (код {reply[1]})"
+        address_type = reply[3]
+        if address_type == 0x01:
+            _recv_exact(sock, 4)
+        elif address_type == 0x03:
+            _recv_exact(sock, _recv_exact(sock, 1)[0])
+        elif address_type == 0x04:
+            _recv_exact(sock, 16)
+        else:
+            return False, "SOCKS5: неизвестный тип адреса в ответе"
+        _recv_exact(sock, 2)
         return True, ""
     finally:
         sock.close()
@@ -173,17 +204,23 @@ def _check_http_proxy(
     password: str | None,
     *,
     timeout: float,
+    target_host: str,
+    target_port: int,
+    use_tls: bool,
 ) -> tuple[bool, str]:
     sock = socket.create_connection((host, port), timeout=timeout)
     sock.settimeout(timeout)
     try:
+        if use_tls:
+            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+            sock.settimeout(timeout)
         auth = ""
         if user and password:
             cred = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
             auth = f"Proxy-Authorization: Basic {cred}\r\n"
         req = (
-            "CONNECT api.oneme.ru:443 HTTP/1.1\r\n"
-            "Host: api.oneme.ru:443\r\n"
+            f"CONNECT {target_host}:{target_port} HTTP/1.1\r\n"
+            f"Host: {target_host}:{target_port}\r\n"
             f"{auth}\r\n"
         )
         sock.sendall(req.encode("ascii"))
@@ -196,27 +233,58 @@ def _check_http_proxy(
         sock.close()
 
 
-def check_proxy(raw: str | None, *, timeout: float = 8.0) -> tuple[bool, str]:
+def check_proxy(
+    raw: str | None,
+    *,
+    timeout: float = 8.0,
+    target_host: str = "api.oneme.ru",
+    target_port: int = 443,
+) -> tuple[bool, str]:
     """Проверка TCP + auth прокси. Пустой URL — OK (прокси не задан)."""
     url = (raw or "").strip()
     if not url:
         return True, ""
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+        parsed_port = parsed.port
+    except ValueError:
+        return False, "некорректный URL прокси"
     scheme = (parsed.scheme or "socks5").lower()
     host = parsed.hostname or ""
     if not host:
         return False, "некорректный URL прокси"
-    port = parsed.port or (1080 if "socks" in scheme else 8080)
+    port = parsed_port or (1080 if "socks" in scheme else 8080)
     user = unquote(parsed.username) if parsed.username else None
     password = unquote(parsed.password) if parsed.password else None
     try:
         if scheme.startswith("socks"):
-            return _check_socks5(host, port, user, password, timeout=timeout)
+            return _check_socks5(
+                host,
+                port,
+                user,
+                password,
+                timeout=timeout,
+                target_host=target_host,
+                target_port=target_port,
+            )
         if scheme in ("http", "https"):
-            return _check_http_proxy(host, port, user, password, timeout=timeout)
+            return _check_http_proxy(
+                host,
+                port,
+                user,
+                password,
+                timeout=timeout,
+                target_host=target_host,
+                target_port=target_port,
+                use_tls=scheme == "https",
+            )
         return False, f"неподдерживаемая схема прокси: {scheme}"
     except OSError as e:
-        return False, str(e)
+        error = str(e)
+        for secret in (user, password):
+            if secret:
+                error = error.replace(secret, "***")
+        return False, error
 
 
 def pick_proxy_from_pool(
