@@ -171,27 +171,27 @@ fix: restore safely cancelled queue claims
 - Watchdog restarts with `finish_status=None`, `record_campaign=False`.
 - Scheduler disables a due row only after `start_worker(...) is True`.
 
-- [ ] **Step 1: Write failing lifecycle tests**
+- [x] **Step 1: Write failing lifecycle tests**
 
 Add a watchdog test asserting the running campaign is not finished and
 `worker_restarts_total` increments after a successful restart. Add scheduler
 tests asserting preflight/start failure leaves `enabled=1`, while successful
 start changes it to `0`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 `python -m pytest tests/test_campaign_auto_run.py -q --basetemp=.pytest-tmp/task4-red`
 
 Expected: watchdog uses `stopped`; scheduler consumes before validation.
 
-- [ ] **Step 3: Implement lifecycle ordering**
+- [x] **Step 3: Implement lifecycle ordering**
 
 Move schedule disable after a true start result. Preserve due schedules on
 exceptions or missing prerequisites. Restart watchdog without finishing the
 campaign and increment the existing metric only after start succeeds.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run focused tests; expected PASS. Commit:
 

@@ -677,8 +677,6 @@ async def scheduler_tick() -> None:
         rt = REGISTRY.worker()
         worker_busy = rt.worker_task and not rt.worker_task.done()
         if now >= start_at and not worker_busy:
-            with main._conn() as c:
-                c.execute("UPDATE campaign_schedule SET enabled=0 WHERE id=1")
             main.append_log(
                 f"Расписание: старт кампании (запланировано на {row['start_at']})"
             )
@@ -689,8 +687,17 @@ async def scheduler_tick() -> None:
             else:
                 if main.load_message_pool() and main._has_sendable_profile():
                     await main._preflight_group_proxies()
-                    main.set_setting("auto_run", "1")
-                    await start_worker(scheduled_for=row["start_at"])
+                    started = await start_worker(scheduled_for=row["start_at"])
+                    if started:
+                        main.set_setting("auto_run", "1")
+                        with main._conn() as c:
+                            c.execute(
+                                "UPDATE campaign_schedule SET enabled=0 WHERE id=1"
+                            )
+                    else:
+                        main.append_log(
+                            "Расписание: воркер занят — запуск сохранён для повтора"
+                        )
                 else:
                     main.append_log("Расписание: нет сообщений или профилей — пропуск")
     await main._try_auto_resume(log_prefix="Автовозобновление")
@@ -734,22 +741,24 @@ async def watchdog_loop() -> None:
                 restore_context(rt.worker_ctx_snapshot)
                 try:
                     await stop_worker(
-                        finish_status="stopped",
+                        finish_status=None,
                         reason="Перезапуск сторожем",
                         tenant_id=tid,
                     )
                     if main._auto_run_enabled():
-                        await start_worker(record_campaign=False)
+                        if await start_worker(record_campaign=False):
+                            main._metric_inc("worker_restarts_total")
                 finally:
                     clear_context()
             else:
                 await stop_worker(
-                    finish_status="stopped",
+                    finish_status=None,
                     reason="Перезапуск сторожем",
                     tenant_id=tid,
                 )
                 if main._auto_run_enabled():
-                    await start_worker(record_campaign=False)
+                    if await start_worker(record_campaign=False):
+                        main._metric_inc("worker_restarts_total")
 
 async def start_worker(
     *,
