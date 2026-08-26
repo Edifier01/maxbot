@@ -88,7 +88,7 @@ fix: lock runtime policies to utc3 and one worker
 - Consumes: `_decrypt_session(profile_id)` and `_encrypt_session(profile_id)`.
 - Produces: `_with_client_unlocked(...)` always attempts encryption after decrypt.
 
-- [ ] **Step 1: Write failing vault regressions**
+- [x] **Step 1: Write failing vault regressions**
 
 Add tests where token validation fails immediately and where `_safe_stop`
 raises. Both assert that `_encrypt_session(profile_id)` is still called and the
@@ -100,21 +100,21 @@ with pytest.raises(RuntimeError, match="Сессия MAX отсутствует"
 encrypt.assert_called_once_with(7)
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 `python -m pytest tests/test_session_send_no_otp.py tests/test_vault.py -q --basetemp=.pytest-tmp/task2-red`
 
 Expected: missing-token and stop-error tests FAIL because cleanup is bypassed.
 
-- [ ] **Step 3: Implement nested cleanup**
+- [x] **Step 3: Implement nested cleanup**
 
 Move all work after decrypt under one outer `try/finally`. Use nested
 `try/finally` so stop failure cannot skip task cancellation, auth-state reset,
 or `_encrypt_session(profile_id)`. Preserve the original operation error when
 cleanup also fails and log the cleanup error.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run focused tests; expected PASS. Commit:
 

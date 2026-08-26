@@ -44,6 +44,7 @@ def test_session_only_auth_flow_does_not_request_code():
 def test_send_without_session_does_not_construct_client(tmp_path, monkeypatch):
     m = _setup_db(tmp_path, monkeypatch)
     created: list[object] = []
+    encrypt = MagicMock()
 
     class BoomClient:
         def __init__(self, *args, **kwargs):
@@ -52,6 +53,8 @@ def test_send_without_session_does_not_construct_client(tmp_path, monkeypatch):
 
     fake_pymax = SimpleNamespace(Client=BoomClient, ExtraConfig=lambda **k: object())
     monkeypatch.setitem(__import__("sys").modules, "pymax", fake_pymax)
+    monkeypatch.setattr(m, "_decrypt_session", lambda _id: None)
+    monkeypatch.setattr(m, "_encrypt_session", encrypt)
 
     async def _run():
         with pytest.raises(RuntimeError, match="не запрашивает SMS"):
@@ -59,7 +62,33 @@ def test_send_without_session_does_not_construct_client(tmp_path, monkeypatch):
 
     asyncio.run(_run())
     assert created == []
+    encrypt.assert_called_once_with(1)
     assert m._auth_sessions[m._auth_session_key(1)]["step"] == "idle"
+
+
+def test_stop_failure_cannot_skip_session_reseal(tmp_path, monkeypatch):
+    m = _setup_db(tmp_path, monkeypatch)
+    encrypt = MagicMock()
+    monkeypatch.setattr(m, "_session_db_has_token", lambda _id: True)
+    monkeypatch.setattr(m, "_decrypt_session", lambda _id: None)
+    monkeypatch.setattr(m, "_encrypt_session", encrypt)
+    monkeypatch.setattr(m, "_session_device_fields", lambda _id: (None, None))
+    monkeypatch.setattr(m, "_safe_stop", AsyncMock(side_effect=OSError("stop failed")))
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "pymax",
+        SimpleNamespace(Client=_fake_started_client(), ExtraConfig=lambda **k: object()),
+    )
+
+    async def _run():
+        async def _fn(_c):
+            return "ok"
+
+        await m._with_client(1, "+79991112233", _fn)
+
+    with pytest.raises(OSError, match="stop failed"):
+        asyncio.run(_run())
+    encrypt.assert_called_once_with(1)
 
 
 def _fake_started_client():

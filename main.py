@@ -1221,6 +1221,33 @@ async def _with_client_unlocked(
     group_id: int | None = None,
     proxy: str | None = None,
 ):
+    _decrypt_session(profile_id)
+    try:
+        return await _with_decrypted_client(
+            profile_id,
+            phone,
+            fn,
+            connect_timeout,
+            auth_timeout,
+            login_mode=login_mode,
+            group_id=group_id,
+            proxy=proxy,
+        )
+    finally:
+        _encrypt_session(profile_id)
+
+
+async def _with_decrypted_client(
+    profile_id: int,
+    phone: str,
+    fn,
+    connect_timeout: float = 90,
+    auth_timeout: float = 600,
+    *,
+    login_mode: bool = False,
+    group_id: int | None = None,
+    proxy: str | None = None,
+):
     from pymax import Client, ExtraConfig
 
     sess = _ensure_auth_session(profile_id)
@@ -1228,7 +1255,6 @@ async def _with_client_unlocked(
         _set_auth_step(profile_id, "connecting")
     else:
         _clear_stale_connecting_step(profile_id)
-    _decrypt_session(profile_id)
     if not login_mode and not _session_db_has_token(profile_id):
         raise RuntimeError(
             "Сессия MAX отсутствует — нажмите «Войти» у профиля. "
@@ -1311,13 +1337,14 @@ async def _with_client_unlocked(
     except TimeoutError as e:
         box["err"] = e
     finally:
-        await _safe_stop(client)
-        _encrypt_session(profile_id)
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        if not login_mode:
-            _clear_stale_connecting_step(profile_id)
+        try:
+            await _safe_stop(client)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            if not login_mode:
+                _clear_stale_connecting_step(profile_id)
 
     if box.get("err") and box.get("result") is None:
         raise box["err"]
