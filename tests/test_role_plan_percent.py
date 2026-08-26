@@ -25,6 +25,12 @@ def test_split_role_counts_sum_and_non_skip():
             assert s < n
 
 
+def test_split_role_counts_keeps_zero_weight_role_empty():
+    assert antiban_core.split_role_counts(
+        2, skip_percent=90, active_percent=10, quiet_percent=0
+    ) == (1, 1, 0)
+
+
 def test_campaign_scale_v18_migration(tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()

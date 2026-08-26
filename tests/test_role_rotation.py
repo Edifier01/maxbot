@@ -1,4 +1,4 @@
-"""Ordered 3-day role rotation (33/33/33)."""
+"""Ordered three-day rotation of weighted role segments."""
 
 from __future__ import annotations
 
@@ -21,9 +21,14 @@ def test_split_thirds_remainder_to_first_parts():
 
 
 def test_rotation_parts_disjoint_roles_per_day():
-    for cycle_day in range(3):
-        roles = {antiban_core.role_rotation_for_part(cycle_day, p) for p in range(3)}
-        assert roles == {"active", "quiet", "skip"}
+    assert [
+        [antiban_core.role_rotation_for_part(day, part) for part in range(3)]
+        for day in range(3)
+    ] == [
+        ["active", "quiet", "skip"],
+        ["quiet", "skip", "active"],
+        ["skip", "active", "quiet"],
+    ]
 
 
 def test_assign_rotation_roles_day1():
@@ -34,6 +39,12 @@ def test_assign_rotation_roles_day1():
     assert roles[103] == "active"
     assert roles[104] == "quiet"
     assert roles[107] == "skip"
+
+    for cycle_day in range(3):
+        counts = antiban_core.assign_rotation_roles(list(range(10)), cycle_day)
+        assert sum(role == "active" for role in counts.values()) == 3
+        assert sum(role == "quiet" for role in counts.values()) == 3
+        assert sum(role == "skip" for role in counts.values()) == 4
 
 
 def test_role_cycle_day_from_anchor(tmp_path, monkeypatch):
@@ -72,6 +83,9 @@ def test_ensure_group_role_plan_ordered(tmp_path, monkeypatch):
     m.init_db()
     m.set_setting("human_rhythm_enabled", "1")
     m.set_setting("role_plan_enabled", "1")
+    m.set_setting("day_skip_percent", "40")
+    m.set_setting("role_active_percent", "30")
+    m.set_setting("role_quiet_percent", "30")
     m.set_setting("role_cycle_anchor", "2026-07-01")
     monkeypatch.setattr(m, "_local_today", lambda: date(2026, 7, 1))
     monkeypatch.setattr(m, "_role_cycle_day", lambda: 0)
@@ -81,7 +95,7 @@ def test_ensure_group_role_plan_ordered(tmp_path, monkeypatch):
         c.execute("INSERT INTO groups (name, is_active) VALUES ('G', 1)")
         gid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
         pids: list[int] = []
-        for i in range(6):
+        for i in range(10):
             cur = c.execute(
                 "INSERT INTO profiles (phone, status) VALUES (?, ?)",
                 (f"+7900{suffix}{i:02d}", m.ProfileStatus.ACTIVE),
@@ -104,9 +118,9 @@ def test_ensure_group_role_plan_ordered(tmp_path, monkeypatch):
     roles_by_name = {"active": [], "quiet": [], "skip": []}
     for row in rows:
         roles_by_name[row["day_role"]].append(row["profile_id"])
-    assert len(roles_by_name["active"]) == 2
-    assert len(roles_by_name["quiet"]) == 2
-    assert len(roles_by_name["skip"]) == 2
-    assert set(roles_by_name["active"]) == set(pids[:2])
-    assert set(roles_by_name["quiet"]) == set(pids[2:4])
-    assert set(roles_by_name["skip"]) == set(pids[4:6])
+    assert len(roles_by_name["active"]) == 3
+    assert len(roles_by_name["quiet"]) == 3
+    assert len(roles_by_name["skip"]) == 4
+    assert set(roles_by_name["active"]) == set(pids[:3])
+    assert set(roles_by_name["quiet"]) == set(pids[3:6])
+    assert set(roles_by_name["skip"]) == set(pids[6:])

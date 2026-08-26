@@ -265,13 +265,24 @@ def role_rotation_for_part(cycle_day: int, part_index: int) -> str:
 def assign_rotation_roles(
     profile_ids: list[int],
     cycle_day: int,
+    *,
+    skip_percent: float = 40.0,
+    active_percent: float = 30.0,
+    quiet_percent: float = 30.0,
 ) -> dict[int, str]:
-    """profile_id → day_role по порядку списка, без shuffle."""
+    """Точные дневные квоты ролей; порядок сегментов вращается по трёхдневному циклу."""
+    skip_n, active_n, quiet_n = split_role_counts(
+        len(profile_ids),
+        skip_percent=skip_percent,
+        active_percent=active_percent,
+        quiet_percent=quiet_percent,
+    )
+    sizes = {"skip": skip_n, "active": active_n, "quiet": quiet_n}
     roles: dict[int, str] = {}
     idx = 0
-    for part, size in enumerate(split_thirds(len(profile_ids))):
+    for part in range(3):
         role = role_rotation_for_part(cycle_day, part)
-        for _ in range(size):
+        for _ in range(sizes[role]):
             roles[profile_ids[idx]] = role
             idx += 1
     return roles
@@ -287,22 +298,24 @@ def split_role_counts(
     """Распределение skip/active/quiet; сумма = n; хотя бы один non-skip при n > 0."""
     if n <= 0:
         return 0, 0, 0
-    skip_n = int(round(n * max(0.0, skip_percent) / 100.0))
-    active_n = int(round(n * max(0.0, active_percent) / 100.0))
-    quiet_n = n - skip_n - active_n
-    if quiet_n < 0:
-        over = -quiet_n
-        take = min(active_n, over)
-        active_n -= take
-        over -= take
-        skip_n = max(0, skip_n - over)
-        quiet_n = n - skip_n - active_n
-    if skip_n >= n:
-        skip_n = max(0, n - 1)
-        quiet_n = max(0, n - skip_n - active_n)
-        if active_n + skip_n + quiet_n != n:
-            quiet_n = n - skip_n - active_n
-    return skip_n, active_n, quiet_n
+    weights = tuple(max(0.0, p) for p in (skip_percent, active_percent, quiet_percent))
+    total = sum(weights)
+    if total <= 0:
+        return 0, 0, n
+    raw = tuple(n * weight / total for weight in weights)
+    counts = [math.floor(value) for value in raw]
+    order = sorted(
+        range(3),
+        key=lambda i: (raw[i] - counts[i], weights[i], -i),
+        reverse=True,
+    )
+    for i in order[: n - sum(counts)]:
+        counts[i] += 1
+    if counts[0] >= n:
+        non_skip = max((i for i in (1, 2) if weights[i] > 0), key=lambda i: weights[i], default=2)
+        counts[0] -= 1
+        counts[non_skip] += 1
+    return counts[0], counts[1], counts[2]
 
 
 def _self_check_split_role_counts() -> None:
@@ -318,9 +331,9 @@ def _self_check_role_rotation() -> None:
     assert split_thirds(10) == (4, 3, 3)
     ids = list(range(10))
     r0 = assign_rotation_roles(ids, 0)
-    assert sum(v == "active" for v in r0.values()) == 4
+    assert sum(v == "active" for v in r0.values()) == 3
     assert sum(v == "quiet" for v in r0.values()) == 3
-    assert sum(v == "skip" for v in r0.values()) == 3
+    assert sum(v == "skip" for v in r0.values()) == 4
     roles_day0 = {role_rotation_for_part(0, p) for p in range(3)}
     assert roles_day0 == {"active", "quiet", "skip"}
 
