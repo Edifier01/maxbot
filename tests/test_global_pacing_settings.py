@@ -291,6 +291,31 @@ def test_partial_range_update_validates_against_stored_value(tmp_path, monkeypat
         clear_context()
 
 
+def test_global_partial_range_propagates_coherent_pair(tmp_path, monkeypatch):
+    m = _setup_server_main(tmp_path, monkeypatch)
+    _init_global(m)
+    _init_tenant(m, 72)
+    with tenant_scope(use_global_data=True, role="admin"):
+        m.set_setting("delay_min_sec", "5")
+        m.set_setting("delay_max_sec", "20")
+    with tenant_scope(tenant_id=72, role="user"):
+        m.set_setting("delay_min_sec", "5")
+        m.set_setting("delay_max_sec", "8")
+
+    from app.routes_models import SettingsIn
+    from app.routes_settings import update_settings
+
+    set_context(user_id=1, role="admin", use_global_data=True)
+    try:
+        asyncio.run(update_settings(SettingsIn(delay_min_sec=10)))
+    finally:
+        clear_context()
+
+    with tenant_scope(tenant_id=72, role="user"):
+        assert m.get_setting("delay_min_sec") == "10"
+        assert m.get_setting("delay_max_sec") == "20"
+
+
 def test_revoke_subscription_route_requires_admin():
     from app.routes_admin import router, revoke_subscription
 

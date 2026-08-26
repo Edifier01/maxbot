@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from cryptography.fernet import Fernet
 
 from app import paths, vault
@@ -91,3 +92,42 @@ def test_encrypt_skips_empty_db_when_enc_exists(tmp_path):
     vault.encrypt_session_file(data_dir, 4)
     assert not db.exists()
     assert vault.get_fernet(data_dir).decrypt(enc.read_bytes()) == good
+
+
+def test_encrypt_surfaces_encryption_failure(tmp_path, monkeypatch):
+    data_dir = tmp_path / "tenant"
+    d = vault.session_dir(data_dir, 5)
+    db = d / "session.db"
+    db.write_bytes(b"plaintext")
+
+    class BrokenFernet:
+        def encrypt(self, _payload):
+            raise RuntimeError("encrypt failed")
+
+    monkeypatch.setattr(vault, "get_fernet", lambda _data_dir: BrokenFernet())
+    with pytest.raises(RuntimeError, match="encrypt failed"):
+        vault.encrypt_session_file(data_dir, 5)
+    assert db.read_bytes() == b"plaintext"
+    assert not (d / "session.db.enc").exists()
+
+
+def test_encrypt_surfaces_plaintext_unlink_failure(tmp_path, monkeypatch):
+    data_dir = tmp_path / "tenant"
+    vault.clear_cache()
+    vault.ensure_vault_unlocked(data_dir)
+    d = vault.session_dir(data_dir, 6)
+    db, enc = d / "session.db", d / "session.db.enc"
+    db.write_bytes(b"plaintext")
+    original_unlink = type(db).unlink
+
+    def fail_plaintext_unlink(path, *args, **kwargs):
+        if path == db:
+            raise PermissionError("locked")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(db), "unlink", fail_plaintext_unlink)
+    monkeypatch.setattr(vault.time, "sleep", lambda _seconds: None)
+    with pytest.raises(PermissionError, match="locked"):
+        vault.encrypt_session_file(data_dir, 6)
+    assert db.exists()
+    assert vault.get_fernet(data_dir).decrypt(enc.read_bytes()) == b"plaintext"

@@ -121,6 +121,9 @@ def normalize_proxy_field(raw: str | None) -> str:
             raise ValueError("Некорректный формат proxy URL")
         if not scheme.startswith("socks") and scheme not in ("http", "https"):
             raise ValueError("Некорректный формат proxy URL")
+        if parsed.username is not None or parsed.password is not None:
+            if not unquote(parsed.username or "") or not unquote(parsed.password or ""):
+                raise ValueError("Для proxy нужны логин и пароль")
     return v
 
 

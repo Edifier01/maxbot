@@ -483,149 +483,6 @@ async def poolworker_loop(worker_id: int) -> None:
         await sleep_send_delay(pool_scale=True)
 
 
-async def worker_loop() -> None:
-    main.append_log("Воркер запущен")
-    main._touch_worker_activity()
-    while True:
-        main._touch_worker_activity()
-        if REGISTRY.app.shutting_down:
-            main.append_log("Воркер остановлен (shutdown)")
-            return
-        if await main._wait_if_outside_send_window():
-            continue
-        await main._maybe_idle_presence()
-        with main._conn() as c:
-            qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-            if not qs or not qs["running"]:
-                main.append_log("Воркер остановлен")
-                return
-            main._reset_daily_counts(c)
-
-        messages = main.load_message_pool()
-        groups = main._active_groups()
-        if not messages:
-            main.append_log("Нет сообщений — загрузите файл сообщений (.txt)")
-            await asyncio.sleep(5)
-            continue
-        if not groups:
-            main.append_log("Нет активных групп")
-            await asyncio.sleep(5)
-            continue
-
-        with main._conn() as c:
-            qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-            pi, mi, gi = qs["profile_idx"], qs["message_idx"], qs["group_idx"]
-            if main._campaign_goal() == "message_pool":
-                if main._message_pick_mode() == "random_norepeat":
-                    bag = main._ensure_message_bag(c, len(messages))
-                    if not bag:
-                        worker_shutdown(
-                            f"Готово: все {len(messages)} сообщений отправлены"
-                        )
-                        return
-                elif mi >= len(messages):
-                    worker_shutdown(
-                        f"Готово: все {len(messages)} сообщений отправлены"
-                    )
-                    return
-
-        group = groups[gi % len(groups)]
-        profiles = main._active_profiles_for_group(group["id"])
-        if not profiles:
-            if not main._has_active_profiles():
-                worker_shutdown("Нет активных профилей ни в одной группе")
-                return
-            main.append_log(
-                f"Группа «{group['name']}»: сегодня некого слать "
-                f"(роли/skip), следующая"
-            )
-            with main._conn() as c:
-                c.execute(
-                    "UPDATE queue_state SET group_idx=? WHERE id=1",
-                    (main.next_index(gi, len(groups)),),
-                )
-            await asyncio.sleep(2)
-            continue
-
-        # ponytail: linear scan for next sendable profile (O(n) per step; fine for 1000)
-        sent = False
-        attempts = 0
-        while attempts < len(profiles) and not sent:
-            profile = profiles[pi % len(profiles)]
-            pi = main.next_index(pi, len(profiles))
-            attempts += 1
-            if main._is_circuit_open(profile["id"]):
-                continue
-            if not main._can_send_in_group(profile, group["id"]):
-                continue
-
-            with main._conn() as c:
-                picked = main._pick_next_message(c, messages, mi)
-            if picked is None:
-                worker_shutdown(
-                    f"Готово: все {len(messages)} сообщений отправлены"
-                )
-                return
-            text, pool_idx, progress_next, bag_mode = picked
-            gi_next = main.next_index(gi, len(groups))
-            gid = int(group["id"])
-            RUNTIME.groups_in_flight.add(gid)
-            tracker = SendTracker()
-            try:
-                try:
-                    sent = await send_with_retry(
-                        profile,
-                        group,
-                        text,
-                        pool_idx,
-                        pi,
-                        gi_next,
-                        progress_next,
-                        advance_queue=not bag_mode,
-                        tracker=tracker,
-                    )
-                except asyncio.CancelledError:
-                    if bag_mode and tracker.may_requeue:
-                        main._return_to_message_bag(pool_idx)
-                    raise
-            finally:
-                RUNTIME.groups_in_flight.discard(gid)
-            if not sent and bag_mode and tracker.may_requeue:
-                main._return_to_message_bag(pool_idx)
-            mi = progress_next
-
-        if sent:
-            await sleep_send_delay(pool_scale=False)
-        else:
-            if not main._has_sendable_profile():
-                if main._has_sendable_profile(ignore_human_break=True):
-                    wait = min(60.0, main._seconds_until_any_human_break_ends())
-                    end_at = time.monotonic() + wait
-                    while time.monotonic() < end_at:
-                        main._touch_worker_activity()
-                        await asyncio.sleep(min(15.0, end_at - time.monotonic()))
-                    continue
-                worker_shutdown(
-                    "Готово: дневные лимиты всех аккаунтов исчерпаны"
-                    if main._campaign_goal() == "daily_limits"
-                    else "Некому отправлять: нет активных профилей или дневной лимит исчерпан"
-                )
-                return
-            # в этой группе некого — переходим к следующей
-            with main._conn() as c:
-                c.execute(
-                    "UPDATE queue_state SET profile_idx=?, group_idx=? WHERE id=1",
-                    (pi, main.next_index(gi, len(groups))),
-                )
-            open_ids = [p["id"] for p in profiles if main._is_circuit_open(p["id"])]
-            if open_ids and len(open_ids) >= len(profiles):
-                main.append_log(
-                    "Все профили группы в автопаузе — следующая группа"
-                )
-            await asyncio.sleep(1)
-            main._touch_worker_activity()
-
-
 async def pool_supervisor() -> None:
     
     n = main._pool_size()
@@ -735,22 +592,12 @@ async def watchdog_loop() -> None:
                 f"Сторож: воркер tenant={tid or 'local'} завис "
                 f"({idle:.0f}с без активности) — перезапуск"
             )
-            if rt.worker_ctx_snapshot is not None:
+            snapshot = rt.worker_ctx_snapshot
+            if snapshot is not None:
                 from app.tenant import restore_context, clear_context
 
-                restore_context(rt.worker_ctx_snapshot)
-                try:
-                    await stop_worker(
-                        finish_status=None,
-                        reason="Перезапуск сторожем",
-                        tenant_id=tid,
-                    )
-                    if main._auto_run_enabled():
-                        if await start_worker(record_campaign=False):
-                            main._metric_inc("worker_restarts_total")
-                finally:
-                    clear_context()
-            else:
+                restore_context(snapshot)
+            try:
                 await stop_worker(
                     finish_status=None,
                     reason="Перезапуск сторожем",
@@ -759,6 +606,13 @@ async def watchdog_loop() -> None:
                 if main._auto_run_enabled():
                     if await start_worker(record_campaign=False):
                         main._metric_inc("worker_restarts_total")
+            except Exception as e:
+                main.append_log(
+                    f"Сторож: перезапуск tenant={tid or 'local'} не удался — {e}"
+                )
+            finally:
+                if snapshot is not None:
+                    clear_context()
 
 async def start_worker(
     *,
@@ -780,10 +634,7 @@ async def start_worker(
         rt.tenant_id = tid
         main._load_antiban_state()
         try:
-            if main._pool_size() > 1:
-                await pool_supervisor()
-            else:
-                await worker_loop()
+            await pool_supervisor()
         finally:
             clear_context()
 

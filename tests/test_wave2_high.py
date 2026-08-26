@@ -45,6 +45,15 @@ def test_normalize_proxy_field():
         antiban_core.normalize_proxy_field("bad-value")
 
 
+@pytest.mark.parametrize("scheme", ["socks5", "http", "https"])
+@pytest.mark.parametrize("credentials", ["user@", ":pass@"])
+def test_normalize_proxy_field_rejects_partial_credentials(scheme, credentials):
+    with pytest.raises(ValueError, match="логин и пароль"):
+        antiban_core.normalize_proxy_field(
+            f"{scheme}://{credentials}proxy.example:1080"
+        )
+
+
 def test_proxy_in_rejects_invalid():
     from app.routes_admin import ProxyIn
 

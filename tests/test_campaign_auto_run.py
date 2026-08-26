@@ -107,6 +107,20 @@ def test_auto_resume_logs_only_after_worker_starts(m, monkeypatch):
     log_mock.assert_called_once_with("Автовозобновление: рассылка запущена")
 
 
+def test_auto_resume_reuses_running_campaign(m, monkeypatch):
+    m.set_setting("auto_run", "1")
+    REGISTRY.worker_for(None).current_campaign_id = 7
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["hello"])
+    monkeypatch.setattr(m, "_prepare_auto_resume_pool", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+
+    assert asyncio.run(m._try_auto_resume()) is True
+    start_mock.assert_awaited_once_with(record_campaign=False)
+
+
 def test_auto_resume_does_not_claim_start_when_worker_is_busy(m, monkeypatch):
     m.set_setting("auto_run", "1")
     log_mock = MagicMock()
@@ -385,6 +399,55 @@ def test_watchdog_restart_preserves_campaign_and_counts(m, monkeypatch):
     assert stop_mock.await_args.kwargs["finish_status"] is None
     start_mock.assert_awaited_once_with(record_campaign=False)
     metric_mock.assert_called_once_with("worker_restarts_total")
+
+
+def test_watchdog_survives_failed_restart(m, monkeypatch):
+    import app.campaign_worker as cw
+
+    m.set_setting("auto_run", "1")
+    rt = REGISTRY.worker_for(None)
+    rt.worker_last_activity = time.monotonic() - m.WORKER_TIMEOUT - 10
+
+    async def hang_forever():
+        await asyncio.Event().wait()
+
+    async def stop_worker(**_kwargs):
+        rt.worker_task = None
+
+    stop_mock = AsyncMock(side_effect=stop_worker)
+    start_mock = AsyncMock(side_effect=RuntimeError("proxy down"))
+    metric_mock = MagicMock()
+    monkeypatch.setattr(cw, "stop_worker", stop_mock)
+    monkeypatch.setattr(cw, "start_worker", start_mock)
+    monkeypatch.setattr(m, "_metric_inc", metric_mock)
+
+    sleep_calls = 0
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_sec):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 2:
+            raise StopAsyncIteration
+        await real_sleep(0)
+
+    monkeypatch.setattr(cw.asyncio, "sleep", fast_sleep)
+    loop = asyncio.new_event_loop()
+    hang_task = None
+    try:
+        hang_task = loop.create_task(hang_forever())
+        rt.worker_task = hang_task
+        with pytest.raises(StopAsyncIteration):
+            loop.run_until_complete(cw.watchdog_loop())
+    finally:
+        if hang_task is not None and not hang_task.done():
+            hang_task.cancel()
+            loop.run_until_complete(asyncio.gather(hang_task, return_exceptions=True))
+        rt.worker_task = None
+        loop.close()
+
+    start_mock.assert_awaited_once_with(record_campaign=False)
+    metric_mock.assert_not_called()
 
 
 def test_stop_worker_from_inside_worker_task_does_not_hang(m):

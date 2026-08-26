@@ -80,6 +80,13 @@ async def update_settings(body: SettingsIn):
     if not is_admin():
         data.pop("worker_pool_size", None)
     _validate_merged_ranges(data)
+    copy_global = m._is_server_mode() and use_global_data()
+    if copy_global:
+        for low_key, high_key, _label in _RANGE_PAIRS:
+            if low_key in data and high_key not in data:
+                data[high_key] = m.get_setting(high_key)
+            elif high_key in data and low_key not in data:
+                data[low_key] = m.get_setting(low_key)
     if "api_pin" in data:
         pin = data.pop("api_pin")
         if pin is None or str(pin).strip() == "":
@@ -105,7 +112,7 @@ async def update_settings(body: SettingsIn):
             qs_mi = int(row["message_idx"] if row else 0)
         if qs_mi == 0:
             m._rebuild_message_bag()
-    if m._is_server_mode() and use_global_data():
+    if copy_global:
         to_copy = filter_pacing_updates(data)
         if (
             "daily_limit_max" in data

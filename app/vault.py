@@ -259,6 +259,7 @@ def decrypt_session_file(data_dir: Path, profile_id: int, log: LogFn | None = No
 def encrypt_session_file(data_dir: Path, profile_id: int, log: LogFn | None = None) -> None:
     d = session_dir(data_dir, profile_id)
     db, enc = d / "session.db", d / "session.db.enc"
+    tmp = d / "session.db.enc.tmp"
     if not db.exists():
         return
     # Failed/empty Client.start() must not overwrite a good encrypted session.
@@ -268,11 +269,14 @@ def encrypt_session_file(data_dir: Path, profile_id: int, log: LogFn | None = No
             log(f"Профиль #{profile_id}: пустая сессия не записана, оставлен прежний файл")
         return
     try:
-        enc.write_bytes(get_fernet(data_dir).encrypt(db.read_bytes()))
-        db.unlink(missing_ok=True)
-    except RuntimeError:
-        # ponytail: shutdown без unlock — не трогаем plaintext
-        pass
-    except OSError as e:
+        tmp.write_bytes(get_fernet(data_dir).encrypt(db.read_bytes()))
+        os.replace(tmp, enc)
+        _unlink_retry(db)
+    except (RuntimeError, OSError) as e:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         if log:
             log(f"Профиль #{profile_id}: ошибка шифрования сессии: {e}")
+        raise
