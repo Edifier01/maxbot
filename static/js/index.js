@@ -899,11 +899,11 @@ let openGroupId = null;
           <tbody>${d.items.map(r => {
             const cls = r.status === 'sent' ? 'ok' : (r.status === 'failed' ? 'fail' : '');
             return `<tr class="${cls}">
-              <td>${esc(r.sent_at || '')}</td>
-              <td>#${r.profile_id} ${esc(r.phone || '')}</td>
-              <td>${esc(r.group_name || '?')}</td>
-              <td>${esc(sendStatusRu(r.status))}</td>
-              <td>${esc(r.error || '')}</td>
+              <td data-label="Время">${esc(r.sent_at || '')}</td>
+              <td data-label="Профиль">#${r.profile_id} ${esc(r.phone || '')}</td>
+              <td data-label="Группа">${esc(r.group_name || '?')}</td>
+              <td data-label="Статус">${esc(sendStatusRu(r.status))}</td>
+              <td data-label="Ошибка">${esc(r.error || '')}</td>
             </tr>`;
           }).join('')}</tbody></table>`;
       }
@@ -1104,12 +1104,12 @@ let openGroupId = null;
           <thead><tr><th>ID</th><th>Статус</th><th>Старт</th><th>Финиш</th><th>Успех/Ошибки</th><th>Причина</th></tr></thead>
           <tbody>${d.items.map(c => `
             <tr class="${c.status === 'completed' ? 'ok' : (c.status === 'stopped' || c.status === 'paused' ? '' : '')}">
-              <td>#${c.id}</td>
-              <td>${esc(campaignStatusRu(c.status))}</td>
-              <td>${esc(c.started_at || '')}</td>
-              <td>${esc(c.finished_at || '—')}</td>
-              <td>${c.messages_sent || 0}/${c.messages_failed || 0} · всего ${c.messages_total || 0}</td>
-              <td>${esc((c.reason || '').slice(0, 80))}</td>
+              <td data-label="ID">#${c.id}</td>
+              <td data-label="Статус">${esc(campaignStatusRu(c.status))}</td>
+              <td data-label="Старт">${esc(c.started_at || '')}</td>
+              <td data-label="Финиш">${esc(c.finished_at || '—')}</td>
+              <td data-label="Успех/Ошибки">${c.messages_sent || 0}/${c.messages_failed || 0} · всего ${c.messages_total || 0}</td>
+              <td data-label="Причина">${esc((c.reason || '').slice(0, 80))}</td>
             </tr>`).join('')}
           </tbody></table>`;
       } catch (_) {}
@@ -1475,22 +1475,22 @@ let openGroupId = null;
         const total = pdata ? pdata.total : g.profiles_count;
         const body = open ? (profiles.length ? profiles.map(p => `
           <tr>
-            <td>${p.id}</td>
-            <td>
+            <td data-label="ID">${p.id}</td>
+            <td data-label="Телефон">
               <div class="phone-cell">
                 <span class="phone-num">${esc(p.phone)}${p.label ? ' ('+esc(p.label)+')' : ''}</span>
                 ${phoneBadges(p)}
               </div>
               ${p.in_cooldown ? `<div class="auth-error">пауза до ${esc((p.cooldown_until||'').slice(0,16))}</div>` : ''}
             </td>
-            <td>
+            <td data-label="Статус">
               <span class="status-${p.status}">${statusRu(p.status)}</span>
               ${p.circuit_open ? ' · <span class="auth-error">автопауза</span>' : ''}
               ${authLabel(p) ? `<div class="auth-wait">${esc(authLabel(p))}</div>` : ''}
               ${p.last_error ? `<div class="auth-error">${esc(p.last_error)}</div>` : ''}
             </td>
-            <td>${p.messages_sent_today || 0}${p.daily_limit != null ? '/'+p.daily_limit : ''}</td>
-            <td>${profileActions(p, g.id)}</td>
+            <td data-label="Сегодня">${p.messages_sent_today || 0}${p.daily_limit != null ? '/'+p.daily_limit : ''}</td>
+            <td data-label="Действия">${profileActions(p, g.id)}</td>
           </tr>`).join('') : `<tr><td colspan="5" class="hint">Профилей нет — ${isUserRole() ? 'добавьте номер' : 'добавьте номер или импортируйте CSV'}</td></tr>`) : '';
         const groupActive = g.is_active == null || Number(g.is_active) !== 0;
         return `

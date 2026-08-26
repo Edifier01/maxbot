@@ -80,10 +80,10 @@ function jsonHeaders(json = true) {
           const exp = formatAdminDate(row.expires_at);
           const cls = row.days_left <= 1 ? 'danger' : (row.days_left <= 7 ? 'warn' : 'ok');
           return `<tr>
-            <td>${esc(row.institution_name)}</td>
-            <td>${esc(row.email)}</td>
-            <td>${exp}</td>
-            <td><span class="badge ${cls} tabular-nums">${row.days_left} дн.</span></td>
+            <td data-label="Учреждение">${esc(row.institution_name)}</td>
+            <td data-label="Email">${esc(row.email)}</td>
+            <td data-label="До">${exp}</td>
+            <td data-label="Осталось"><span class="badge ${cls} tabular-nums">${row.days_left} дн.</span></td>
           </tr>`;
         }).join('');
       } catch (e) {
@@ -115,11 +115,11 @@ function jsonHeaders(json = true) {
               ? `<span class="badge warn tabular-nums">истекла ${formatAdminDate(sub.expires_at)}</span>`
               : '<span class="badge stop">нет</span>');
         return `<tr>
-          <td>${esc(u.institution_name)}</td>
-          <td>${esc(u.email)}</td>
-          <td>${subBadge}</td>
-          <td id="stats-${u.tenant_id}"><button class="btn" data-action="load-stats" data-tenant-id="${u.tenant_id}">Статистика</button></td>
-          <td>
+          <td data-label="Учреждение">${esc(u.institution_name)}</td>
+          <td data-label="Логин">${esc(u.email)}</td>
+          <td data-label="Подписка">${subBadge}</td>
+          <td data-label="Статистика" id="stats-${u.tenant_id}"><button class="btn" data-action="load-stats" data-tenant-id="${u.tenant_id}">Статистика</button></td>
+          <td data-label="Действия">
             <div class="row">
               <button class="btn primary" data-action="impersonate" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Войти в кабинет</button>
               <button class="btn" data-action="grant-month" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">+30 дней</button>

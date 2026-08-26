@@ -255,3 +255,23 @@ def test_auth_forms_enter_submit_and_errors():
     login_form = AUTH.index('id="formLogin"')
     remember_idx = AUTH.index('id="rememberMeLogin"')
     assert login_form < remember_idx
+
+
+def test_mobile_tables_dialogs_and_touch_targets():
+    for name, html in (("index", INDEX), ("admin", ADMIN), ("auth", AUTH)):
+        assert "@media (max-width: 720px)" in html, name
+        assert "--touch-min: 44px" in html, name
+        assert "overflow-x: hidden" in html, name
+
+    assert "content: attr(data-label)" in INDEX
+    assert "content: attr(data-label)" in ADMIN
+    assert ".data-table thead" in INDEX
+    assert ".users-table thead" in ADMIN
+    assert "max-height: calc(100dvh - 2rem)" in INDEX
+    assert "overflow-wrap: anywhere" in INDEX
+    assert "overflow-wrap: anywhere" in ADMIN
+
+    for label in ("Время", "Профиль", "Группа", "Статус", "Ошибка", "Действия"):
+        assert f'data-label="{label}"' in INDEX_JS, label
+    for label in ("Учреждение", "Логин", "Подписка", "Статистика", "Действия"):
+        assert f'data-label="{label}"' in ADMIN_JS, label

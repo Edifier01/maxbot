@@ -375,6 +375,7 @@
     .modal {
       background: var(--bg-elev); border: 1px solid var(--line); border-radius: 14px;
       padding: 1.35rem; width: min(380px, 92vw); box-shadow: var(--shadow);
+      max-height: calc(100dvh - 2rem); overflow-y: auto;
     }
     .modal h3 { margin: 0 0 .5rem; font-size: 1.05rem; }
     .modal p { margin: 0 0 1rem; color: var(--muted); font-size: .9rem; white-space: pre-line; }
@@ -515,7 +516,7 @@
       #btnLogout { margin-left: 0; align-self: flex-start; }
       nav { padding-bottom: .65rem; gap: .25rem; }
       nav button { padding: .5rem .75rem; min-height: var(--touch-min); }
-      input, select, textarea { max-width: 100%; font-size: 16px; }
+      input, select, textarea { max-width: 100%; font-size: 16px; min-height: var(--touch-min); }
       .panel .row { flex-direction: column; align-items: stretch; }
       .panel .row input, .panel .row button { width: 100%; max-width: none; }
       .settings-row { grid-template-columns: 1fr; gap: .35rem; }
@@ -534,9 +535,32 @@
       }
       .section-head { flex-direction: column; align-items: flex-start; gap: .35rem; }
       .dash-cards { grid-template-columns: 1fr; }
-      .table-wrap { max-height: 50vh; }
-      .data-table { font-size: .82rem; min-width: 520px; }
-      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .table-wrap, .group-table-wrap { max-height: none; overflow: visible; }
+      .data-table, .group-table-wrap table {
+        display: block; min-width: 0; font-size: .84rem;
+      }
+      .data-table thead, .group-table-wrap thead {
+        position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+        overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+      }
+      .data-table tbody, .group-table-wrap tbody {
+        display: grid; gap: .65rem; padding: .65rem;
+      }
+      .data-table tr, .group-table-wrap tr {
+        display: block; border: 1px solid var(--line-soft); border-radius: var(--radius-sm);
+        background: rgba(12,14,20,.5); overflow: hidden;
+      }
+      .data-table td, .group-table-wrap td {
+        display: grid; grid-template-columns: minmax(6.5rem, 38%) 1fr; gap: .65rem;
+        padding: .55rem .65rem; overflow-wrap: anywhere;
+      }
+      .data-table td::before, .group-table-wrap td::before {
+        content: attr(data-label); color: var(--muted); font-weight: 600;
+      }
+      .data-table td[colspan], .group-table-wrap td[colspan],
+      .group-table-wrap td[data-label="Действия"] { display: block; }
+      .data-table td[colspan]::before, .group-table-wrap td[colspan]::before { display: none; }
+      .group-table-wrap td[data-label="Действия"]::before { display: block; margin-bottom: .45rem; }
       #toast-container {
         left: 1rem; right: 1rem;
         bottom: max(1rem, env(safe-area-inset-bottom, 0px));

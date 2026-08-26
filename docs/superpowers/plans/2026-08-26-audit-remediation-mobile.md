@@ -382,13 +382,13 @@ fix: fail closed on partial storage updates
 - Existing desktop table markup remains unchanged above 720 px.
 - Mobile rows expose `data-label` values and display as stacked cards.
 
-- [ ] **Step 1: Write failing responsive tests**
+- [x] **Step 1: Write failing responsive tests**
 
 Require a 720 px media rule with card-row table behavior, `data-label`
 generation in both renderers, 44 px interactive targets, viewport-safe modal
 height, wrapped long identifiers, and absence of dead controls.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 `python -m pytest tests/test_saas_ux_static.py -q --basetemp=.pytest-tmp/task9-red`
@@ -396,19 +396,19 @@ Run:
 Expected: mobile tables still require horizontal scrolling and dead controls
 remain.
 
-- [ ] **Step 3: Implement responsive CSS/JS**
+- [x] **Step 3: Implement responsive CSS/JS**
 
 Add only CSS and renderer `data-label` attributes. Stack action groups, make
 dialogs use `max-height: calc(100dvh - 2rem)` with internal scrolling, preserve
 focus visibility/reduced motion, and keep every touch action at least 44 px.
 
-- [ ] **Step 4: Verify UI**
+- [x] **Step 4: Verify UI**
 
 Run static tests and `node --check` for all three JS files. Serve `static/`
 locally and inspect index, admin, and auth pages at desktop and mobile widths
 with the in-app browser. Confirm no page-level horizontal overflow.
 
-- [ ] **Step 5: Full verification**
+- [x] **Step 5: Full verification**
 
 Run:
 
@@ -426,7 +426,7 @@ git status --short
 Expected: all runnable tests pass; only documented PostgreSQL/POSIX skips
 remain; static checks exit 0.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```text
 fix: optimize responsive campaign interfaces
