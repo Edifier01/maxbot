@@ -2188,7 +2188,7 @@ def _group_sends_today(profile_id: int, group_id: int) -> int:
             """
             SELECT COUNT(*) n FROM send_log
             WHERE profile_id=? AND group_id=? AND status='sent'
-              AND date(sent_at)=?
+              AND date(sent_at, '+3 hours')=?
             """,
             (profile_id, group_id, today),
         ).fetchone()

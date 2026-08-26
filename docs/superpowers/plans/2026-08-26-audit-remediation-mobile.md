@@ -212,25 +212,25 @@ fix: preserve campaign lifecycle on restart
 - Produces: SQL local-day modifier `+3 hours` for `sent_at` and `now`.
 - Produces: UI formatter renders naive SQLite UTC values as UTC+3.
 
-- [ ] **Step 1: Write failing midnight tests**
+- [x] **Step 1: Write failing midnight tests**
 
 Insert sends at `2026-08-25 21:30:00` UTC and evaluate at UTC+3 local date
 `2026-08-26`. Assert quiet limits and dashboard include them in the 26 August
 day. Add a static test requiring the UTC+3 formatter for send/activity rows.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 `python -m pytest tests/test_ux_ops_backend.py tests/test_activity_log.py tests/test_saas_ux_static.py -q --basetemp=.pytest-tmp/task5-red`
 
 Expected: dashboard uses UTC `date('now')` and display prints raw UTC.
 
-- [ ] **Step 3: Implement UTC+3 boundaries**
+- [x] **Step 3: Implement UTC+3 boundaries**
 
 Apply SQLite `date(sent_at, '+3 hours')` and `date('now', '+3 hours')` at all
 daily log queries. Reuse one small JS formatting helper for operational times.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run focused tests; expected PASS. Commit:
 

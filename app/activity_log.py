@@ -91,7 +91,8 @@ def fetch_activity(
     now_iso = now_iso or datetime.now().isoformat(timespec="seconds")
     rows = conn.execute(
         """
-        SELECT sl.status, sl.error, sl.sent_at, p.phone, g.name AS group_name
+        SELECT sl.status, sl.error, datetime(sl.sent_at, '+3 hours') AS sent_at,
+               p.phone, g.name AS group_name
         FROM send_log sl
         LEFT JOIN profiles p ON p.id = sl.profile_id
         LEFT JOIN groups g ON g.id = sl.group_id
