@@ -297,8 +297,7 @@ def _pool_size() -> int:
     return max(1, min(n, 32))
 
 
-def _local_now() -> datetime:
-    """Текущее «локальное» время с учётом timezone_offset_hours (по умолчанию UTC+3)."""
+def _timezone_offset_hours() -> float:
     try:
         offset = float(
             get_setting("timezone_offset_hours") or DEFAULTS["timezone_offset_hours"]
@@ -308,11 +307,24 @@ def _local_now() -> datetime:
             offset = float(DEFAULTS.get("timezone_offset_hours", "3"))
         except ValueError:
             offset = 3.0
-    return antiban_core.local_now(offset)
+    return max(-12.0, min(14.0, offset))
+
+
+def _local_now() -> datetime:
+    """Текущее «локальное» время с учётом timezone_offset_hours (по умолчанию UTC+3)."""
+    return antiban_core.local_now(_timezone_offset_hours())
 
 
 def _local_today() -> date:
     return _local_now().date()
+
+
+def _local_day_utc_bounds() -> tuple[str, str]:
+    day = _local_today()
+    local_tz = timezone(timedelta(hours=_timezone_offset_hours()))
+    start = datetime(day.year, day.month, day.day, tzinfo=local_tz).astimezone(timezone.utc)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return start.strftime(fmt), (start + timedelta(days=1)).strftime(fmt)
 
 
 def _load_antiban_state() -> None:
@@ -2170,15 +2182,15 @@ def _iter_unique_active_profiles():
 
 
 def _group_sends_today(profile_id: int, group_id: int) -> int:
-    today = _local_today().isoformat()
+    start_utc, end_utc = _local_day_utc_bounds()
     with _conn() as c:
         row = c.execute(
             """
             SELECT COUNT(*) n FROM send_log
             WHERE profile_id=? AND group_id=? AND status='sent'
-              AND date(sent_at)=?
+              AND sent_at>=? AND sent_at<?
             """,
-            (profile_id, group_id, today),
+            (profile_id, group_id, start_utc, end_utc),
         ).fetchone()
     return int(row["n"] if row else 0)
 

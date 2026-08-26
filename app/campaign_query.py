@@ -36,7 +36,13 @@ def _ensure_group_role_plan(group_id: int) -> None:
             return
 
         ids = [int(r["profile_id"]) for r in rows]
-        role_map = antiban_core.assign_rotation_roles(ids, cycle_day)
+        role_map = antiban_core.assign_rotation_roles(
+            ids,
+            cycle_day,
+            skip_percent=m._day_skip_percent(),
+            active_percent=m._setting_float("role_active_percent", 30.0),
+            quiet_percent=m._setting_float("role_quiet_percent", 30.0),
+        )
         order_map = {pid: idx for idx, pid in enumerate(ids)}
 
         active_n = quiet_n = skip_n = 0
