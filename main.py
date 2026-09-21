@@ -413,7 +413,17 @@ def get_setting(key: str) -> str:
         if cache_key in _settings_cache:
             return _settings_cache[cache_key]
     conn = _scoped_sqlite_conn()
-    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    try:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key=?", (key,)
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        # Imports and pure helper calls can precede schema bootstrap. Return
+        # the declared default without caching it, so later initialization is
+        # still observed by the same process.
+        if "no such table: settings" not in str(exc):
+            raise
+        return DEFAULTS.get(key, "")
     val = row["value"] if row else DEFAULTS.get(key, "")
     with _settings_cache_lock:
         _settings_cache[cache_key] = val

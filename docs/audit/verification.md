@@ -96,10 +96,10 @@ S05-PG-MODULES-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `python -m p
 S05-E2E-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `python -m pytest -q --tb=short tests/test_e2e_server.py` | writable Python 3.12 CI container plus pinned PostgreSQL 16 | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 4 passed; 35 warnings; no external MAX action.
 S05-DEPENDENCY-CI-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `pip-audit -r requirements.lock`; `pip-audit -r requirements-server.lock` | writable Python 3.12 isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/security-review.md` | Both lockfiles reported no known vulnerabilities.
 S05-SOURCE-CI-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `python -m compileall -q main.py antiban_core.py celery_worker.py app tests static`; exact installed version assertion | writable Python 3.12 isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/baseline.md` | Compile passed; `maxapi-python` is exactly 2.4.1.
-S05-NODE-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `node --check static/js/index.js`; `node --check static/js/admin.js` | Node v24.20.0 | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | Static syntax only; rendered browser gate remains open.
+S05-NODE-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `node --check static/js/index.js`; `node --check static/js/admin.js` | Node v24.20.0 | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | Static syntax only; rendered browser evidence is recorded in the commit-bound rows below.
 S05-PROXY-REGRESSION-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `python -m pytest tests/test_runtime_proxy.py tests/test_campaign_auto_run.py::test_scheduler_tick_skips_expired_subscription tests/test_profile_login.py::test_profile_login_happy_path tests/test_worker_tenant_runtime.py::test_worker_start_captures_tenant_context -q` | writable Python 3.12 isolated CI container | 2026-09-21 | 0 | PASS | `app/runtime.py` | Proxy state no longer leaks between test/module reload boundaries; included in full CI run.
 
-## Current browser CI preparation
+## Historical browser CI preparation
 
 These rows are dirty-working-tree evidence after adding the dev-only
 Playwright runner and the independent GitHub Actions job. They do not replace
@@ -110,3 +110,18 @@ BROWSER-NPM-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `npm install --
 BROWSER-HEALTH-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `curl -fsS http://127.0.0.1:8765/api/health` in bounded app fixture | isolated operator runner, temporary SQLite and recovery hold | 2026-09-21 | 0 | PASS | `app/recovery_hold.py`, `docs/audit/ui-review.md` | `ok=true`, `db_ok=true`, `recovery_hold=true`, `max_external_actions=held`.
 BROWSER-MATRIX-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `npm run browser:e2e` with local fixture app | isolated operator runner with real Chromium, regular Playwright fallback | 2026-09-21 | 0 | PASS | `tests/browser/`, `playwright.config.js` | 6 passed across 390x844, 768x1024 and 1440x1000; auth/dashboard identity, focus, held state, console/request/network guard covered; no external MAX host.
 BROWSER-WORKFLOW-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | checked-in `.github/workflows/ci.yml` `browser-e2e` job | source/static inspection; hosted runner not invoked | 2026-09-21 | — | PENDING | `.github/workflows/ci.yml` | Pinned action SHAs, Node 24, Chromium install, bounded health wait and failure artifacts are present; GitHub-hosted execution remains pending.
+
+## Current commit-bound browser and operator evidence
+
+The dirty-worktree rows above are retained as historical records. The
+following rows are the current commit-bound evidence and supersede the
+previous `BROWSER-WORKFLOW-CURRENT` pending row.
+
+BROWSER-PR-HOSTED-CURRENT | 58da768710d761d0fbbae54581086b5073c9e289 | GitHub Actions run `35569486524` `browser-e2e` job | GitHub-hosted `ubuntu-latest` | 2026-09-21 | 0 | PASS | `https://github.com/Edifier01/maxbot/actions/runs/35569486524` | Chromium installed; local app health passed; rendered matrix reported 6 passed across 390x844, 768x1024 and 1440x1000; diagnostics artifact uploaded; no provider traffic.
+BROWSER-MAIN-HOSTED-CURRENT | 4d2aa28930092e8abb2917bd004ca7a2b21c07a3 | GitHub Actions run `35571862150` push CI | GitHub-hosted `ubuntu-latest` | 2026-09-21 | 0 | PASS | `https://github.com/Edifier01/maxbot/actions/runs/35571862150` | Post-merge `main` run passed all six jobs: browser-e2e, server-smoke, server-e2e, compose-config, dependency-audit and backup-restore-smoke.
+ENV-00-DOCKER-OPERATOR-RERUN | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `docker version --format '{{.Server.Version}}'` | ordinary operator terminal from dirty primary checkout | 2026-09-21 | 0 | PASS | operator terminal output | Docker Server `29.8.0`; this is environment evidence, not a clean commit-bound check; no production service or provider action.
+S05-LOCAL-FULL-SANDBOX-CURRENT | 58da768710d761d0fbbae54581086b5073c9e289 | `env MAX_TEST=1 MAX_SERVER_MODE=1 JWT_SECRET=... python -m pytest tests/ -vv --maxfail=1 --durations=20` | restricted sandbox Python 3.12.3 | 2026-09-21 | 130 | BLOCKED | `docs/audit/ui-review.md` | Collection found 344 tests; five passed, then `test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails` blocked. Reproduction narrowed the boundary to filesystem `mkdir`/`rename` inside `asyncio.to_thread()`; hosted full regression is the writable-environment evidence.
+
+The overall release verdict remains `FIX`: hosted browser/full regression is
+now evidenced, but Master integration, independent platform authorization,
+secret-history/CVE review and production gates remain open.

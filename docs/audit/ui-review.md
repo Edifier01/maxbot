@@ -1,6 +1,6 @@
 # T27 UI review evidence
 
-Status: `LOCAL PASS / HOSTED CI PENDING`
+Status: `LOCAL PASS / HOSTED CI PASS`
 
 The approved local rendered-browser gate was implemented and executed on
 2026-09-21 from the current dirty worktree. The Browser plugin was unavailable,
@@ -41,11 +41,33 @@ and error-context artifacts; the final passing run did not need failure
 artifacts. The workflow uploads `playwright-report/`, `test-results/`, and the
 server/health logs with `if: always()`.
 
+## Observed hosted gate
+
+The browser branch was merged as `4d2aa28930092e8abb2917bd004ca7a2b21c07a3`
+after the hosted pull-request run
+(`35569486524 <https://github.com/Edifier01/maxbot/actions/runs/35569486524>`)
+completed successfully. Its `browser-e2e` job ran the full three-viewport
+matrix and reported `6 passed (7.4s)`; the uploaded
+`maxbot-browser-diagnostics` artifact was present.
+
+The post-merge `main` run
+(`35571862150 <https://github.com/Edifier01/maxbot/actions/runs/35571862150>`)
+also completed successfully. All six jobs passed: `browser-e2e`,
+`server-smoke`, `server-e2e`, `compose-config`, `dependency-audit`, and
+`backup-restore-smoke`.
+
+The operator-terminal Docker check was rerun with
+`docker version --format '{{.Server.Version}}'` and exited `0`, reporting
+Docker Server `29.8.0`.
+
 ## Remaining limits
 
-The GitHub-hosted `browser-e2e` job has not been executed from this workspace;
-its workflow/static contract is covered by `tests/test_browser_ci_contract.py`.
-Hosted CI remains `PENDING` until a runner executes the checked-in workflow.
+The local full Python suite was not completed in the restricted sandbox: it
+passed the first five tests, then blocked in
+`test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails`.
+The same boundary was reproduced as a sandbox limitation where filesystem
+mutations (`mkdir`/`rename`) inside `asyncio.to_thread()` do not return; this
+does not override the successful writable hosted full-regression run.
 
 The current automated gate does not replace separate manual/automated checks
 for 200% zoom, contrast, reduced motion, offline behavior, or the full
