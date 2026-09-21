@@ -102,7 +102,13 @@ def test_explicit_source_wins_over_untrusted_exception_text() -> None:
 
 def test_frontend_has_safe_structured_error_map() -> None:
     source = Path("static/js/index.js").read_text(encoding="utf-8")
+    admin_source = Path("static/js/admin.js").read_text(encoding="utf-8")
 
     assert "MAX_ACCOUNT_BANNED" in source
     assert "SEND_OUTCOME_UNKNOWN" in source
     assert "NETWORK_UNAVAILABLE" in source
+
+    # The server catalogue is authoritative for codes not duplicated in the
+    # small legacy fallback maps. Never discard its already-redacted message.
+    assert "detail.safe_message" in source
+    assert "detail.safe_message" in admin_source

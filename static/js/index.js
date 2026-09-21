@@ -297,6 +297,10 @@ let openGroupId = null;
 
     function formatStructuredApiError(detail, status) {
       if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+        const safeMessage = typeof detail.safe_message === 'string'
+          ? detail.safe_message.trim().slice(0, 300)
+          : '';
+        if (safeMessage) return safeMessage;
         const code = typeof detail.code === 'string' ? detail.code : '';
         if (SAFE_ERROR_MESSAGES[code]) return SAFE_ERROR_MESSAGES[code];
       }

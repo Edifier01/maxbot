@@ -116,4 +116,39 @@ test.describe('dashboard surface', () => {
     await expect(summaryError).toHaveAttribute('role', 'alert');
     await expect(summaryError).toContainText('Сервис временно недоступен');
   });
+
+  test('renders the server-provided redacted catalogue message', async ({ page, diagnostics }) => {
+    diagnostics.allowResponse('/api/dashboard', [503]);
+    diagnostics.allowConsoleError(/status of 503/);
+    await page.route('**/api/health', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, server_mode: true }),
+    }));
+    await page.route('**/api/auth/restore-session', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    }));
+    await page.route('**/api/auth/me', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ role: 'user', subscription: { active: true } }),
+    }));
+    await page.route('**/api/dashboard', (route) => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        detail: {
+          code: 'SETTINGS_NOT_LOADED',
+          safe_message: 'Настройки ещё не загружены.',
+          recommended_action: 'RELOAD_SETTINGS',
+        },
+      }),
+    }));
+
+    await page.goto('/');
+
+    await expect(page.locator('#dashSummaryError')).toContainText('Настройки ещё не загружены.');
+  });
 });
