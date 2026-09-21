@@ -13,6 +13,7 @@ Status: `PASS` for the required full regression gate on source candidate
 | PostgreSQL modules and E2E auth/admin/tenant | PASS, exit 0; 23 passed in one separate process against pinned PostgreSQL 16 |
 | `python -m compileall -q main.py antiban_core.py celery_worker.py app tests static` | PASS, exit 0 in the same CI container |
 | `node --check static/js/index.js` and `node --check static/js/admin.js` | PASS, exit 0 |
+| `COMPOSE_PROJECT_NAME=maxbot-production-candidate-dr ... bash scripts/dr-smoke.sh` | PASS, exit 0; isolated PostgreSQL/SQLite backup-restore and `verify_deploy.sh`; fixture resources removed |
 
 The final source commit `36d27c3022c6e640de28ca5dbac5fbeb58d54ace` reran the
 writable full suite after the global-library/tenant-plan integration fix with
@@ -23,6 +24,13 @@ The 19 skips in the SQLite process are the CI-designated PostgreSQL modules;
 they are not treated as required skips because the modules and E2E suite passed
 in their dedicated PostgreSQL processes. No MAX network or external action was
 used.
+
+The final isolated DR-smoke used only fixture secrets and `DOMAIN=example.com`
+to avoid an external TLS/DNS probe. It completed the backup/restore cycle,
+stack health and deployment verification; health retained
+`max_external_actions=held` and `recovery_hold=true`. The cleanup trap removed
+all temporary containers, volumes and network. This is recovery evidence only,
+not production deployment proof.
 
 ## Historical local-harness limitation
 

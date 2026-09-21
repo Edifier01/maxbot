@@ -21,6 +21,12 @@ environment could not resolve PyPI. The same commands were rerun with the
 approved network escalation and completed with exit 0. No dependency was
 changed by the audit.
 
+The final candidate rerun at `36d27c3022c6e640de28ca5dbac5fbeb58d54ace`
+repeated both lockfile audits successfully. The candidate Docker image also
+built successfully in the isolated fixture builder; the image CVE scan remains
+blocked because the available Docker Scout path may export image or metadata
+to an external service.
+
 ## Security boundary review
 
 | Area | Severity | Current result | Verification |
