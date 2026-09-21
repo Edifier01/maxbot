@@ -1,7 +1,7 @@
 # T30 regression and performance evidence
 
 Status: `PASS` for the required full regression gate on source candidate
-`36d27c3022c6e640de28ca5dbac5fbeb58d54ace` in an isolated writable Python
+`c5f52980dd7297d97ad440efe8a0fdf94997fb1b` in an isolated writable Python
 3.12 CI container; the separate reference performance workload gate remains
 `NOT RUN`.
 
@@ -9,15 +9,15 @@ Status: `PASS` for the required full regression gate on source candidate
 
 | Command | Result |
 |---|---|
-| `docker run --rm -v /tmp/maxbot-production-candidate:/workspace -w /workspace python:3.12-slim ... python -m pytest tests/ -q --tb=short` | PASS, exit 0; `498 passed, 19 skipped in 17.55s` on source candidate `36d27c3022c6e640de28ca5dbac5fbeb58d54ace` |
+| `docker run --rm -v /tmp/maxbot-production-candidate:/workspace -w /workspace python:3.12-slim ... python -m pytest tests/ -q --tb=short` | PASS, exit 0; `498 passed, 19 skipped in 15.68s` on source candidate `c5f52980dd7297d97ad440efe8a0fdf94997fb1b` |
 | PostgreSQL modules and E2E auth/admin/tenant | PASS, exit 0; 23 passed in one separate process against pinned PostgreSQL 16 |
 | `python -m compileall -q main.py antiban_core.py celery_worker.py app tests static` | PASS, exit 0 in the same CI container |
 | `node --check static/js/index.js` and `node --check static/js/admin.js` | PASS, exit 0 |
 | `COMPOSE_PROJECT_NAME=maxbot-production-candidate-dr ... bash scripts/dr-smoke.sh` | PASS, exit 0; isolated PostgreSQL/SQLite backup-restore and `verify_deploy.sh`; fixture resources removed |
 
-The final source commit `36d27c3022c6e640de28ca5dbac5fbeb58d54ace` reran the
-writable full suite after the global-library/tenant-plan integration fix with
-`498 passed, 19 skipped in 17.55s`. The skipped PostgreSQL modules and E2E
+The final source commit `c5f52980dd7297d97ad440efe8a0fdf94997fb1b` reran the writable full suite after the
+structured safe-error rendering fix with `498 passed, 19 skipped in 15.68s`.
+The skipped PostgreSQL modules and E2E
 process passed `23` tests against pinned PostgreSQL 16.
 
 The 19 skips in the SQLite process are the CI-designated PostgreSQL modules;

@@ -89,6 +89,16 @@ After the global-library/tenant-plan integration fix, the final source
 candidate `36d27c3022c6e640de28ca5dbac5fbeb58d54ace` reran the same browser
 matrix and reported `12 passed (3.2s)` with the same loopback-only diagnostics.
 
+## Current structured-error regression
+
+Source candidate `c5f52980dd7297d97ad440efe8a0fdf94997fb1b` reran the loopback-only matrix with regular
+Playwright and Chromium (the Browser plugin remained unavailable) and reported
+`15 passed (7.2s)` across 390x844, 768x1024 and 1440x1000. The additional
+case returned a catalogue code absent from the legacy frontend fallback map
+but included a server-provided redacted `safe_message`; the visible dashboard
+error retained that safe message. No external origin, MAX host or provider
+traffic was used.
+
 ## Remaining limits
 
 The local full Python suite is not authoritative in the restricted sandbox:

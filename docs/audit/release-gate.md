@@ -1,7 +1,7 @@
 # MAXBOT release gate
 
 Candidate: local source commit
-`36d27c3022c6e640de28ca5dbac5fbeb58d54ace`.
+`c5f52980dd7297d97ad440efe8a0fdf94997fb1b`.
 
 Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
 
@@ -18,6 +18,8 @@ Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
   Compose config, production image build, and DR smoke also passed.
 - Dependency audits for both Python locks passed with `pip-audit==2.10.1`.
 - `T31` is `OFF / NOT_ADOPTED`.
+- The user/admin frontend preserves server-provided redacted `safe_message`
+  values; the exact candidate browser matrix passed `15` tests.
 
 ## Release blockers
 

@@ -2,7 +2,7 @@
 
 Verdict: `FIX` for the release gate; overall remediation handoff is
 `PARTIAL`. The local evidence is bound to source candidate
-`36d27c3022c6e640de28ca5dbac5fbeb58d54ace`; it is not a production approval.
+`c5f52980dd7297d97ad440efe8a0fdf94997fb1b`; it is not a production approval.
 
 ## Closed locally with evidence
 
@@ -35,6 +35,10 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
   library while daily plans and slots remain tenant-local; the focused
   upload/library/worker integration suite passed `57` tests, including the
   regression for this boundary.
+- Structured server error envelopes now preserve their already-redacted
+  `safe_message` in both user and admin frontend formatters; the exact
+  candidate browser matrix passed `15` tests across 390/768/1440, including
+  an unknown legacy-map code.
 
 ## Release blockers
 
