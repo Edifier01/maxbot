@@ -1,7 +1,7 @@
 # MAXBOT release gate
 
 Candidate: local source commit
-`c5f52980dd7297d97ad440efe8a0fdf94997fb1b`.
+`24b75c3fd87385ff1af7e2284d581a9a0b558215`.
 
 Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
 
@@ -16,17 +16,24 @@ Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
   planned PostgreSQL skips; the dedicated PostgreSQL module/E2E process passed
   `23`. Source compile, Node syntax, shell syntax, JSON, `pip check`,
   Compose config, production image build, and DR smoke also passed.
+- The latest test-only UI candidate reran the full regression and passed `499`
+  tests with `19` planned PostgreSQL skips; the application source and image
+  contents were unchanged by that extension.
 - Dependency audits for both Python locks passed with `pip-audit==2.10.1`.
 - `T31` is `OFF / NOT_ADOPTED`.
 - The user/admin frontend preserves server-provided redacted `safe_message`
   values; the exact candidate browser matrix passed `15` tests.
+- The current UI extension passed `4` focused token/asset contracts and `21`
+  loopback-only browser tests, including 195x422 200%-equivalent reflow for
+  auth/dashboard surfaces.
 
 ## Release blockers
 
 - Automated browser evidence at 390/768/1440, keyboard, console, failed
   network, focus and hold states is `PASS`; the current candidate also passes
-  reduced-motion and recoverable dashboard-unavailable checks. Manual contrast,
-  200% zoom, and the stale/loading/permission/stop-pending matrix remain
+  reduced-motion, recoverable dashboard-unavailable, semantic-token contrast,
+  and 195x422 reflow checks. A true browser 200% zoom session, full rendered
+  contrast review, and the stale/loading/permission/stop-pending matrix remain
   `NOT RUN`.
 - Master `T00..T33` is not closed: operation, pacing, message-library, daily-
   plan, and command services have focused contract and current global-upload →

@@ -1,7 +1,7 @@
 # T29 security, dependency, and secret review
 
 Status: `PARTIAL`; this is a commit-bound local review for source candidate
-`c5f52980dd7297d97ad440efe8a0fdf94997fb1b`, not a production release gate.
+`24b75c3fd87385ff1af7e2284d581a9a0b558215`, not a production release gate.
 Candidate SHA is recorded above; the review is not a production approval.
 
 ## Dependency and source checks
@@ -41,7 +41,7 @@ exception text.
 | Server WebSocket Origin | P1 safety | PASS locally | `tests/test_ws_security_v2.py`, `tests/test_security_tail.py` |
 | Auth-attempt diagnostics | P1 privacy | PASS locally | `tests/test_diagnostics_security_v2.py`; queues/hints/tokens are not returned |
 | tenant/auth policy and external VPS | P1/P2 | NOT RUN | no dynamic penetration test or production key rotation authorized |
-| browser/console/keyboard/contrast | P1 UX/security | PARTIAL | rendered browser gate PASS; reduced-motion and recoverable offline/error state are automated; manual contrast/zoom matrix remains NOT RUN |
+| browser/console/keyboard/contrast | P1 UX/security | PARTIAL | rendered browser gate PASS; reduced-motion, recoverable offline/error state, semantic-token contrast and narrow reflow are automated; true browser zoom and full rendered-state contrast matrix remain NOT RUN |
 
 ## Secret-history scan boundary
 

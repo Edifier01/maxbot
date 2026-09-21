@@ -15,6 +15,12 @@ Status: `PASS` for the required full regression gate on source candidate
 | `node --check static/js/index.js` and `node --check static/js/admin.js` | PASS, exit 0 |
 | `COMPOSE_PROJECT_NAME=maxbot-production-candidate-dr ... bash scripts/dr-smoke.sh` | PASS, exit 0; isolated PostgreSQL/SQLite backup-restore and `verify_deploy.sh`; fixture resources removed |
 
+The latest test-only UI candidate `24b75c3fd87385ff1af7e2284d581a9a0b558215`
+also reran the full suite in a Python 3.12 container using a read-only mount
+of the installed candidate environment: `499 passed, 19 skipped in 16.09s`.
+The additional count is the new UI contrast contract; application behavior and
+the previously recorded image/DR evidence were unchanged.
+
 The final source commit `c5f52980dd7297d97ad440efe8a0fdf94997fb1b` reran the writable full suite after the
 structured safe-error rendering fix with `498 passed, 19 skipped in 15.68s`.
 The skipped PostgreSQL modules and E2E

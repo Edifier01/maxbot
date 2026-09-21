@@ -99,18 +99,34 @@ but included a server-provided redacted `safe_message`; the visible dashboard
 error retained that safe message. No external origin, MAX host or provider
 traffic was used.
 
+## Current accessibility reflow and token contrast regression
+
+The test-only accessibility extension is bound to source candidate
+`24b75c3fd87385ff1af7e2284d581a9a0b558215`. The focused Python UI contracts
+passed `4 passed` with the repository Python 3.12 environment. They calculate
+WCAG AA contrast for the seven semantic foreground tokens against both panel
+background tokens and retain the existing focus/reduced-motion contracts.
+
+The same loopback-only Chromium fixture reported `21 passed (9.2s)` across the
+existing 390x844, 768x1024 and 1440x1000 projects. The added checks set a
+195x422 CSS viewport inside each project (an automated 200%-equivalent reflow
+check), then verify that the auth card and dashboard main surface remain
+within the viewport with visible keyboard-reachable controls. This is not a
+substitute for a true browser zoom session or a manual review of every
+rendered state.
+
 ## Remaining limits
 
 The local full Python suite is not authoritative in the restricted sandbox:
 separate runs block in TestClient/thread filesystem lifecycle tests. The
-writable Python 3.12 container run for this exact candidate passed `498` tests
+writable Python 3.12 container run for this exact candidate passed `499` tests
 with `19` planned PostgreSQL skips.
 
-The current automated gate does not replace separate manual/automated checks
-for 200% zoom, full color-contrast review, or the complete
+The current automated gate does not replace a true browser 200% zoom session,
+full rendered color-contrast review, or the complete
 loading/permission/stale/stop-pending matrix. Reduced motion and the
-recoverable dashboard-unavailable state now have automated evidence, but
-these results do not prove
+recoverable dashboard-unavailable state now have automated evidence, as do the
+token contrast and narrow reflow contracts, but these results do not prove
 production readiness, provider delivery, platform authorization, or a release
 `GO` verdict.
 
