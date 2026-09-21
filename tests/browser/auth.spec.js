@@ -43,4 +43,27 @@ test.describe('auth surface', () => {
     await expect(page.locator('#loginErr')).toHaveText('Локальная fixture: отказано');
     await expect(page.locator('#loginErr')).toBeVisible();
   });
+
+  test('honors reduced-motion preferences', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/auth.html');
+
+    const activeMotion = await page.locator('body').evaluate((body) => {
+      const toMilliseconds = (value) => {
+        const number = Number.parseFloat(value) || 0;
+        return value.endsWith('ms') ? number : number * 1000;
+      };
+      return [...body.querySelectorAll('*')].flatMap((element) => {
+        const style = getComputedStyle(element);
+        return [
+          ['animation', style.animationDuration],
+          ['transition', style.transitionDuration],
+        ]
+          .filter(([, duration]) => toMilliseconds(duration) > 0.1)
+          .map(([kind, duration]) => ({ kind, duration, selector: element.tagName }));
+      });
+    });
+
+    expect(activeMotion).toEqual([]);
+  });
 });

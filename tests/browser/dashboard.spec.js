@@ -81,4 +81,39 @@ test.describe('dashboard surface', () => {
     await expect(campaignTab).toBeFocused();
     await expect(campaignTab).toHaveAttribute('aria-selected', 'true');
   });
+
+  test('exposes a recoverable summary error when the dashboard is unavailable', async ({ page, diagnostics }) => {
+    diagnostics.allowResponse('/api/dashboard', [503]);
+    diagnostics.allowConsoleError(/status of 503/);
+    await page.route('**/api/health', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, server_mode: true }),
+    }));
+    await page.route('**/api/auth/restore-session', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    }));
+    await page.route('**/api/auth/me', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        role: 'user',
+        subscription: { active: true },
+      }),
+    }));
+    await page.route('**/api/dashboard', (route) => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: { code: 'SERVER_UNAVAILABLE' } }),
+    }));
+
+    await page.goto('/');
+
+    const summaryError = page.locator('#dashSummaryError');
+    await expect(summaryError).toBeVisible();
+    await expect(summaryError).toHaveAttribute('role', 'alert');
+    await expect(summaryError).toContainText('Сервис временно недоступен');
+  });
 });
