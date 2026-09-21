@@ -1,0 +1,10 @@
+{
+  "name": "maxbot-browser-gate",
+  "private": true,
+  "scripts": {
+    "browser:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}
