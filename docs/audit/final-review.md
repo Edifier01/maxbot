@@ -1,8 +1,8 @@
 # T32 / S05 final review
 
 Verdict: `FIX` for the release gate; overall remediation handoff is
-`PARTIAL`. The evidence belongs to the dirty working tree at
-`0154884cf94d6aeccf65f5390a0f845d783c3c0e` and is not commit-bound.
+`PARTIAL`. The local evidence is bound to source candidate
+`e4837a1fe997d63704536f01685e56b9a97caf99`; it is not a production approval.
 
 ## Closed locally with evidence
 
@@ -17,10 +17,13 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
 - `ENV_DOCKER_READY=PASS` from the ordinary operator terminal: Docker Server
   `29.8.0`, Compose `v5.5.1`, and Buildx `v0.37.0`. The isolated DR smoke
   completed with external MAX actions held and recovery hold active.
-- The writable Python 3.12 CI regression passed `493` tests with `19` planned
+- The writable Python 3.12 CI regression passed `497` tests with `19` planned
   PostgreSQL skips; the dedicated PostgreSQL modules passed `19` tests and the
   E2E process passed `4` tests. The order-dependent runtime-proxy regression
   is covered by `tests/test_runtime_proxy.py`.
+- The exact candidate browser matrix passed `6` tests across 390/768/1440,
+  and the isolated Docker backup/restore smoke passed with recovery hold
+  active.
 - T31 remains `OFF / NOT_ADOPTED`; no client-reuse enablement was introduced.
 - Wave D continuation is locally integrated: the current 13-file operation,
   pacing, library, daily-plan and command suite passed 77 tests, and the
@@ -30,15 +33,16 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
 
 ## Release blockers
 
-- Required rendered browser evidence at 390/768/1440, keyboard, console,
-  failed-network, focus, contrast and offline/hold states is `NOT RUN`; see
-  `docs/audit/ui-review.md`.
+- Manual 200% zoom, contrast, reduced-motion, offline and the complete
+  loading/permission/stale/stop-pending matrix remain `NOT RUN`; the automated
+  rendered browser gate is PASS at 390/768/1440.
 - Master `T00..T33` acceptance is not closed by supplemental contracts.
   Several new services are contract-complete but still integration-pending in
   the legacy campaign worker/routes.
 - Platform authorization underlying evidence, production/VPS, live MAX and
   SMS/message delivery are `BLOCKED/NOT RUN` by authorization and safety rules.
-- Image vulnerability scanning and protected-branch/secret-history owner
+- Image vulnerability scanning is blocked pending approval for external image
+  metadata transfer, and protected-branch/secret-history owner
   review remain open even though the pinned image build and lockfile audit
   passed.
 - Secret-history regex matches in historical `server/skills/...` revisions
@@ -55,7 +59,7 @@ the new ledger contracts. No artificial presence, auto-join, proxy reshuffle,
 sender substitution, speed increase, or official Bot API path was added.
 
 This review does not claim absence of account blocking, successful delivery, or
-production readiness. The remaining gate is rendered-browser evidence,
-independent platform-authorization review, unresolved Master integration and
-commit-bound review; it must still stop before any real MAX action unless
-separately authorized.
+production readiness. The remaining gates are independent platform-
+authorization review, unresolved Master integration, image CVE review,
+secret-history ownership, and production verification; no real MAX action may
+run unless separately authorized.

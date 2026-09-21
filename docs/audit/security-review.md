@@ -1,7 +1,8 @@
 # T29 security, dependency, and secret review
 
-Status: `PARTIAL`; this is a dirty-worktree review at the exact source SHA
-`0154884cf94d6aeccf65f5390a0f845d783c3c0e`, not a commit-bound release gate.
+Status: `PARTIAL`; this is a commit-bound local review for source candidate
+`e4837a1fe997d63704536f01685e56b9a97caf99`, not a production release gate.
+Candidate SHA is recorded above; the review is not a production approval.
 
 ## Dependency and source checks
 
@@ -13,7 +14,7 @@ Status: `PARTIAL`; this is a dirty-worktree review at the exact source SHA
 | `git diff --check` | PASS, exit 0 | no whitespace errors |
 | pinned wheel/dependency review | PASS for PyMax contract | exact `maxapi-python==2.4.1` is separately recorded in verification evidence |
 | Docker image build | PASS | isolated Compose project built the current app image |
-| Docker image CVE scan | NOT RUN | image build passed, but no image scanner was available in the isolated gate |
+| Docker image CVE scan | BLOCKED / NOT RUN | Docker Scout is available but its scan may transmit image/metadata to an external service; no such export was authorized |
 
 The first sandboxed pip-audit attempts exited 1 while the temporary audit
 environment could not resolve PyPI. The same commands were rerun with the
@@ -29,7 +30,7 @@ changed by the audit.
 | Server WebSocket Origin | P1 safety | PASS locally | `tests/test_ws_security_v2.py`, `tests/test_security_tail.py` |
 | Auth-attempt diagnostics | P1 privacy | PASS locally | `tests/test_diagnostics_security_v2.py`; queues/hints/tokens are not returned |
 | tenant/auth policy and external VPS | P1/P2 | NOT RUN | no dynamic penetration test or production key rotation authorized |
-| browser/console/keyboard/contrast | P1 UX/security | NOT RUN | rendered browser gate is recorded in `docs/audit/ui-review.md` |
+| browser/console/keyboard/contrast | P1 UX/security | PARTIAL | rendered browser gate PASS; manual contrast/zoom/reduced-motion/offline matrix remains NOT RUN |
 
 ## Secret-history scan boundary
 
@@ -48,8 +49,8 @@ provider key rotation, and repository-host protected-branch/ruleset review.
 No external VPS, production `.env`, session cookie, OTP, proxy credential, MAX
 host, provider API, Docker volume, deploy command, or real MAX action was used.
 A clean dependency result does not prove absence of all security defects, and
-Image CVE scan, platform authorization, browser and production evidence remain
-release blockers.
+Image CVE scan, platform authorization, remaining manual UX evidence, and
+production evidence remain release blockers.
 
 Live platform authorization and MAX qualification remain `BLOCKED`; no
 provider, VPS, credential, or external action was used by these gates.

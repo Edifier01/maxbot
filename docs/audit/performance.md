@@ -1,14 +1,15 @@
 # T30 regression and performance evidence
 
-Status: `PASS` for the required full regression gate in the isolated writable
-Python 3.12 CI environment; the separate rendered-browser and reference
-performance workload gates remain `NOT RUN`.
+Status: `PASS` for the required full regression gate on source candidate
+`e4837a1fe997d63704536f01685e56b9a97caf99` in an isolated writable Python
+3.12 CI container; the separate reference performance workload gate remains
+`NOT RUN`.
 
 ## Current regression execution
 
 | Command | Result |
 |---|---|
-| `timeout 300s python -m pytest tests/ -q --tb=short` | PASS, exit 0; `493 passed, 19 skipped` from 512 collected on 2026-09-21 in a writable Python 3.12 container |
+| `docker run --rm -v /tmp/maxbot-production-candidate:/workspace -w /workspace python:3.12-slim ... python -m pytest tests/ -q --tb=short` | PASS, exit 0; `497 passed, 19 skipped in 17.79s` on source candidate `e4837a1fe997d63704536f01685e56b9a97caf99` |
 | PostgreSQL skipif modules | PASS, exit 0; 19 passed in a separate process against pinned PostgreSQL 16 |
 | PostgreSQL E2E auth/admin/tenant | PASS, exit 0; 4 passed in a separate process |
 | `python -m compileall -q main.py antiban_core.py celery_worker.py app tests static` | PASS, exit 0 in the same CI container |
@@ -22,13 +23,15 @@ used.
 ## Historical local-harness limitation
 
 The host `.venv` run remains bounded by the sandbox's `TestClient`/thread
-lifecycle hang and exited 124. It is retained as a limitation, but it is not a
-failure of the authoritative writable CI run. The prior 485/510 collection
-counts and timeout evidence are historical and superseded by the current CI
-rows above.
+lifecycle hang and exited 124/130 in separate attempts. It is retained as a
+limitation, but it is not a failure of the authoritative writable CI run. The
+prior 485/510 collection counts and timeout evidence are historical and
+superseded by the current CI rows above.
 
 Historical host evidence: the bounded run ended with `exit 124`; that result is
 not converted into a PASS and is not used to override the current CI result.
+That bounded run recorded 515 collected on 2026-09-21 before the sandbox
+lifecycle block.
 
 The historical host timeout is not converted into a PASS and the hanging test
 is not silently skipped; it is explicitly superseded by the successful
@@ -38,10 +41,11 @@ writable CI execution above.
 
 The Master reference workload (ten tenants, one hundred synthetic accounts per
 tenant, ten subscribers, two tabs and WebSocket outage/hidden-tab cases) is
-`NOT RUN`: rendered browser evidence and the full reference workload are not
-available in this run. The local event-loop responsiveness tests are
-fixture-level checks, not a real-time production or MAX measurement. No
-request-rate increase or parallel sender was introduced.
+`NOT RUN`: the full reference workload is not available in this run. The
+rendered browser gate is separately PASS in `docs/audit/ui-review.md`. Local
+event-loop responsiveness tests are fixture-level checks, not a real-time
+production or MAX measurement. No request-rate increase or parallel sender was
+introduced.
 
 ## Optional bounded client reuse
 

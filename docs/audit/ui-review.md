@@ -3,8 +3,10 @@
 Status: `LOCAL PASS / HOSTED CI PASS`
 
 The approved local rendered-browser gate was implemented and executed on
-2026-09-21 from the current dirty worktree. The Browser plugin was unavailable,
-so the documented regular Playwright fallback was used with real Chromium.
+2026-09-21 from source candidate
+`e4837a1fe997d63704536f01685e56b9a97caf99`. The Browser plugin was
+unavailable, so the documented regular Playwright fallback was used with real
+Chromium.
 
 ## Observed local gate
 
@@ -22,6 +24,9 @@ npx playwright install chromium                 exit 0
 curl -fsS http://127.0.0.1:8765/api/health     exit 0
 npm run browser:e2e                             exit 0; 6 passed
 ```
+
+The exact candidate rerun reported `6 passed (2.1s)` and used the same
+loopback-only fixture; no MAX/provider request was made.
 
 The matrix executed both browser specs at all required viewports:
 
@@ -62,12 +67,10 @@ Docker Server `29.8.0`.
 
 ## Remaining limits
 
-The local full Python suite was not completed in the restricted sandbox: it
-passed the first five tests, then blocked in
-`test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails`.
-The same boundary was reproduced as a sandbox limitation where filesystem
-mutations (`mkdir`/`rename`) inside `asyncio.to_thread()` do not return; this
-does not override the successful writable hosted full-regression run.
+The local full Python suite is not authoritative in the restricted sandbox:
+separate runs block in TestClient/thread filesystem lifecycle tests. The
+writable Python 3.12 container run for this exact candidate passed `497` tests
+with `19` planned PostgreSQL skips.
 
 The current automated gate does not replace separate manual/automated checks
 for 200% zoom, contrast, reduced motion, offline behavior, or the full

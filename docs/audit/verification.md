@@ -125,3 +125,24 @@ S05-LOCAL-FULL-SANDBOX-CURRENT | 58da768710d761d0fbbae54581086b5073c9e289 | `env
 The overall release verdict remains `FIX`: hosted browser/full regression is
 now evidenced, but Master integration, independent platform authorization,
 secret-history/CVE review and production gates remain open.
+
+## Current production-readiness candidate evidence
+
+These rows bind the latest local source candidate and supersede older dirty-
+worktree summaries where the same gate was rerun. They do not authorize live
+MAX, provider, VPS or production actions.
+
+S05-CANDIDATE-FOCUSED | e4837a1fe997d63704536f01685e56b9a97caf99 | combined fake/SQLite Master safety and integration tests plus browser contract | isolated candidate with Python 3.12.3 venv | 2026-09-21 | 0 | PASS | `tests/` focused matrix | 227 passed; schema-bootstrap regression fixed; no MAX/provider traffic.
+S05-CANDIDATE-FULL | e4837a1fe997d63704536f01685e56b9a97caf99 | `docker run --rm -v /tmp/maxbot-production-candidate:/workspace -w /workspace python:3.12-slim ... python -m pytest tests/ -q --tb=short` | writable Python 3.12 container | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 497 passed, 19 planned PostgreSQL skips in 17.79s; no external MAX action.
+S05-CANDIDATE-SOURCE | e4837a1fe997d63704536f01685e56b9a97caf99 | compileall, Node syntax, pip check, JSON validation, `git diff --check` | isolated candidate | 2026-09-21 | 0 | PASS | source/static/config gates | All commands exited 0.
+S05-CANDIDATE-DEPENDENCY | e4837a1fe997d63704536f01685e56b9a97caf99 | `pip-audit -r requirements.lock`; `pip-audit -r requirements-server.lock` | network-enabled audit runner | 2026-09-21 | 0 | PASS | `docs/audit/security-review.md` | Both reported no known vulnerabilities; no dependency changed.
+S05-CANDIDATE-IMAGE | e4837a1fe997d63704536f01685e56b9a97caf99 | `docker compose --env-file /dev/null build app` | isolated Docker builder | 2026-09-21 | 0 | PASS | `Dockerfile` | Candidate image built locally; no deploy.
+S05-CANDIDATE-DR | e4837a1fe997d63704536f01685e56b9a97caf99 | `COMPOSE_PROJECT_NAME=maxbot-production-candidate-ci bash scripts/dr-smoke.sh` | isolated Compose project | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | Backup/restore passed for PostgreSQL and data volume; health retained recovery hold; fixture resources were removed.
+S05-CANDIDATE-BROWSER | e4837a1fe997d63704536f01685e56b9a97caf99 | `npm run browser:e2e` with bounded loopback fixture app | regular Playwright + Chromium, loopback only | 2026-09-21 | 0 | PASS | `docs/audit/ui-review.md` | 6 passed (2.1s) across 390x844, 768x1024 and 1440x1000; no external host.
+S05-CANDIDATE-IMAGE-CVE | e4837a1fe997d63704536f01685e56b9a97caf99 | Docker Scout image scan | local image scanner boundary | 2026-09-21 | — | BLOCKED | `docs/audit/security-review.md` | Scanner review rejected because image/metadata may be sent to an external service; no export performed.
+S05-CANDIDATE-MASTER | e4837a1fe997d63704536f01685e56b9a97caf99 | normative Master `T00..T33` acceptance | independent review boundary | 2026-09-21 | — | NOT RUN | `docs/audit/final-review.md` | Supplemental tests do not replace normative acceptance or legacy worker/HTTP integration review.
+
+The source candidate is technically green for the recorded local gates, but
+the release verdict remains `FIX` until independent platform authorization,
+Master acceptance, image CVE review, secret-history owner review and
+production verification are separately closed.
