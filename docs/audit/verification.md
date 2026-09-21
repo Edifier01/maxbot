@@ -144,6 +144,10 @@ S05-CANDIDATE-BROWSER | e4837a1fe997d63704536f01685e56b9a97caf99 | `npm run brow
 S05-CANDIDATE-IMAGE-CVE | e4837a1fe997d63704536f01685e56b9a97caf99 | Docker Scout image scan | local image scanner boundary | 2026-09-21 | — | BLOCKED | `docs/audit/security-review.md` | Scanner review rejected because image/metadata may be sent to an external service; no export performed.
 S05-CANDIDATE-MASTER | e4837a1fe997d63704536f01685e56b9a97caf99 | normative Master `T00..T33` acceptance | independent review boundary | 2026-09-21 | — | NOT RUN | `docs/audit/final-review.md` | Supplemental tests do not replace normative acceptance or legacy worker/HTTP integration review.
 
+S05-CANDIDATE-BROWSER-UX | 1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2 | `npm run browser:e2e -- --reporter=line` with bounded loopback candidate app | regular Playwright + Chromium, temporary MAX_TEST fixture | 2026-09-21 | 0 | PASS | `docs/audit/ui-review.md` | 12 passed in 3.5s across 390x844, 768x1024 and 1440x1000; reduced-motion and dashboard 503 `role=alert` covered; no external host.
+
+S05-CANDIDATE-UX-FULL | 1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2 | `timeout 600s docker run --rm -v /tmp/maxbot-production-candidate:/workspace -w /workspace python:3.12-slim ... python -m pytest tests/ -q --tb=short` | writable Python 3.12 isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 497 passed, 19 planned PostgreSQL skips in 17.10s after the UX extension; no external MAX action.
+
 The source candidate is technically green for the recorded local gates, but
 the release verdict remains `FIX` until independent platform authorization,
 Master acceptance, image CVE review, secret-history owner review and

@@ -65,6 +65,26 @@ The operator-terminal Docker check was rerun with
 `docker version --format '{{.Server.Version}}'` and exited `0`, reporting
 Docker Server `29.8.0`.
 
+## Current UX extension
+
+The current local UX extension is bound to source commit
+`1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2`. Using the same regular Playwright
+fallback and a temporary loopback `MAX_TEST=1` fixture, the expanded matrix
+reported `12 passed (3.5s)` across 390x844, 768x1024 and 1440x1000.
+
+The extension adds evidence for two previously manual boundaries:
+
+- `prefers-reduced-motion: reduce` leaves no active animation or transition
+  longer than the CSS accessibility budget;
+- a dashboard `503` renders a visible, screen-reader-announced
+  `role="alert"` with the safe "Сервис временно недоступен" message.
+
+The 503 response and its browser console line are explicitly allowed by the
+local diagnostics fixture; all other console, page-error, failed-request,
+non-2xx and non-loopback checks remain strict. The candidate was exercised
+against the actual temporary app fixture, with no external MAX/provider
+traffic.
+
 ## Remaining limits
 
 The local full Python suite is not authoritative in the restricted sandbox:
@@ -73,8 +93,10 @@ writable Python 3.12 container run for this exact candidate passed `497` tests
 with `19` planned PostgreSQL skips.
 
 The current automated gate does not replace separate manual/automated checks
-for 200% zoom, contrast, reduced motion, offline behavior, or the full
-loading/permission/stale/stop-pending matrix. These results do not prove
+for 200% zoom, full color-contrast review, or the complete
+loading/permission/stale/stop-pending matrix. Reduced motion and the
+recoverable dashboard-unavailable state now have automated evidence, but
+these results do not prove
 production readiness, provider delivery, platform authorization, or a release
 `GO` verdict.
 

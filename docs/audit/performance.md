@@ -1,7 +1,7 @@
 # T30 regression and performance evidence
 
 Status: `PASS` for the required full regression gate on source candidate
-`e4837a1fe997d63704536f01685e56b9a97caf99` in an isolated writable Python
+`1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2` in an isolated writable Python
 3.12 CI container; the separate reference performance workload gate remains
 `NOT RUN`.
 
@@ -14,6 +14,11 @@ Status: `PASS` for the required full regression gate on source candidate
 | PostgreSQL E2E auth/admin/tenant | PASS, exit 0; 4 passed in a separate process |
 | `python -m compileall -q main.py antiban_core.py celery_worker.py app tests static` | PASS, exit 0 in the same CI container |
 | `node --check static/js/index.js` and `node --check static/js/admin.js` | PASS, exit 0 |
+
+The current source commit `1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2` reran the
+writable full suite after the browser UX/accessibility extension with the same
+result: `497 passed, 19 skipped in 17.10s`. The skipped PostgreSQL modules
+remain separately exercised by the pinned PostgreSQL process below.
 
 The 19 skips in the SQLite process are the CI-designated PostgreSQL modules;
 they are not treated as required skips because the modules and E2E suite passed

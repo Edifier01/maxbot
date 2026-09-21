@@ -1,7 +1,7 @@
 # MAXBOT release gate
 
 Candidate: local source commit
-`e4837a1fe997d63704536f01685e56b9a97caf99`.
+`1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2`.
 
 Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
 
@@ -22,8 +22,10 @@ Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
 ## Release blockers
 
 - Automated browser evidence at 390/768/1440, keyboard, console, failed
-  network, focus and hold states is `PASS`; manual contrast, zoom,
-  reduced-motion, offline and stale/loading/permission matrix remains `NOT RUN`.
+  network, focus and hold states is `PASS`; the current candidate also passes
+  reduced-motion and recoverable dashboard-unavailable checks. Manual contrast,
+  200% zoom, and the stale/loading/permission/stop-pending matrix remain
+  `NOT RUN`.
 - Master `T00..T33` is not closed: operation, pacing, message-library, daily-
   plan, and command services have focused contract evidence, but legacy
   worker/upload/HTTP consumer integration remains pending.

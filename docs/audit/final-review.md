@@ -2,7 +2,7 @@
 
 Verdict: `FIX` for the release gate; overall remediation handoff is
 `PARTIAL`. The local evidence is bound to source candidate
-`e4837a1fe997d63704536f01685e56b9a97caf99`; it is not a production approval.
+`1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2`; it is not a production approval.
 
 ## Closed locally with evidence
 
@@ -21,9 +21,10 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
   PostgreSQL skips; the dedicated PostgreSQL modules passed `19` tests and the
   E2E process passed `4` tests. The order-dependent runtime-proxy regression
   is covered by `tests/test_runtime_proxy.py`.
-- The exact candidate browser matrix passed `6` tests across 390/768/1440,
-  and the isolated Docker backup/restore smoke passed with recovery hold
-  active.
+- The exact candidate browser matrix passed `6` base tests across 390/768/1440,
+  and the current UX extension passed `12` tests across the same viewports,
+  including reduced-motion and recoverable dashboard-unavailable states. The
+  isolated Docker backup/restore smoke passed with recovery hold active.
 - T31 remains `OFF / NOT_ADOPTED`; no client-reuse enablement was introduced.
 - Wave D continuation is locally integrated: the current 13-file operation,
   pacing, library, daily-plan and command suite passed 77 tests, and the
@@ -33,9 +34,10 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
 
 ## Release blockers
 
-- Manual 200% zoom, contrast, reduced-motion, offline and the complete
-  loading/permission/stale/stop-pending matrix remain `NOT RUN`; the automated
-  rendered browser gate is PASS at 390/768/1440.
+- Manual 200% zoom, full contrast review, and the complete
+  loading/permission/stale/stop-pending matrix remain `NOT RUN`; reduced-motion
+  and recoverable dashboard-unavailable behavior have automated evidence. The
+  automated rendered browser gate is PASS at 390/768/1440.
 - Master `T00..T33` acceptance is not closed by supplemental contracts.
   Several new services are contract-complete but still integration-pending in
   the legacy campaign worker/routes.
