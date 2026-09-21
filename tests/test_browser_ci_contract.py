@@ -66,6 +66,10 @@ def test_browser_workflow_isolated_and_artifacted() -> None:
     assert "MAX_SERVER_MODE: \"0\"" in browser_job
     assert "MAX_DATA" in browser_job
     assert "MAX_RECOVERY_HOLD_FILE" in browser_job
+    assert "MAX_DATA: ${{ runner.temp }}" not in browser_job
+    assert "MAX_RECOVERY_HOLD_FILE: ${{ runner.temp }}" not in browser_job
+    assert 'browser_data="$RUNNER_TEMP/maxbot-browser-data"' in browser_job
+    assert 'recovery_hold_file="$RUNNER_TEMP/maxbot-recovery-hold.json"' in browser_job
     assert "MAX_HOST: 127.0.0.1" in browser_job
     assert 'MAX_PORT: "8765"' in browser_job
     assert "curl -fsS http://127.0.0.1:8765/api/health" in browser_job
