@@ -82,9 +82,10 @@ def materialize_daily_plans() -> int:
     from app.repositories.message_sets import MessageSetRepository
     from app.services.daily_plans import DailyPlanService, LibraryItem
 
-    connection, scope = main._message_library_storage()
-    message_sets = MessageSetRepository(connection)
-    version = message_sets.current(scope)
+    plan_connection, plan_scope = _daily_plan_storage()
+    library_connection, library_scope = main._message_library_source_storage()
+    message_sets = MessageSetRepository(library_connection)
+    version = message_sets.current(library_scope)
     if version is None:
         return 0
     library_items = tuple(
@@ -93,9 +94,9 @@ def materialize_daily_plans() -> int:
             text=str(row["text"]),
             version_id=str(version["version_id"]),
         )
-        for row in message_sets.items(scope, str(version["version_id"]))
+        for row in message_sets.items(library_scope, str(version["version_id"]))
     )
-    service = DailyPlanService(DailyPlanRepository(connection))
+    service = DailyPlanService(DailyPlanRepository(plan_connection))
     selected: dict[int, tuple[Any, Any]] = {}
     for group in main._active_groups():
         for profile in main._active_profiles_for_group(int(group["id"])):
@@ -105,7 +106,7 @@ def materialize_daily_plans() -> int:
     for profile, group in selected.values():
         role = str(profile["day_role"] or "active") if "day_role" in profile.keys() else "active"
         service.materialize_day(
-            scope,
+            plan_scope,
             int(profile["id"]),
             business_date,
             sampled_limit=main._ensure_daily_limit(int(profile["id"]), log=False),
@@ -117,6 +118,17 @@ def materialize_daily_plans() -> int:
         )
         materialized += 1
     return materialized
+
+
+def _daily_plan_storage() -> tuple[sqlite3.Connection, str]:
+    """Return tenant-local plan storage and its durable scope key."""
+    connection = main._conn()
+    if not main._is_server_mode():
+        return connection, "local"
+    from app.tenant import get_tenant_id
+
+    tenant_id = get_tenant_id()
+    return connection, f"tenant:{int(tenant_id)}" if tenant_id is not None else "global"
 
 
 def begin_campaign(*, scheduled_for: str | None = None) -> int:
@@ -322,7 +334,7 @@ def _restore_claim(job: dict[str, Any], tracker: SendTracker) -> None:
 def _daily_library_current() -> bool:
     from app.repositories.message_sets import MessageSetRepository
 
-    connection, scope = main._message_library_storage()
+    connection, scope = main._message_library_source_storage()
     return MessageSetRepository(connection).current(scope) is not None
 
 
@@ -423,7 +435,7 @@ def _claim_daily_job_sync() -> dict[str, Any] | str | None:
     from app.repositories.daily_plans import DailyPlanRepository
     from app.services.daily_plans import DailyPlanService, WaitDecision
 
-    connection, scope = main._message_library_storage()
+    connection, scope = _daily_plan_storage()
     service = DailyPlanService(DailyPlanRepository(connection))
     decision = service.claim_next_slot(
         scope,
@@ -475,7 +487,7 @@ def _finalize_daily_job(
     from app.repositories.daily_plans import DailyPlanRepository
     from app.services.daily_plans import DailyPlanService
 
-    connection, _scope = main._message_library_storage()
+    connection, _scope = _daily_plan_storage()
     service = DailyPlanService(DailyPlanRepository(connection))
     try:
         if sent or tracker.provider_message_id:

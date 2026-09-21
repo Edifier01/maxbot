@@ -386,7 +386,7 @@ def _library_available(messages: list[str]) -> bool:
     if messages:
         return True
     try:
-        connection, scope = m._message_library_storage()
+        connection, scope = m._message_library_source_storage()
         row = connection.execute(
             "SELECT 1 FROM message_set_versions WHERE scope=? AND is_current=1 LIMIT 1",
             (scope,),
