@@ -151,4 +151,26 @@ test.describe('dashboard surface', () => {
 
     await expect(page.locator('#dashSummaryError')).toContainText('Настройки ещё не загружены.');
   });
+
+  test('reflows the dashboard surface at a 200-percent-equivalent CSS viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 195, height: 422 });
+    await page.goto('/');
+
+    const layout = await page.locator('main#main-content').evaluate((main) => {
+      const rect = main.getBoundingClientRect();
+      return {
+        viewportWidth: window.innerWidth,
+        left: rect.left,
+        right: rect.right,
+        documentWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      };
+    });
+
+    expect(layout.left).toBeGreaterThanOrEqual(0);
+    expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    expect(layout.documentWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    await expect(page.locator('#campaign')).toBeVisible();
+    await expect(page.locator('#campaignLog')).toContainText(holdLog);
+  });
 });

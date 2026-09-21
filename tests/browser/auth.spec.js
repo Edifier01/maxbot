@@ -66,4 +66,26 @@ test.describe('auth surface', () => {
 
     expect(activeMotion).toEqual([]);
   });
+
+  test('reflows the login surface at a 200-percent-equivalent CSS viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 195, height: 422 });
+    await page.goto('/auth.html');
+
+    const layout = await page.locator('main.card').evaluate((card) => {
+      const rect = card.getBoundingClientRect();
+      return {
+        viewportWidth: window.innerWidth,
+        left: rect.left,
+        right: rect.right,
+        documentWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      };
+    });
+
+    expect(layout.left).toBeGreaterThanOrEqual(0);
+    expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    expect(layout.documentWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    await expect(page.getByLabel('Логин')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Войти' })).toBeVisible();
+  });
 });
