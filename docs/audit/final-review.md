@@ -45,7 +45,9 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
 - Master `T00..T33` acceptance is not closed by supplemental contracts or the
   required 365-case normative waves. The global-upload → tenant-library →
   daily-plan worker boundary is now covered by focused integration evidence,
-  but the broader Master consumer/HTTP matrix remains unexecuted.
+  but the broader Master consumer/HTTP matrix remains unexecuted. The
+  canonical Master file and its expected SHA-256 are now locally verified;
+  this is source provenance, not acceptance execution.
 - Platform authorization underlying evidence, production/VPS, live MAX and
   SMS/message delivery are `BLOCKED/NOT RUN` by authorization and safety rules.
 - Image vulnerability scanning is blocked pending approval for external image

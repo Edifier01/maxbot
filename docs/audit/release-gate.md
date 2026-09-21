@@ -29,7 +29,9 @@ Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
 - Master `T00..T33` is not closed: operation, pacing, message-library, daily-
   plan, and command services have focused contract and current global-upload →
   tenant-plan integration evidence, but the normative 365-case Master and
-  broader HTTP consumer waves remain pending.
+  broader HTTP consumer waves remain pending. The canonical source checksum
+  and all 365 case headings are now locally verified; no case is marked PASS
+  from that inventory alone.
 - Platform authorization, live MAX, SMS/message delivery, production/VPS, and
   secret-history owner review are not qualified. Image CVE scanning is
   blocked because the available scanner may export image metadata externally.

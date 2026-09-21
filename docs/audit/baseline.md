@@ -64,3 +64,13 @@ production verdict не заявляются.
 - Production/VPS, live platform authorization review, browser evidence, full
   Master acceptance, image CVE scanning, and production verification remain
   `NOT RUN` or `BLOCKED` as stated in `verification.md`.
+
+## Current source revalidation
+
+On 2026-09-21 the canonical Master source was re-read from
+`/mnt/c/Users/Edifi/Documents/MAXBOT_MASTER_V3_EN_2026-09-20.md`.
+`sha256sum` returned the expected
+`8c7a57092be519ea5df0379abc6030124d1e099867adbc72a06174027c90392d`, and a
+deterministic heading parser counted `365` acceptance cases. This validates
+source availability and provenance only; it does not turn the normative waves
+into PASS.

@@ -319,3 +319,14 @@ The machine-readable acceptance and verification records are
 `verification/supplemental-acceptance-cases.json` and
 `docs/audit/verification.md`; the baseline and sandbox limitations are in
 `docs/audit/baseline.md`.
+
+## 13. Current Master-source availability correction — 2026-09-21
+
+The canonical standalone Master source is now available locally at
+`/mnt/c/Users/Edifi/Documents/MAXBOT_MASTER_V3_EN_2026-09-20.md`. A fresh
+SHA-256 check returned
+`8c7a57092be519ea5df0379abc6030124d1e099867adbc72a06174027c90392d`, matching
+the plan and the audit reference; a parser counted all `365` case headings.
+This supersedes only the earlier availability note. It does not execute or
+close any case: the normative `T00..T33` waves and the remaining manual/live
+evidence stay `NOT RUN` or `BLOCKED` as recorded in the release gate.
