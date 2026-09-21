@@ -2,7 +2,7 @@
 
 Verdict: `FIX` for the release gate; overall remediation handoff is
 `PARTIAL`. The local evidence is bound to source candidate
-`1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2`; it is not a production approval.
+`36d27c3022c6e640de28ca5dbac5fbeb58d54ace`; it is not a production approval.
 
 ## Closed locally with evidence
 
@@ -17,10 +17,10 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
 - `ENV_DOCKER_READY=PASS` from the ordinary operator terminal: Docker Server
   `29.8.0`, Compose `v5.5.1`, and Buildx `v0.37.0`. The isolated DR smoke
   completed with external MAX actions held and recovery hold active.
-- The writable Python 3.12 CI regression passed `497` tests with `19` planned
-  PostgreSQL skips; the dedicated PostgreSQL modules passed `19` tests and the
-  E2E process passed `4` tests. The order-dependent runtime-proxy regression
-  is covered by `tests/test_runtime_proxy.py`.
+- The writable Python 3.12 CI regression passed `498` tests with `19` planned
+  PostgreSQL skips; the dedicated PostgreSQL module/E2E process passed `23`
+  tests. The order-dependent runtime-proxy regression is covered by
+  `tests/test_runtime_proxy.py`.
 - The exact candidate browser matrix passed `6` base tests across 390/768/1440,
   and the current UX extension passed `12` tests across the same viewports,
   including reduced-motion and recoverable dashboard-unavailable states. The
@@ -31,6 +31,10 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
   campaign auto-run/scheduler suite passed 18. The scheduler now checks the
   persisted Stop fence before proxy preflight; daily worker/manual paths keep
   the pinned plan and slot identity through local fake-gateway tests.
+- The server-mode global message upload now publishes the authoritative global
+  library while daily plans and slots remain tenant-local; the focused
+  upload/library/worker integration suite passed `57` tests, including the
+  regression for this boundary.
 
 ## Release blockers
 
@@ -38,9 +42,10 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
   loading/permission/stale/stop-pending matrix remain `NOT RUN`; reduced-motion
   and recoverable dashboard-unavailable behavior have automated evidence. The
   automated rendered browser gate is PASS at 390/768/1440.
-- Master `T00..T33` acceptance is not closed by supplemental contracts.
-  Several new services are contract-complete but still integration-pending in
-  the legacy campaign worker/routes.
+- Master `T00..T33` acceptance is not closed by supplemental contracts or the
+  required 365-case normative waves. The global-upload → tenant-library →
+  daily-plan worker boundary is now covered by focused integration evidence,
+  but the broader Master consumer/HTTP matrix remains unexecuted.
 - Platform authorization underlying evidence, production/VPS, live MAX and
   SMS/message delivery are `BLOCKED/NOT RUN` by authorization and safety rules.
 - Image vulnerability scanning is blocked pending approval for external image
@@ -62,6 +67,6 @@ sender substitution, speed increase, or official Bot API path was added.
 
 This review does not claim absence of account blocking, successful delivery, or
 production readiness. The remaining gates are independent platform-
-authorization review, unresolved Master integration, image CVE review,
+authorization review, unexecuted normative Master acceptance, image CVE review,
 secret-history ownership, and production verification; no real MAX action may
 run unless separately authorized.

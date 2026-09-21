@@ -1,7 +1,7 @@
 # T29 security, dependency, and secret review
 
 Status: `PARTIAL`; this is a commit-bound local review for source candidate
-`1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2`, not a production release gate.
+`36d27c3022c6e640de28ca5dbac5fbeb58d54ace`, not a production release gate.
 Candidate SHA is recorded above; the review is not a production approval.
 
 ## Dependency and source checks

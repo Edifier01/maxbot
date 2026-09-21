@@ -85,11 +85,15 @@ non-2xx and non-loopback checks remain strict. The candidate was exercised
 against the actual temporary app fixture, with no external MAX/provider
 traffic.
 
+After the global-library/tenant-plan integration fix, the final source
+candidate `36d27c3022c6e640de28ca5dbac5fbeb58d54ace` reran the same browser
+matrix and reported `12 passed (3.2s)` with the same loopback-only diagnostics.
+
 ## Remaining limits
 
 The local full Python suite is not authoritative in the restricted sandbox:
 separate runs block in TestClient/thread filesystem lifecycle tests. The
-writable Python 3.12 container run for this exact candidate passed `497` tests
+writable Python 3.12 container run for this exact candidate passed `498` tests
 with `19` planned PostgreSQL skips.
 
 The current automated gate does not replace separate manual/automated checks

@@ -122,9 +122,10 @@ BROWSER-MAIN-HOSTED-CURRENT | 4d2aa28930092e8abb2917bd004ca7a2b21c07a3 | GitHub 
 ENV-00-DOCKER-OPERATOR-RERUN | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `docker version --format '{{.Server.Version}}'` | ordinary operator terminal from dirty primary checkout | 2026-09-21 | 0 | PASS | operator terminal output | Docker Server `29.8.0`; this is environment evidence, not a clean commit-bound check; no production service or provider action.
 S05-LOCAL-FULL-SANDBOX-CURRENT | 58da768710d761d0fbbae54581086b5073c9e289 | `env MAX_TEST=1 MAX_SERVER_MODE=1 JWT_SECRET=... python -m pytest tests/ -vv --maxfail=1 --durations=20` | restricted sandbox Python 3.12.3 | 2026-09-21 | 130 | BLOCKED | `docs/audit/ui-review.md` | Collection found 344 tests; five passed, then `test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails` blocked. Reproduction narrowed the boundary to filesystem `mkdir`/`rename` inside `asyncio.to_thread()`; hosted full regression is the writable-environment evidence.
 
-The overall release verdict remains `FIX`: hosted browser/full regression is
-now evidenced, but Master integration, independent platform authorization,
-secret-history/CVE review and production gates remain open.
+The overall release verdict remains `FIX`: hosted browser/full regression and
+the current global-upload/tenant-plan integration are evidenced, but normative
+Master acceptance, independent platform authorization, secret-history/CVE
+review and production gates remain open.
 
 ## Current production-readiness candidate evidence
 
@@ -147,6 +148,12 @@ S05-CANDIDATE-MASTER | e4837a1fe997d63704536f01685e56b9a97caf99 | normative Mast
 S05-CANDIDATE-BROWSER-UX | 1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2 | `npm run browser:e2e -- --reporter=line` with bounded loopback candidate app | regular Playwright + Chromium, temporary MAX_TEST fixture | 2026-09-21 | 0 | PASS | `docs/audit/ui-review.md` | 12 passed in 3.5s across 390x844, 768x1024 and 1440x1000; reduced-motion and dashboard 503 `role=alert` covered; no external host.
 
 S05-CANDIDATE-UX-FULL | 1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2 | `timeout 600s docker run --rm -v /tmp/maxbot-production-candidate:/workspace -w /workspace python:3.12-slim ... python -m pytest tests/ -q --tb=short` | writable Python 3.12 isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 497 passed, 19 planned PostgreSQL skips in 17.10s after the UX extension; no external MAX action.
+
+S05-CANDIDATE-INTEGRATION-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | focused global-upload/library/tenant-plan worker and command regression | Python 3.12 local SQLite/fake gateway | 2026-09-21 | 0 | PASS | `tests/test_daily_plan_integration_v2.py` | 57 passed; global message library remains global while daily plans/slots use tenant scope; no external MAX action.
+S05-CANDIDATE-FULL-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | writable Python 3.12 container `python -m pytest tests/ -q --tb=short` | isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 498 passed, 19 planned PostgreSQL skips in 17.55s; no external MAX action.
+S05-CANDIDATE-PG-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | dedicated PG module and E2E process | pinned PostgreSQL 16 isolated Compose fixture | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 23 passed; 62 warnings; temporary PG resources removed; no external MAX action.
+S05-CANDIDATE-MASTER-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | normative Master `T00..T33` and 365 acceptance cases | independent review boundary | 2026-09-21 | — | NOT RUN | `docs/audit/final-review.md` | Focused integration evidence does not replace the normative Master waves; no release GO.
+S05-CANDIDATE-BROWSER-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | `npm run browser:e2e -- --reporter=line` with bounded loopback candidate app | regular Playwright + Chromium, temporary MAX_TEST fixture | 2026-09-21 | 0 | PASS | `docs/audit/ui-review.md` | 12 passed in 3.2s across 390x844, 768x1024 and 1440x1000; no external host.
 
 The source candidate is technically green for the recorded local gates, but
 the release verdict remains `FIX` until independent platform authorization,
