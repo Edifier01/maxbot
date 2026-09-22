@@ -6,9 +6,20 @@ Allowlist only. Secrets and per-tenant ops keys are never copied.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Mapping
 
 logger = logging.getLogger(__name__)
+
+LEGACY_PRESENCE_SETTING_KEYS = (
+    "human_presence_enabled",
+    "presence_history_chance",
+    "presence_read_chance",
+    "presence_react_chance",
+    "presence_reactions",
+    "presence_idle_chance",
+)
+GLOBAL_PACING_LEGACY_INACTIVE = frozenset(LEGACY_PRESENCE_SETTING_KEYS)
 
 # Explicit allowlist (pacing / antiban / human-rhythm). Do not derive by
 # subtracting a denylist from DEFAULTS — new keys must be classified in tests.
@@ -52,12 +63,6 @@ GLOBAL_PACING_SETTING_KEYS = frozenset(
         "warmup_start_max",
         "lazy_day_percent",
         "lazy_day_factor",
-        "human_presence_enabled",
-        "presence_history_chance",
-        "presence_read_chance",
-        "presence_react_chance",
-        "presence_reactions",
-        "presence_idle_chance",
         "human_texts_enabled",
         "text_dedupe_enabled",
         "text_similarity_max",
@@ -105,7 +110,11 @@ def should_seed_tenant_pacing() -> bool:
 
 
 def iter_tenant_ids(root) -> list[int]:
-    tenants_root = root / "data" / "tenants"
+    from app.domain.contracts import resolve_data_root
+
+    tenants_root = resolve_data_root(
+        {"MAX_DATA": os.environ.get("MAX_DATA", ""), "ROOT": root}
+    ) / "tenants"
     if not tenants_root.is_dir():
         return []
     ids: list[int] = []
@@ -119,7 +128,7 @@ def read_global_pacing_values() -> dict[str, str]:
     """Read allowlisted keys from global sqlite. Empty if global DB is missing."""
     from app.runtime import main as m
 
-    path = m.ROOT / "data" / "global" / "app.db"
+    path = m._resolve_data_root() / "global" / "app.db"
     if not path.is_file():
         return {}
     out: dict[str, str] = {}

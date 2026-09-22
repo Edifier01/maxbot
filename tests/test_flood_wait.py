@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import antiban_core
@@ -38,10 +39,11 @@ def test_send_with_retry_sleeps_flood_wait(tmp_path, monkeypatch):
             CREATE TABLE profiles (
                 id INTEGER PRIMARY KEY, phone TEXT, status TEXT,
                 last_error TEXT, fail_count INTEGER DEFAULT 0, sent_day TEXT,
-                messages_sent_today INTEGER DEFAULT 0
+                messages_sent_today INTEGER DEFAULT 0, cooldown_until TEXT
             );
             CREATE TABLE groups (
-                id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT, enabled INTEGER
+                id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT,
+                max_chat_id TEXT, invite_link TEXT, enabled INTEGER
             );
             CREATE TABLE queue_state (
                 id INTEGER PRIMARY KEY, running INTEGER,
@@ -55,22 +57,33 @@ def test_send_with_retry_sleeps_flood_wait(tmp_path, monkeypatch):
             );
             CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
             INSERT INTO profiles (id, phone, status) VALUES (7, '+79990007777', 'active');
-            INSERT INTO groups (id, name, chat_id, enabled) VALUES (1, 'g', 'c', 1);
+            INSERT INTO groups (id, name, chat_id, max_chat_id, invite_link, enabled)
+            VALUES (1, 'g', 'c', '77', '', 1);
             INSERT INTO queue_state (id, running) VALUES (1, 0);
             """
         )
 
     calls = {"n": 0}
 
-    async def flaky(*_a, **_k):
+    class FakeGateway:
+        async def check_destination(self, *, chat_id: int):
+            return None
+
+        async def send_message(self, *, chat_id: int, text: str):
+            return SimpleNamespace(message_id="fixture-provider-id")
+
+    gateway = FakeGateway()
+
+    async def flaky(_profile_id, _phone, callback, **_kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("flood wait 30 seconds")
-        return 1
+        return await callback(object())
 
     sleep_mock = AsyncMock()
     monkeypatch.setattr(cs.asyncio, "sleep", sleep_mock)
     monkeypatch.setattr(m, "_with_client", flaky)
+    monkeypatch.setattr(m, "_max_gateway", lambda _client: gateway)
     monkeypatch.setattr(m, "_prepare_outgoing_text", lambda t, *_a, **_k: t)
     monkeypatch.setattr(m, "_touch_worker_activity", lambda: None)
     monkeypatch.setattr(m, "_on_success", lambda _pid: None)

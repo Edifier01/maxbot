@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "source_master_sha256": "8c7a57092be519ea5df0379abc6030124d1e099867adbc72a06174027c90392d",
+  "candidate_sha": "0154884cf94d6aeccf65f5390a0f845d783c3c0e",
+  "evidence_state": "dirty_worktree",
+  "release_verdict": "FIX",
+  "cases": [
+    {
+      "id": "SUP-01-C01",
+      "owner": "S00",
+      "test": "tests/test_platform_policy.py",
+      "status": "PASS"
+    },
+    {
+      "id": "SUP-01-C02",
+      "owner": "S01",
+      "test": "tests/test_external_action_boundaries.py",
+      "status": "PASS"
+    },
+    {
+      "id": "SUP-02-C01",
+      "owner": "S02",
+      "test": "tests/test_no_artificial_presence.py",
+      "status": "PASS"
+    },
+    {
+      "id": "PYMAX-241-C01",
+      "owner": "S02A",
+      "test": "tests/test_pymax_241_contract.py",
+      "status": "PASS"
+    },
+    {
+      "id": "PYMAX-241-C02",
+      "owner": "S02A",
+      "test": "tests/test_pymax_session_migration.py",
+      "status": "PASS"
+    },
+    {
+      "id": "SUP-03-C01",
+      "owner": "S03",
+      "test": "tests/test_recovery_hold.py",
+      "status": "PASS"
+    }
+  ]
+}

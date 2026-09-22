@@ -20,8 +20,6 @@ _BAN_ERROR_RE = re.compile(
 )
 _RECOVERABLE_PACING_RE = re.compile(r"flood|spam", re.IGNORECASE)
 _FLOOD_WAIT_RE = re.compile(r"wait\s+(\d+)\s+seconds?", re.IGNORECASE)
-# ponytail: 24h ceiling if MAX returns an absurd N; raise if real waits ever exceed a day.
-_FLOOD_WAIT_CAP_SEC = 24 * 3600
 
 
 def is_ban_error(err: str) -> bool:
@@ -39,7 +37,7 @@ def flood_wait_seconds(err: str) -> int | None:
     m = _FLOOD_WAIT_RE.search(err or "")
     if not m:
         return None
-    return min(int(m.group(1)), _FLOOD_WAIT_CAP_SEC)
+    return int(m.group(1))
 
 
 def clamp_range(lo: float, hi: float) -> tuple[float, float]:
@@ -240,7 +238,7 @@ def check_proxy(
     raw: str | None,
     *,
     timeout: float = 8.0,
-    target_host: str = "api.oneme.ru",
+    target_host: str = "api2.oneme.ru",
     target_port: int = 443,
 ) -> tuple[bool, str]:
     """Проверка TCP + auth прокси. Пустой URL — OK (прокси не задан)."""

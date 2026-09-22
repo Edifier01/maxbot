@@ -50,19 +50,19 @@ def clear_cache() -> None:
 def status(data_dir: Path) -> dict[str, Any]:
     ensure_vault_unlocked(data_dir)
     key_path = paths.app_key_path(data_dir)
+    legacy = paths.app_salt_path(data_dir).exists() or paths.app_vault_path(data_dir).exists()
     fernet, unlocked = get_state(data_dir)
     return {
         "unlocked": bool(unlocked and fernet is not None),
-        "protected": False,
-        "legacy": key_path.exists(),
-        "needs_setup": False,
+        "protected": legacy,
+        "legacy": legacy,
+        "needs_setup": not key_path.exists() and not legacy,
     }
 
 
 def _drop_password_vault_files(data_dir: Path) -> None:
-    # ponytail: PBKDF2 vault removed; encrypted sessions need MAX re-login
-    paths.app_salt_path(data_dir).unlink(missing_ok=True)
-    paths.app_vault_path(data_dir).unlink(missing_ok=True)
+    """Deprecated compatibility hook; legacy material is never auto-deleted."""
+    del data_dir
 
 
 def ensure_vault_unlocked(data_dir: Path, log: LogFn | None = None) -> None:
@@ -74,10 +74,11 @@ def ensure_vault_unlocked(data_dir: Path, log: LogFn | None = None) -> None:
     paths.sessions_root(data_dir).mkdir(parents=True, exist_ok=True)
     salt_path = paths.app_salt_path(data_dir)
     key_path = paths.app_key_path(data_dir)
-    if salt_path.exists():
-        _drop_password_vault_files(data_dir)
+    legacy_present = salt_path.exists() or paths.app_vault_path(data_dir).exists()
+    if legacy_present and not key_path.exists():
         if log:
-            log("Хранилище: режим с паролем отключён, используется .app_key")
+            log("Хранилище: legacy password vault сохранён; требуется явная миграция")
+        return
     if not key_path.exists():
         key_path.write_bytes(Fernet.generate_key())
     try:

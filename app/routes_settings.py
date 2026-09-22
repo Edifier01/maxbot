@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from app.routes_models import SettingsIn
 from app.runtime import main as m
 from app.settings_scope import (
+    LEGACY_PRESENCE_SETTING_KEYS,
     GLOBAL_PACING_SETTING_KEYS,
     filter_pacing_updates,
     propagate_global_pacing_settings,
@@ -57,6 +58,7 @@ async def get_settings():
     out = {k: m.get_setting(k) for k in m.DEFAULTS if k not in hide}
     out["api_pin_set"] = m._pin_is_set()
     out["telegram_bot_token_set"] = bool(m.get_setting("telegram_bot_token").strip())
+    out["deprecated_inactive"] = list(LEGACY_PRESENCE_SETTING_KEYS)
     out["vault"] = m.vault_status()
     with m._conn() as c:
         sched = c.execute("SELECT * FROM campaign_schedule WHERE id=1").fetchone()
@@ -68,6 +70,8 @@ async def get_settings():
 async def update_settings(body: SettingsIn):
 
     data = body.model_dump(exclude_unset=True)
+    for legacy_key in LEGACY_PRESENCE_SETTING_KEYS:
+        data.pop(legacy_key, None)
     for fixed_key in (
         "timezone_offset_hours",
         "role_plan_enabled",
@@ -139,5 +143,4 @@ async def settings_audit(limit: int = 50):
             (limit,),
         ).fetchall()
     return {"items": [dict(r) for r in rows]}
-
 

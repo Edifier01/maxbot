@@ -26,7 +26,7 @@ def test_auto_unlock_fresh_dir(tmp_path):
     assert paths.app_key_path(data_dir).exists()
 
 
-def test_auto_unlock_drops_password_vault(tmp_path):
+def test_auto_unlock_preserves_password_vault_for_explicit_migration(tmp_path):
     data_dir = tmp_path / "tenant"
     vault.clear_cache()
     vault.setup(data_dir, "secure123")
@@ -34,9 +34,12 @@ def test_auto_unlock_drops_password_vault(tmp_path):
     assert vault.get_state(data_dir)[1] is False
 
     st = vault.status(data_dir)
-    assert st["unlocked"] is True
-    assert not paths.app_salt_path(data_dir).exists()
-    assert paths.app_key_path(data_dir).exists()
+    assert st["unlocked"] is False
+    assert st["protected"] is True
+    assert st["legacy"] is True
+    assert paths.app_salt_path(data_dir).exists()
+    assert paths.app_vault_path(data_dir).exists()
+    assert not paths.app_key_path(data_dir).exists()
 
 
 def test_setup_api_before_status(tmp_path):

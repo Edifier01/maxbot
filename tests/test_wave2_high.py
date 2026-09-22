@@ -93,7 +93,7 @@ def test_socks5_check_opens_target_tunnel(monkeypatch):
     ok, error = antiban_core.check_proxy("socks5://proxy.example:1080")
 
     assert (ok, error) == (True, "")
-    assert any(b"api.oneme.ru" in request for request in sock.sent)
+    assert any(b"api2.oneme.ru" in request for request in sock.sent)
     assert sock.sent[-1].endswith(b"\x01\xbb")
 
 
@@ -114,7 +114,7 @@ def test_https_proxy_wraps_tls_before_connect(monkeypatch):
 
     assert (ok, error) == (True, "")
     assert wrapped == [(raw, "proxy.example")]
-    assert b"CONNECT api.oneme.ru:443" in tunnel.sent[0]
+    assert b"CONNECT api2.oneme.ru:443" in tunnel.sent[0]
 
 
 def test_proxy_error_redacts_credentials(monkeypatch):

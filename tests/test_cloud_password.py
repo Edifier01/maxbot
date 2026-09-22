@@ -35,14 +35,13 @@ def test_submit_cloud_password_api(tmp_path, monkeypatch):
             )
             pid = c.execute("SELECT id FROM profiles WHERE phone=?", ("+79991112233",)).fetchone()["id"]
 
-        from starlette.testclient import TestClient
+        from app.routes_models import CodeIn
+        from app.routes_profiles import submit_password
 
-        with TestClient(m.app) as client:
-            sess = m._ensure_auth_session(pid)
-            m._set_auth_step(pid, "waiting_cloud_password", "hint123")
-            r = client.post(f"/api/profiles/{pid}/password", json={"code": "secret-cloud"})
-            assert r.status_code == 200
-            assert r.json()["ok"] is True
+        sess = m._ensure_auth_session(pid)
+        m._set_auth_step(pid, "waiting_cloud_password", "hint123")
+        result = asyncio.run(submit_password(pid, CodeIn(code="secret-cloud")))
+        assert result["ok"] is True
 
         assert sess["pwd_q"].get_nowait() == "secret-cloud"
         assert m._auth_sessions[m._auth_session_key(pid)]["step"] == "verifying_password"

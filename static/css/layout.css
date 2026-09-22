@@ -1,0 +1,19 @@
+html { color-scheme: dark; overflow-x: hidden; }
+body {
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--font);
+}
+
+.panel-grid, .dashboard-grid, .settings-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 768px) {
+  .panel-grid, .dashboard-grid, .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1200px) {
+  .panel-grid, .dashboard-grid, .settings-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

@@ -16,6 +16,19 @@ from app.config import JWT_ALGORITHM, JWT_EXPIRE_HOURS, JWT_SECRET
 # ponytail: in-process TTL shaves PG round-trips; logout/revoke must invalidate explicitly.
 _session_cache: dict[str, tuple[float, str | None]] = {}
 _SESSION_CACHE_TTL = 30.0
+SESSION_CACHE_MAX = 4096
+
+
+def _prune_session_cache(now: float | None = None) -> None:
+    current = _time.monotonic() if now is None else float(now)
+    expired = [key for key, (deadline, _value) in _session_cache.items() if deadline <= current]
+    for key in expired:
+        _session_cache.pop(key, None)
+    overflow = len(_session_cache) - SESSION_CACHE_MAX
+    if overflow > 0:
+        oldest = sorted(_session_cache.items(), key=lambda item: item[1][0])
+        for key, _value in oldest[:overflow]:
+            _session_cache.pop(key, None)
 
 
 def hash_password(password: str) -> str:
@@ -75,6 +88,7 @@ def validate_token_session(payload: dict[str, Any]) -> str | None:
 
 def cached_validate_token_session(payload: dict[str, Any]) -> str | None:
     """Cached wrapper around validate_token_session (see _SESSION_CACHE_TTL)."""
+    _prune_session_cache()
     jti = payload.get("jti")
     if jti:
         hit = _session_cache.get(jti)
@@ -83,6 +97,7 @@ def cached_validate_token_session(payload: dict[str, Any]) -> str | None:
     result = validate_token_session(payload)
     if jti:
         _session_cache[jti] = (_time.monotonic() + _SESSION_CACHE_TTL, result)
+        _prune_session_cache()
     return result
 
 
@@ -92,6 +107,11 @@ def invalidate_session_cache(jti: str) -> None:
 
 def clear_session_cache() -> None:
     _session_cache.clear()
+
+
+def session_cache_size() -> int:
+    _prune_session_cache()
+    return len(_session_cache)
 
 
 def decode_token(token: str) -> dict[str, Any]:

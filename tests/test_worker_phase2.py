@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.tenant import tenant_scope
 
@@ -39,6 +40,8 @@ def test_send_with_retry_success_writes_sent(tmp_path, monkeypatch):
     import main as m
     from app.campaign_send import send_with_retry
 
+    m.reset_test_runtime()
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
     monkeypatch.setattr(m, "ROOT", tmp_path)
     tenant_dir = tmp_path / "data" / "tenants" / "6"
     tenant_dir.mkdir(parents=True)
@@ -53,7 +56,8 @@ def test_send_with_retry_success_writes_sent(tmp_path, monkeypatch):
                 messages_sent_today INTEGER DEFAULT 0
             );
             CREATE TABLE groups (
-                id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT, enabled INTEGER
+                id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT,
+                max_chat_id TEXT, invite_link TEXT, enabled INTEGER
             );
             CREATE TABLE queue_state (
                 id INTEGER PRIMARY KEY, running INTEGER,
@@ -67,15 +71,26 @@ def test_send_with_retry_success_writes_sent(tmp_path, monkeypatch):
             );
             CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
             INSERT INTO profiles (id, phone, status) VALUES (7, '+79990007777', 'active');
-            INSERT INTO groups (id, name, chat_id, enabled) VALUES (1, 'g', 'c', 1);
+            INSERT INTO groups (id, name, chat_id, max_chat_id, invite_link, enabled)
+            VALUES (1, 'g', 'c', '77', '', 1);
             INSERT INTO queue_state (id, running) VALUES (1, 0);
             """
         )
 
-    async def ok(*_a, **_k):
-        return 1
+    class FakeGateway:
+        async def check_destination(self, *, chat_id: int):
+            return None
+
+        async def send_message(self, *, chat_id: int, text: str):
+            return SimpleNamespace(message_id="fixture-provider-id")
+
+    gateway = FakeGateway()
+
+    async def ok(_profile_id, _phone, callback, **_kwargs):
+        return await callback(object())
 
     monkeypatch.setattr(m, "_with_client", ok)
+    monkeypatch.setattr(m, "_max_gateway", lambda _client: gateway)
     monkeypatch.setattr(m, "_prepare_outgoing_text", lambda t, *_a, **_k: t)
     monkeypatch.setattr(m, "_touch_worker_activity", lambda: None)
     monkeypatch.setattr(m, "_on_success", lambda _pid: None)

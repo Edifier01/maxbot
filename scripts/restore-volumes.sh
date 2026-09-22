@@ -13,6 +13,7 @@ fi
 SRC="${1:?укажите каталог бэкапа (pg.dump + data.tar.gz)}"
 [[ -f "$SRC/pg.dump" ]] || { echo "нет $SRC/pg.dump"; exit 1; }
 [[ -f "$SRC/data.tar.gz" ]] || { echo "нет $SRC/data.tar.gz"; exit 1; }
+RESTORE_REVISION="${MAX_RESTORE_REVISION:-restore-$(basename "$SRC")-$(date -u +%Y%m%dT%H%M%SZ)}"
 
 echo "ВНИМАНИЕ: перезапишет PG и volume max_server_data."
 if [[ "$ASSUME_YES" != "1" ]]; then
@@ -28,10 +29,39 @@ echo "Восстановление data volume…"
 # verify, then swap live children into .outgoing-restore (same volume, rename).
 # Do not rmtree .outgoing-restore until PostgreSQL restore succeeds (rollback on PG fail).
 docker compose run --rm -T --no-deps \
+  -e "MAX_RESTORE_REVISION=$RESTORE_REVISION" \
   -v "$(cd "$SRC" && pwd):/backup:ro" \
   --user root \
   --entrypoint python \
   app -c 'import os, pathlib, shutil, tarfile
+from datetime import datetime, timezone
+import json, uuid
+control = pathlib.Path("/app/control")
+control.mkdir(parents=True, exist_ok=True)
+hold = control / "recovery-hold.json"
+if hold.exists():
+    raise SystemExit("recovery hold already exists; release it before another restore")
+revision = os.environ.get("MAX_RESTORE_REVISION", "").strip()
+if not revision or len(revision) > 200 or not revision.isprintable():
+    raise SystemExit("invalid restore revision")
+payload = {
+    "schema_version": 1,
+    "revision": revision,
+    "reason": "restore",
+    "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+tmp = control / (".recovery-hold." + uuid.uuid4().hex + ".tmp")
+try:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, ensure_ascii=True, separators=(",", ":"))
+        stream.write("\\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chown(tmp, 10001, 10001)
+    os.link(tmp, hold)
+finally:
+    tmp.unlink(missing_ok=True)
 root = pathlib.Path("/app/data")
 incoming = root / ".incoming-restore"
 outgoing = root / ".outgoing-restore"

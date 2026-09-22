@@ -71,7 +71,10 @@ def _sqlite_connect(db_path: Path) -> sqlite3.Connection:
 
 
 def _global_db_path() -> Path:
-    return _main().ROOT / "data" / "global" / "app.db"
+    from app.domain.contracts import Scope, resolve_scope_dir
+
+    m = _main()
+    return resolve_scope_dir(m._resolve_data_root(), Scope.GLOBAL) / "app.db"
 
 
 def _global_conn() -> sqlite3.Connection:
@@ -168,6 +171,9 @@ def init_db() -> None:
                 message_idx INTEGER,
                 status TEXT,
                 error TEXT DEFAULT '',
+                operation_id TEXT,
+                daily_plan_id TEXT,
+                slot_id TEXT,
                 sent_at TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS app_log (
@@ -278,6 +284,12 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
     cols_sl = _table_columns(c, "send_log")
     if "sent_text" not in cols_sl:
         c.execute("ALTER TABLE send_log ADD COLUMN sent_text TEXT DEFAULT ''")
+    if "operation_id" not in cols_sl:
+        c.execute("ALTER TABLE send_log ADD COLUMN operation_id TEXT")
+    if "daily_plan_id" not in cols_sl:
+        c.execute("ALTER TABLE send_log ADD COLUMN daily_plan_id TEXT")
+    if "slot_id" not in cols_sl:
+        c.execute("ALTER TABLE send_log ADD COLUMN slot_id TEXT")
     c.execute(
         "CREATE INDEX IF NOT EXISTS idx_send_log_status_sent "
         "ON send_log(status, sent_at)"
@@ -286,6 +298,17 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_send_log_profile_group "
         "ON send_log(profile_id, group_id, status)"
     )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_send_log_operation "
+        "ON send_log(operation_id)"
+    )
+    from app.repositories.operations import OperationRepository
+    from app.repositories.daily_plans import DailyPlanRepository
+    from app.repositories.message_sets import MessageSetRepository
+
+    OperationRepository.ensure_schema(c)
+    DailyPlanRepository.ensure_schema(c)
+    MessageSetRepository.ensure_schema(c)
     _install_integrity_triggers(c)
 
 

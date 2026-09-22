@@ -7,9 +7,13 @@ from app.middleware import AuthRateLimitMiddleware, RequestLogMiddleware, Server
 from app.routes_admin import router as admin_router
 from app.routes_auth import router as auth_router
 from app.routes_campaign import router as campaign_router
+from app.routes_connections import router as connections_router
+from app.routes_diagnostics import router as diagnostics_router
 from app.routes_dashboard import router as dashboard_router
+from app.routes_daily_plans import router as daily_plans_router
 from app.routes_groups import router as groups_router
 from app.routes_messages import router as messages_router
+from app.routes_message_sets import router as message_sets_router
 from app.routes_monitor import router as monitor_router
 from app.routes_pages import router as pages_router
 from app.routes_profiles import router as profiles_router
@@ -24,7 +28,11 @@ def register_panel(app) -> None:
     app.include_router(vault_router)
     app.include_router(profiles_router)
     app.include_router(groups_router)
+    app.include_router(connections_router)
+    app.include_router(diagnostics_router)
     app.include_router(messages_router)
+    app.include_router(message_sets_router)
+    app.include_router(daily_plans_router)
     app.include_router(settings_router)
     app.include_router(campaign_router)
     app.include_router(dashboard_router)

@@ -6,6 +6,9 @@
   <meta name="theme-color" content="#0c0e14">
   <title>MAX Sender — Админ</title>
   <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/components.css">
+  <link rel="stylesheet" href="/static/css/layout.css">
   <style>
     :root {
       --bg: #0c0e14;
@@ -474,16 +477,7 @@
       <details class="settings-panel">
         <summary>Присутствие и тексты</summary>
         <div class="settings-body">
-          <div class="settings-row"><label>Присутствие</label><div class="controls">
-            <label style="color:var(--text);font-size:.85rem"><input type="checkbox" id="presenceOn" style="width:auto;margin-right:.25rem"> вкл</label>
-          </div></div>
-          <div class="settings-row"><label>История / прочтение / реакция %</label><div class="controls">
-            <input id="presHist" type="number" min="0" max="100" style="max-width:70px" aria-label="История %">
-            <input id="presRead" type="number" min="0" max="100" style="max-width:70px" aria-label="Прочтение %">
-            <input id="presReact" type="number" min="0" max="100" style="max-width:70px" aria-label="Реакция %">
-          </div></div>
-          <div class="settings-row"><label for="presReactions">Реакции</label><div class="controls"><input id="presReactions" placeholder="👍,❤️,🔥,😂…" style="max-width:280px"></div></div>
-          <div class="settings-row"><label for="presIdle">Простой онлайн %</label><div class="controls"><input id="presIdle" type="number" min="0" max="100" style="max-width:70px"></div></div>
+          <p class="hint" role="note">Искусственное присутствие отключено политикой безопасности. Сохранённые legacy-параметры доступны только для аудита.</p>
           <div class="settings-row"><label>Тексты</label><div class="controls">
             <label style="color:var(--text);font-size:.85rem"><input type="checkbox" id="textsOn" style="width:auto;margin-right:.25rem"> вкл</label>
             <label style="color:var(--text);font-size:.85rem"><input type="checkbox" id="dedupeOn" style="width:auto;margin-right:.25rem"> антидубли</label>

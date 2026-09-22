@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import Callable
 
 from cryptography.fernet import Fernet
+
+
+def _data_root(root: Path) -> Path:
+    from app.domain.contracts import resolve_data_root
+
+    return resolve_data_root({"MAX_DATA": os.environ.get("MAX_DATA", ""), "ROOT": root})
 
 
 def reconcile_tenant_quarantines(
@@ -14,7 +21,7 @@ def reconcile_tenant_quarantines(
     """Resolve crash leftovers from delete_user using PostgreSQL as authority."""
     import shutil
 
-    tenants_root = root / "data" / "tenants"
+    tenants_root = _data_root(root) / "tenants"
     result = {"restored": 0, "purged": 0, "conflicts": 0}
     if not tenants_root.is_dir():
         return result
@@ -37,7 +44,7 @@ def reconcile_tenant_quarantines(
 
 
 def ensure_tenant_data(root: Path, tenant_id: int) -> Path:
-    data_dir = root / "data" / "tenants" / str(tenant_id)
+    data_dir = _data_root(root) / "tenants" / str(tenant_id)
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "sessions").mkdir(exist_ok=True)
     (data_dir / "messages").mkdir(exist_ok=True)
@@ -48,7 +55,7 @@ def ensure_tenant_data(root: Path, tenant_id: int) -> Path:
 
 
 def ensure_global_data(root: Path) -> Path:
-    data_dir = root / "data" / "global"
+    data_dir = _data_root(root) / "global"
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "sessions").mkdir(exist_ok=True)
     (data_dir / "messages").mkdir(exist_ok=True)
@@ -75,7 +82,7 @@ def rollback_tenant_registration(tenant_id: int, root: Path) -> None:
     from app import db_pg
 
     db_pg.delete_tenant(tenant_id)
-    data_dir = root / "data" / "tenants" / str(tenant_id)
+    data_dir = _data_root(root) / "tenants" / str(tenant_id)
     if data_dir.exists():
         shutil.rmtree(data_dir, ignore_errors=True)
 
