@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import sqlite3
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -180,7 +181,7 @@ def test_daily_slot_identity_is_carried_into_operation_and_send_log(
     assert materialize_daily_plans() == 1
     with m._conn() as connection:
         claimed = DailyPlanService(DailyPlanRepository(connection)).claim_next_slot(
-            "local", m._local_now().replace(tzinfo=None)
+            "local", datetime.now(timezone.utc)
         )
         assert hasattr(claimed, "slot_id")
 
