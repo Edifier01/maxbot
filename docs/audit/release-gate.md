@@ -1,7 +1,15 @@
 # MAXBOT release gate
 
-Candidate: dirty working tree at
-`0154884cf94d6aeccf65f5390a0f845d783c3c0e`.
+Candidate runtime/test commit:
+`473eb404f374400323e9a397acb20e2818ed7637`.
+
+Historical evidence rows retain the SHAs on which those checks actually ran;
+the final documentation/configuration reconciliation is a local continuation.
+
+Fresh 2026-09-22 extended local checks passed: focused integration/policy
+(`150`), full Python (`499 passed, 19 skipped`) and loopback Chromium (`21`).
+Restricted-sandbox failures remain recorded as environment-specific evidence;
+this does not replace normative, production or live-provider verification.
 
 Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
 
@@ -12,24 +20,39 @@ Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
   `29.8.0`, Compose `v5.5.1`, and Buildx `v0.37.0` were verified.
 - `maxapi-python==2.4.1` is pinned and installed. Verified wheel SHA-256:
   `49c996cebebdcd490b8fc1424c84faad3c33d0b75eff4bb86cf1de9d968d76ea`.
-- The writable Python 3.12 CI full regression passed `493` tests with `19`
-  planned PostgreSQL skips; dedicated PostgreSQL modules passed `19` and E2E
-  passed `4`. Source compile, Node syntax, shell syntax, JSON, `pip check`,
+- The writable Python 3.12 CI full regression passed `498` tests with `19`
+  planned PostgreSQL skips; the dedicated PostgreSQL module/E2E process passed
+  `23`. Source compile, Node syntax, shell syntax, JSON, `pip check`,
   Compose config, production image build, and DR smoke also passed.
+- The latest test-only UI candidate reran the full regression and passed `499`
+  tests with `19` planned PostgreSQL skips; the application source and image
+  contents were unchanged by that extension.
 - Dependency audits for both Python locks passed with `pip-audit==2.10.1`.
 - `T31` is `OFF / NOT_ADOPTED`.
+- The user/admin frontend preserves server-provided redacted `safe_message`
+  values; the exact candidate browser matrix passed `15` tests.
+- The current UI extension passed `4` focused token/asset contracts and `21`
+  loopback-only browser tests, including 195x422 200%-equivalent reflow for
+  auth/dashboard surfaces.
 
 ## Release blockers
 
-- Required browser evidence at 390/768/1440, keyboard, console, failed
-  network, focus, contrast, and offline/hold states is `NOT RUN`.
+- Automated browser evidence at 390/768/1440, keyboard, console, failed
+  network, focus and hold states is `PASS`; the current candidate also passes
+  reduced-motion, recoverable dashboard-unavailable, semantic-token contrast,
+  and 195x422 reflow checks. A true browser 200% zoom session, full rendered
+  contrast review, and the stale/loading/permission/stop-pending matrix remain
+  `NOT RUN`.
 - Master `T00..T33` is not closed: operation, pacing, message-library, daily-
-  plan, and command services have focused contract evidence, but legacy
-  worker/upload/HTTP consumer integration remains pending.
+  plan, and command services have focused contract and current global-upload →
+  tenant-plan integration evidence, but the normative 365-case Master and
+  broader HTTP consumer waves remain pending. The canonical source checksum
+  and all 365 case headings are now locally verified; no case is marked PASS
+  from that inventory alone.
 - Platform authorization, live MAX, SMS/message delivery, production/VPS, and
-  secret-history owner review are not qualified. Image CVE scanning is also
-  not run.
+  secret-history owner review are not qualified. Image CVE scanning is
+  blocked because the available scanner may export image metadata externally.
 
-No real MAX action, production service, secret, commit, push, merge, rebase,
-or deploy was performed. Do not treat this dirty-worktree verdict as
-commit-bound or production `GO`.
+No real MAX action, production service, secret, push, merge, rebase, or deploy
+was performed. The source candidate commit is local-only; do not treat this
+`FIX` verdict as production `GO`.

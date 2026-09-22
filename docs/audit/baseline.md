@@ -1,5 +1,14 @@
 # MAXBOT supplemental baseline
 
+## Current continuation (2026-09-22)
+
+The historical baseline below was captured from `0154884cf94d6aeccf65f5390a0f845d783c3c0e`.
+The current runtime/test continuation is
+`473eb404f374400323e9a397acb20e2818ed7637`; its focused integration and UI
+changes are described in `docs/audit/final-review.md` and
+`docs/audit/verification.md`. Historical rows are not silently relabeled as
+evidence for the newer SHA.
+
 Дата baseline: 2026-09-20. Это dirty-worktree evidence; commit-bound и
 production verdict не заявляются.
 
@@ -61,6 +70,17 @@ production verdict не заявляются.
   container: the full SQLite suite and the separate PostgreSQL/E2E processes
   completed successfully. The host limitation is retained as a local-harness
   note, not promoted to a CI failure.
-- Production/VPS, live platform authorization review, browser evidence, full
-  Master acceptance, image CVE scanning, and production verification remain
-  `NOT RUN` or `BLOCKED` as stated in `verification.md`.
+- Production/VPS, live platform authorization review, full Master acceptance,
+  image CVE scanning, and production verification remain `NOT RUN` or
+  `BLOCKED` as stated in `verification.md`; the current automated browser
+  matrix is now separately evidenced as `PASS`.
+
+## Current source revalidation
+
+On 2026-09-21 the canonical Master source was re-read from
+`/mnt/c/Users/Edifi/Documents/MAXBOT_MASTER_V3_EN_2026-09-20.md`.
+`sha256sum` returned the expected
+`8c7a57092be519ea5df0379abc6030124d1e099867adbc72a06174027c90392d`, and a
+deterministic heading parser counted `365` acceptance cases. This validates
+source availability and provenance only; it does not turn the normative waves
+into PASS.

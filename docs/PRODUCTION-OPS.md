@@ -50,9 +50,9 @@ disabled while session persistence remains enabled.
 
 Before a deploy, stop the campaign owner, create the ordinary encrypted-volume
 backup, and enable the S03 recovery hold. Rollback uses the previous complete
-image/commit with its matching PyMax 2.4.0 lifecycle rather than replacing only
-the wheel inside the new code. The nullable `user_agent` session column remains
-backward-readable for that rollback and is not removed.
+image/commit with the dependency lifecycle pinned by that image rather than
+replacing only the wheel inside the new code. The nullable `user_agent` session
+column remains backward-readable for that rollback and is not removed.
 
 After deploy, run offline/session-schema checks first and then local fake smoke
 checks. A real canary login or send is outside this task and requires a separate

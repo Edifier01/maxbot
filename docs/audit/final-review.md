@@ -1,8 +1,17 @@
 # T32 / S05 final review
 
 Verdict: `FIX` for the release gate; overall remediation handoff is
-`PARTIAL`. The evidence belongs to the dirty working tree at
-`0154884cf94d6aeccf65f5390a0f845d783c3c0e` and is not commit-bound.
+`PARTIAL`. The final local source candidate is
+`473eb404f374400323e9a397acb20e2818ed7637`; it is not a production approval.
+The older candidate SHAs in the historical evidence below are retained as
+provenance. The final commit is a local documentation/configuration
+continuation on top of the reviewed runtime/test tree.
+
+The 2026-09-22 extended local rerun passed the combined focused integration/
+policy matrix (`150` tests), the full Python suite (`499 passed, 19 skipped`)
+and the loopback Chromium matrix (`21 passed`). The earlier restricted-host
+and restricted-Chromium attempts remain recorded as environment-specific
+`BLOCKED` evidence; they do not represent application failures.
 
 ## Closed locally with evidence
 
@@ -17,28 +26,56 @@ Verdict: `FIX` for the release gate; overall remediation handoff is
 - `ENV_DOCKER_READY=PASS` from the ordinary operator terminal: Docker Server
   `29.8.0`, Compose `v5.5.1`, and Buildx `v0.37.0`. The isolated DR smoke
   completed with external MAX actions held and recovery hold active.
-- The writable Python 3.12 CI regression passed `493` tests with `19` planned
-  PostgreSQL skips; the dedicated PostgreSQL modules passed `19` tests and the
-  E2E process passed `4` tests. The order-dependent runtime-proxy regression
-  is covered by `tests/test_runtime_proxy.py`.
+- The writable Python 3.12 CI regression passed `498` tests with `19` planned
+  PostgreSQL skips; the dedicated PostgreSQL module/E2E process passed `23`
+  tests. The order-dependent runtime-proxy regression is covered by
+  `tests/test_runtime_proxy.py`.
+- The latest test-only UI candidate reran the same full regression and passed
+  `499` tests with `19` planned PostgreSQL skips; no application source or
+  production dependency changed in that extension.
+- The exact candidate browser matrix passed `6` base tests across 390/768/1440,
+  and the current UX extension passed `12` tests across the same viewports,
+  including reduced-motion and recoverable dashboard-unavailable states. The
+  isolated Docker backup/restore smoke passed with recovery hold active.
 - T31 remains `OFF / NOT_ADOPTED`; no client-reuse enablement was introduced.
 - Wave D continuation is locally integrated: the current 13-file operation,
   pacing, library, daily-plan and command suite passed 77 tests, and the
   campaign auto-run/scheduler suite passed 18. The scheduler now checks the
   persisted Stop fence before proxy preflight; daily worker/manual paths keep
   the pinned plan and slot identity through local fake-gateway tests.
+- The server-mode global message upload now publishes the authoritative global
+  library while daily plans and slots remain tenant-local; the focused
+  upload/library/worker integration suite passed `57` tests, including the
+  regression for this boundary.
+- Structured server error envelopes now preserve their already-redacted
+  `safe_message` in both user and admin frontend formatters; the exact
+  candidate browser matrix passed `15` tests across 390/768/1440, including
+  an unknown legacy-map code.
+- The current UI contract extension passed `4` focused tests, and the
+  loopback-only Chromium matrix passed `21` tests across 390/768/1440,
+  including semantic-token WCAG AA checks and a 195x422
+  200%-equivalent reflow check for auth/dashboard surfaces.
+- The extended local runner reran the final tree: `499` Python tests passed,
+  `19` planned PostgreSQL tests were skipped, and all `21` browser tests passed
+  across 390/768/1440 without external MAX/provider traffic.
 
 ## Release blockers
 
-- Required rendered browser evidence at 390/768/1440, keyboard, console,
-  failed-network, focus, contrast and offline/hold states is `NOT RUN`; see
-  `docs/audit/ui-review.md`.
-- Master `T00..T33` acceptance is not closed by supplemental contracts.
-  Several new services are contract-complete but still integration-pending in
-  the legacy campaign worker/routes.
+- A true browser 200% zoom session, full rendered contrast review, and the complete
+  loading/permission/stale/stop-pending matrix remain `NOT RUN`; reduced-motion
+  and recoverable dashboard-unavailable behavior, semantic token contrast and
+  narrow reflow have automated evidence. The automated rendered browser gate is
+  PASS at 390/768/1440.
+- Master `T00..T33` acceptance is not closed by supplemental contracts or the
+  required 365-case normative waves. The global-upload → tenant-library →
+  daily-plan worker boundary is now covered by focused integration evidence,
+  but the broader Master consumer/HTTP matrix remains unexecuted. The
+  canonical Master file and its expected SHA-256 are now locally verified;
+  this is source provenance, not acceptance execution.
 - Platform authorization underlying evidence, production/VPS, live MAX and
   SMS/message delivery are `BLOCKED/NOT RUN` by authorization and safety rules.
-- Image vulnerability scanning and protected-branch/secret-history owner
+- Image vulnerability scanning is blocked pending approval for external image
+  metadata transfer, and protected-branch/secret-history owner
   review remain open even though the pinned image build and lockfile audit
   passed.
 - Secret-history regex matches in historical `server/skills/...` revisions
@@ -55,7 +92,7 @@ the new ledger contracts. No artificial presence, auto-join, proxy reshuffle,
 sender substitution, speed increase, or official Bot API path was added.
 
 This review does not claim absence of account blocking, successful delivery, or
-production readiness. The remaining gate is rendered-browser evidence,
-independent platform-authorization review, unresolved Master integration and
-commit-bound review; it must still stop before any real MAX action unless
-separately authorized.
+production readiness. The remaining gates are independent platform-
+authorization review, unexecuted normative Master acceptance, image CVE review,
+secret-history ownership, and production verification; no real MAX action may
+run unless separately authorized.

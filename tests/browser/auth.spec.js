@@ -43,4 +43,49 @@ test.describe('auth surface', () => {
     await expect(page.locator('#loginErr')).toHaveText('Локальная fixture: отказано');
     await expect(page.locator('#loginErr')).toBeVisible();
   });
+
+  test('honors reduced-motion preferences', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/auth.html');
+
+    const activeMotion = await page.locator('body').evaluate((body) => {
+      const toMilliseconds = (value) => {
+        const number = Number.parseFloat(value) || 0;
+        return value.endsWith('ms') ? number : number * 1000;
+      };
+      return [...body.querySelectorAll('*')].flatMap((element) => {
+        const style = getComputedStyle(element);
+        return [
+          ['animation', style.animationDuration],
+          ['transition', style.transitionDuration],
+        ]
+          .filter(([, duration]) => toMilliseconds(duration) > 0.1)
+          .map(([kind, duration]) => ({ kind, duration, selector: element.tagName }));
+      });
+    });
+
+    expect(activeMotion).toEqual([]);
+  });
+
+  test('reflows the login surface at a 200-percent-equivalent CSS viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 195, height: 422 });
+    await page.goto('/auth.html');
+
+    const layout = await page.locator('main.card').evaluate((card) => {
+      const rect = card.getBoundingClientRect();
+      return {
+        viewportWidth: window.innerWidth,
+        left: rect.left,
+        right: rect.right,
+        documentWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      };
+    });
+
+    expect(layout.left).toBeGreaterThanOrEqual(0);
+    expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    expect(layout.documentWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    await expect(page.getByLabel('Логин')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Войти' })).toBeVisible();
+  });
 });

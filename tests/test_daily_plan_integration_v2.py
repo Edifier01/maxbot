@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import sqlite3
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -67,6 +68,64 @@ def test_start_materializes_one_plan_from_current_library(tmp_path, monkeypatch)
     assert {row["rendered_text"] for row in slots} <= {"one", "two", "three"}
 
 
+def test_server_worker_reads_global_library_but_materializes_tenant_plan(
+    tmp_path, monkeypatch
+) -> None:
+    m, _profile, _group = _setup_local_db(tmp_path, monkeypatch)
+    from app.repositories.message_sets import MessageSetRepository
+    from app.tenant import tenant_scope
+
+    global_connection = sqlite3.connect(":memory:")
+    global_connection.row_factory = sqlite3.Row
+    global_connection.executescript(
+        """
+        CREATE TABLE message_pool (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            order_index INTEGER NOT NULL,
+            loaded_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE queue_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            profile_idx INTEGER DEFAULT 0,
+            message_idx INTEGER DEFAULT 0,
+            group_idx INTEGER DEFAULT 0,
+            message_bag TEXT DEFAULT '[]'
+        );
+        INSERT INTO queue_state (id) VALUES (1);
+        """
+    )
+
+    tenant_connection = m._conn()
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
+    monkeypatch.setattr(m, "_conn", lambda: tenant_connection)
+    monkeypatch.setattr(m, "_global_conn", lambda: global_connection)
+
+    with tenant_scope(tenant_id=7, role="user"):
+        assert m._message_library_storage()[1] == "tenant:7"
+        assert m._message_library_storage()[0] is tenant_connection
+        assert m._global_conn() is global_connection
+
+        assert m.save_messages_file(b"global text\n") == 1
+        from app.routes_campaign import _library_available
+
+        assert _library_available([]) is True
+        version_id = MessageSetRepository(global_connection).current("global")[
+            "version_id"
+        ]
+
+        from app.campaign_worker import materialize_daily_plans
+
+        assert materialize_daily_plans() == 1
+
+    with tenant_connection:
+        plan = tenant_connection.execute(
+            "SELECT scope, version_id FROM profile_daily_plans"
+        ).fetchone()
+    assert plan["scope"] == "tenant:7"
+    assert plan["version_id"] == version_id
+
+
 def test_start_worker_materializes_before_recovery_and_preflight(tmp_path, monkeypatch) -> None:
     _m, _profile, _group = _setup_local_db(tmp_path, monkeypatch)
     import app.campaign_worker as campaign_worker
@@ -122,7 +181,7 @@ def test_daily_slot_identity_is_carried_into_operation_and_send_log(
     assert materialize_daily_plans() == 1
     with m._conn() as connection:
         claimed = DailyPlanService(DailyPlanRepository(connection)).claim_next_slot(
-            "local", m._local_now().replace(tzinfo=None)
+            "local", datetime.now(timezone.utc)
         )
         assert hasattr(claimed, "slot_id")
 

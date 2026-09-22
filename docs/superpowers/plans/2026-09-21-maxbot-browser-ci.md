@@ -10,6 +10,15 @@
 
 **Approved spec:** `docs/superpowers/specs/2026-09-21-maxbot-browser-ci-design.md`
 
+## Continuation status (2026-09-22)
+
+The runner, pinned dev-only Playwright dependency, six-job workflow contract,
+base browser matrix, reduced-motion/recovery checks, safe-error checks and
+narrow reflow/contrast contracts are present in the current candidate. A true
+200% browser session, full rendered contrast review, complete loading/
+permission/stale/stop-pending matrix and production browser proof remain
+separate gates; see `docs/audit/ui-review.md`.
+
 ## Global constraints
 
 - Work in the current checkout; preserve all existing tracked and untracked user changes byte-for-byte outside the scoped files.

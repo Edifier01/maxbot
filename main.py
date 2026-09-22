@@ -413,7 +413,17 @@ def get_setting(key: str) -> str:
         if cache_key in _settings_cache:
             return _settings_cache[cache_key]
     conn = _scoped_sqlite_conn()
-    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    try:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key=?", (key,)
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        # Imports and pure helper calls can precede schema bootstrap. Return
+        # the declared default without caching it, so later initialization is
+        # still observed by the same process.
+        if "no such table: settings" not in str(exc):
+            raise
+        return DEFAULTS.get(key, "")
     val = row["value"] if row else DEFAULTS.get(key, "")
     with _settings_cache_lock:
         _settings_cache[cache_key] = val
@@ -577,10 +587,23 @@ def _message_library_storage() -> tuple[sqlite3.Connection, str]:
     return _conn(), f"tenant:{int(tenant_id)}"
 
 
+def _message_library_source_storage() -> tuple[sqlite3.Connection, str]:
+    """Return the authoritative message library storage.
+
+    The legacy server message pool is intentionally global (ADR-007), while
+    campaign plans and slots remain tenant-local. Callers that materialize or
+    consume a plan must therefore keep library reads separate from plan DB
+    writes instead of reusing the tenant-scoped helper above.
+    """
+    if not _is_server_mode():
+        return _conn(), "local"
+    return _global_conn(), "global"
+
+
 def _publish_message_library_version(messages: list[str]) -> None:
     from app.repositories.message_sets import MessageSetRepository
 
-    connection, scope = _message_library_storage()
+    connection, scope = _message_library_source_storage()
     MessageSetRepository(connection).publish(scope, tuple(messages))
 
 

@@ -6,6 +6,10 @@ function jsonHeaders(json = true) {
     function formatApiError(detail) {
       if (!detail) return '';
       if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+        const safeMessage = typeof detail.safe_message === 'string'
+          ? detail.safe_message.trim().slice(0, 300)
+          : '';
+        if (safeMessage) return safeMessage;
         const safe = {
           PROXY_AUTH_FAILED: 'Проверьте учётные данные прокси.',
           PROXY_CONNECT_FAILED: 'Не удалось подключиться через прокси.',

@@ -81,4 +81,96 @@ test.describe('dashboard surface', () => {
     await expect(campaignTab).toBeFocused();
     await expect(campaignTab).toHaveAttribute('aria-selected', 'true');
   });
+
+  test('exposes a recoverable summary error when the dashboard is unavailable', async ({ page, diagnostics }) => {
+    diagnostics.allowResponse('/api/dashboard', [503]);
+    diagnostics.allowConsoleError(/status of 503/);
+    await page.route('**/api/health', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, server_mode: true }),
+    }));
+    await page.route('**/api/auth/restore-session', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    }));
+    await page.route('**/api/auth/me', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        role: 'user',
+        subscription: { active: true },
+      }),
+    }));
+    await page.route('**/api/dashboard', (route) => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: { code: 'SERVER_UNAVAILABLE' } }),
+    }));
+
+    await page.goto('/');
+
+    const summaryError = page.locator('#dashSummaryError');
+    await expect(summaryError).toBeVisible();
+    await expect(summaryError).toHaveAttribute('role', 'alert');
+    await expect(summaryError).toContainText('Сервис временно недоступен');
+  });
+
+  test('renders the server-provided redacted catalogue message', async ({ page, diagnostics }) => {
+    diagnostics.allowResponse('/api/dashboard', [503]);
+    diagnostics.allowConsoleError(/status of 503/);
+    await page.route('**/api/health', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, server_mode: true }),
+    }));
+    await page.route('**/api/auth/restore-session', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    }));
+    await page.route('**/api/auth/me', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ role: 'user', subscription: { active: true } }),
+    }));
+    await page.route('**/api/dashboard', (route) => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        detail: {
+          code: 'SETTINGS_NOT_LOADED',
+          safe_message: 'Настройки ещё не загружены.',
+          recommended_action: 'RELOAD_SETTINGS',
+        },
+      }),
+    }));
+
+    await page.goto('/');
+
+    await expect(page.locator('#dashSummaryError')).toContainText('Настройки ещё не загружены.');
+  });
+
+  test('reflows the dashboard surface at a 200-percent-equivalent CSS viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 195, height: 422 });
+    await page.goto('/');
+
+    const layout = await page.locator('main#main-content').evaluate((main) => {
+      const rect = main.getBoundingClientRect();
+      return {
+        viewportWidth: window.innerWidth,
+        left: rect.left,
+        right: rect.right,
+        documentWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      };
+    });
+
+    expect(layout.left).toBeGreaterThanOrEqual(0);
+    expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    expect(layout.documentWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    await expect(page.locator('#campaign')).toBeVisible();
+    await expect(page.locator('#campaignLog')).toContainText(holdLog);
+  });
 });

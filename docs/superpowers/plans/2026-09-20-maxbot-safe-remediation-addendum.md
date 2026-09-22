@@ -10,6 +10,16 @@
 
 **Spec:** `docs/audit/2026-09-20-maxbot-master-v3-independent-audit.md`; основной документ `C:\Users\Edifi\Documents\MAXBOT_MASTER_V3_EN_2026-09-20.md`, SHA-256 `8c7a57092be519ea5df0379abc6030124d1e099867adbc72a06174027c90392d`.
 
+## Continuation status (2026-09-22)
+
+The supplemental source work for `ENV-00` and `S00..S03` is present in the
+runtime/test candidate `266022fe39a05c978b738565633e714047bc740e`; focused
+local evidence and browser/UI extensions are recorded in the audit files.
+The normative `T00..T33` / 365-case acceptance, independent platform
+authorization, image-CVE metadata review, secret-history ownership review,
+and production/VPS/live-MAX gates remain `NOT RUN` or `BLOCKED` and are not
+marked complete by this continuation.
+
 ## Global Constraints
 
 - `ENV-00` обязан завершиться до первого изменения application code или dependency manifests; system Python не изменяется, все Python packages устанавливаются только в ignored `.venv/`.

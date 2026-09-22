@@ -2,7 +2,12 @@
 
 **Дата:** 2026-09-20
 
-**Проверенный commit:** `0154884cf94d6aeccf65f5390a0f845d783c3c0e`
+**Исторически проверенный commit:** `0154884cf94d6aeccf65f5390a0f845d783c3c0e`
+
+**Текущая continuation-ветка:** runtime/test candidate
+`266022fe39a05c978b738565633e714047bc740e`; актуальный статус и свежая
+проверка описываются в `docs/audit/final-review.md` и
+`docs/audit/verification.md`.
 
 **Итог по коду:** `FIX`
 
@@ -18,7 +23,9 @@
 - размер: 8 022 строки, 63 489 слов, 528 118 байт;
 - заявленный inherited snapshot: `0154884cf94d6aeccf65f5390a0f845d783c3c0e`.
 
-Текущий `HEAD` репозитория равен этому snapshot. Поэтому ссылки Master V3 на исходники относятся к фактически проверенному коду, а не к другой ревизии.
+На дату этого аудита `HEAD` репозитория равнялся этому snapshot. Поэтому
+ссылки Master V3 в исторических разделах относятся к той ревизии, а не к
+текущей continuation-ветке.
 
 Аудит выполнен чтением текущего source code, схем, тестов, lock-файлов, CI/deploy/backup-скриптов и исходников реально установленного `maxapi-python==2.4.0`. Реальные SMS, login, send, join, probe, history, read и reaction не выполнялись. Production/VPS, реальные аккаунты, прокси и сессии не изменялись.
 
@@ -319,3 +326,14 @@ The machine-readable acceptance and verification records are
 `verification/supplemental-acceptance-cases.json` and
 `docs/audit/verification.md`; the baseline and sandbox limitations are in
 `docs/audit/baseline.md`.
+
+## 13. Current Master-source availability correction — 2026-09-21
+
+The canonical standalone Master source is now available locally at
+`/mnt/c/Users/Edifi/Documents/MAXBOT_MASTER_V3_EN_2026-09-20.md`. A fresh
+SHA-256 check returned
+`8c7a57092be519ea5df0379abc6030124d1e099867adbc72a06174027c90392d`, matching
+the plan and the audit reference; a parser counted all `365` case headings.
+This supersedes only the earlier availability note. It does not execute or
+close any case: the normative `T00..T33` waves and the remaining manual/live
+evidence stay `NOT RUN` or `BLOCKED` as recorded in the release gate.

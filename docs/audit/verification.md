@@ -4,7 +4,11 @@ Schema for each evidence row:
 
 `case_id | candidate_sha | command | environment | started_at | exit_code | result | evidence_ref | limitation`
 
-The candidate is the dirty working tree at `0154884cf94d6aeccf65f5390a0f845d783c3c0e`; rows are not commit-bound.
+The original rows below are historical dirty-working-tree evidence. The
+current runtime/test continuation is
+`473eb404f374400323e9a397acb20e2818ed7637`; new rows must bind their command,
+environment, timestamp and result to that exact SHA or clearly identify a
+later documentation-only continuation.
 
 ## Task graph linkage
 
@@ -96,10 +100,10 @@ S05-PG-MODULES-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `python -m p
 S05-E2E-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `python -m pytest -q --tb=short tests/test_e2e_server.py` | writable Python 3.12 CI container plus pinned PostgreSQL 16 | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 4 passed; 35 warnings; no external MAX action.
 S05-DEPENDENCY-CI-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `pip-audit -r requirements.lock`; `pip-audit -r requirements-server.lock` | writable Python 3.12 isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/security-review.md` | Both lockfiles reported no known vulnerabilities.
 S05-SOURCE-CI-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `python -m compileall -q main.py antiban_core.py celery_worker.py app tests static`; exact installed version assertion | writable Python 3.12 isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/baseline.md` | Compile passed; `maxapi-python` is exactly 2.4.1.
-S05-NODE-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `node --check static/js/index.js`; `node --check static/js/admin.js` | Node v24.20.0 | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | Static syntax only; rendered browser gate remains open.
+S05-NODE-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `node --check static/js/index.js`; `node --check static/js/admin.js` | Node v24.20.0 | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | Static syntax only; rendered browser evidence is recorded in the commit-bound rows below.
 S05-PROXY-REGRESSION-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `python -m pytest tests/test_runtime_proxy.py tests/test_campaign_auto_run.py::test_scheduler_tick_skips_expired_subscription tests/test_profile_login.py::test_profile_login_happy_path tests/test_worker_tenant_runtime.py::test_worker_start_captures_tenant_context -q` | writable Python 3.12 isolated CI container | 2026-09-21 | 0 | PASS | `app/runtime.py` | Proxy state no longer leaks between test/module reload boundaries; included in full CI run.
 
-## Current browser CI preparation
+## Historical browser CI preparation
 
 These rows are dirty-working-tree evidence after adding the dev-only
 Playwright runner and the independent GitHub Actions job. They do not replace
@@ -110,3 +114,99 @@ BROWSER-NPM-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `npm install --
 BROWSER-HEALTH-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `curl -fsS http://127.0.0.1:8765/api/health` in bounded app fixture | isolated operator runner, temporary SQLite and recovery hold | 2026-09-21 | 0 | PASS | `app/recovery_hold.py`, `docs/audit/ui-review.md` | `ok=true`, `db_ok=true`, `recovery_hold=true`, `max_external_actions=held`.
 BROWSER-MATRIX-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `npm run browser:e2e` with local fixture app | isolated operator runner with real Chromium, regular Playwright fallback | 2026-09-21 | 0 | PASS | `tests/browser/`, `playwright.config.js` | 6 passed across 390x844, 768x1024 and 1440x1000; auth/dashboard identity, focus, held state, console/request/network guard covered; no external MAX host.
 BROWSER-WORKFLOW-CURRENT | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | checked-in `.github/workflows/ci.yml` `browser-e2e` job | source/static inspection; hosted runner not invoked | 2026-09-21 | — | PENDING | `.github/workflows/ci.yml` | Pinned action SHAs, Node 24, Chromium install, bounded health wait and failure artifacts are present; GitHub-hosted execution remains pending.
+
+## Current commit-bound browser and operator evidence
+
+The dirty-worktree rows above are retained as historical records. The
+following rows are the current commit-bound evidence and supersede the
+previous `BROWSER-WORKFLOW-CURRENT` pending row.
+
+BROWSER-PR-HOSTED-CURRENT | 58da768710d761d0fbbae54581086b5073c9e289 | GitHub Actions run `35569486524` `browser-e2e` job | GitHub-hosted `ubuntu-latest` | 2026-09-21 | 0 | PASS | `https://github.com/Edifier01/maxbot/actions/runs/35569486524` | Chromium installed; local app health passed; rendered matrix reported 6 passed across 390x844, 768x1024 and 1440x1000; diagnostics artifact uploaded; no provider traffic.
+BROWSER-MAIN-HOSTED-CURRENT | 4d2aa28930092e8abb2917bd004ca7a2b21c07a3 | GitHub Actions run `35571862150` push CI | GitHub-hosted `ubuntu-latest` | 2026-09-21 | 0 | PASS | `https://github.com/Edifier01/maxbot/actions/runs/35571862150` | Post-merge `main` run passed all six jobs: browser-e2e, server-smoke, server-e2e, compose-config, dependency-audit and backup-restore-smoke.
+ENV-00-DOCKER-OPERATOR-RERUN | 0154884cf94d6aeccf65f5390a0f845d783c3c0e | `docker version --format '{{.Server.Version}}'` | ordinary operator terminal from dirty primary checkout | 2026-09-21 | 0 | PASS | operator terminal output | Docker Server `29.8.0`; this is environment evidence, not a clean commit-bound check; no production service or provider action.
+S05-LOCAL-FULL-SANDBOX-CURRENT | 58da768710d761d0fbbae54581086b5073c9e289 | `env MAX_TEST=1 MAX_SERVER_MODE=1 JWT_SECRET=... python -m pytest tests/ -vv --maxfail=1 --durations=20` | restricted sandbox Python 3.12.3 | 2026-09-21 | 130 | BLOCKED | `docs/audit/ui-review.md` | Collection found 344 tests; five passed, then `test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails` blocked. Reproduction narrowed the boundary to filesystem `mkdir`/`rename` inside `asyncio.to_thread()`; hosted full regression is the writable-environment evidence.
+
+The overall release verdict remains `FIX`: hosted browser/full regression and
+the current global-upload/tenant-plan integration are evidenced, but normative
+Master acceptance, independent platform authorization, secret-history/CVE
+review and production gates remain open.
+
+## Current production-readiness candidate evidence
+
+These rows bind the latest local source candidate and supersede older dirty-
+worktree summaries where the same gate was rerun. They do not authorize live
+MAX, provider, VPS or production actions.
+
+S05-CANDIDATE-FOCUSED | e4837a1fe997d63704536f01685e56b9a97caf99 | combined fake/SQLite Master safety and integration tests plus browser contract | isolated candidate with Python 3.12.3 venv | 2026-09-21 | 0 | PASS | `tests/` focused matrix | 227 passed; schema-bootstrap regression fixed; no MAX/provider traffic.
+S05-CANDIDATE-FULL | e4837a1fe997d63704536f01685e56b9a97caf99 | `docker run --rm -v /tmp/maxbot-production-candidate:/workspace -w /workspace python:3.12-slim ... python -m pytest tests/ -q --tb=short` | writable Python 3.12 container | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 497 passed, 19 planned PostgreSQL skips in 17.79s; no external MAX action.
+S05-CANDIDATE-PG | e4837a1fe997d63704536f01685e56b9a97caf99 | dedicated PostgreSQL process for `tests/test_auth_remember_me.py tests/test_cross_tenant_api.py tests/test_register_rollback.py tests/test_admin_impersonation_campaign.py tests/test_db_pg_helpers.py` | pinned PostgreSQL 16 isolated Compose network | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 19 passed; 27 warnings; no external MAX action.
+S05-CANDIDATE-E2E | e4837a1fe997d63704536f01685e56b9a97caf99 | dedicated PostgreSQL process for `tests/test_e2e_server.py` | pinned PostgreSQL 16 isolated Compose network | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 4 passed; 35 warnings; no external MAX action.
+S05-CANDIDATE-SOURCE | e4837a1fe997d63704536f01685e56b9a97caf99 | compileall, Node syntax, pip check, JSON validation, `git diff --check` | isolated candidate | 2026-09-21 | 0 | PASS | source/static/config gates | All commands exited 0.
+S05-CANDIDATE-DEPENDENCY | e4837a1fe997d63704536f01685e56b9a97caf99 | `pip-audit -r requirements.lock`; `pip-audit -r requirements-server.lock` | network-enabled audit runner | 2026-09-21 | 0 | PASS | `docs/audit/security-review.md` | Both reported no known vulnerabilities; no dependency changed.
+S05-CANDIDATE-IMAGE | e4837a1fe997d63704536f01685e56b9a97caf99 | `docker compose --env-file /dev/null build app` | isolated Docker builder | 2026-09-21 | 0 | PASS | `Dockerfile` | Candidate image built locally; no deploy.
+S05-CANDIDATE-DR | e4837a1fe997d63704536f01685e56b9a97caf99 | `COMPOSE_PROJECT_NAME=maxbot-production-candidate-ci bash scripts/dr-smoke.sh` | isolated Compose project | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | Backup/restore passed for PostgreSQL and data volume; health retained recovery hold; fixture resources were removed.
+S05-CANDIDATE-BROWSER | e4837a1fe997d63704536f01685e56b9a97caf99 | `npm run browser:e2e` with bounded loopback fixture app | regular Playwright + Chromium, loopback only | 2026-09-21 | 0 | PASS | `docs/audit/ui-review.md` | 6 passed (2.1s) across 390x844, 768x1024 and 1440x1000; no external host.
+S05-CANDIDATE-IMAGE-CVE | e4837a1fe997d63704536f01685e56b9a97caf99 | Docker Scout image scan | local image scanner boundary | 2026-09-21 | — | BLOCKED | `docs/audit/security-review.md` | Scanner review rejected because image/metadata may be sent to an external service; no export performed.
+S05-CANDIDATE-MASTER | e4837a1fe997d63704536f01685e56b9a97caf99 | normative Master `T00..T33` acceptance | independent review boundary | 2026-09-21 | — | NOT RUN | `docs/audit/final-review.md` | Supplemental tests do not replace normative acceptance or legacy worker/HTTP integration review.
+
+S05-CANDIDATE-BROWSER-UX | 1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2 | `npm run browser:e2e -- --reporter=line` with bounded loopback candidate app | regular Playwright + Chromium, temporary MAX_TEST fixture | 2026-09-21 | 0 | PASS | `docs/audit/ui-review.md` | 12 passed in 3.5s across 390x844, 768x1024 and 1440x1000; reduced-motion and dashboard 503 `role=alert` covered; no external host.
+
+S05-CANDIDATE-UX-FULL | 1d50bec847d4e41c7be6b9ed13e8fb681c2a7ee2 | `timeout 600s docker run --rm -v /tmp/maxbot-production-candidate:/workspace -w /workspace python:3.12-slim ... python -m pytest tests/ -q --tb=short` | writable Python 3.12 isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 497 passed, 19 planned PostgreSQL skips in 17.10s after the UX extension; no external MAX action.
+
+S05-CANDIDATE-INTEGRATION-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | focused global-upload/library/tenant-plan worker and command regression | Python 3.12 local SQLite/fake gateway | 2026-09-21 | 0 | PASS | `tests/test_daily_plan_integration_v2.py` | 57 passed; global message library remains global while daily plans/slots use tenant scope; no external MAX action.
+S05-CANDIDATE-FULL-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | writable Python 3.12 container `python -m pytest tests/ -q --tb=short` | isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 498 passed, 19 planned PostgreSQL skips in 17.55s; no external MAX action.
+S05-CANDIDATE-PG-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | dedicated PG module and E2E process | pinned PostgreSQL 16 isolated Compose fixture | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 23 passed; 62 warnings; temporary PG resources removed; no external MAX action.
+S05-CANDIDATE-MASTER-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | normative Master `T00..T33` and 365 acceptance cases | independent review boundary | 2026-09-21 | — | NOT RUN | `docs/audit/final-review.md` | Focused integration evidence does not replace the normative Master waves; no release GO.
+S05-CANDIDATE-BROWSER-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | `npm run browser:e2e -- --reporter=line` with bounded loopback candidate app | regular Playwright + Chromium, temporary MAX_TEST fixture | 2026-09-21 | 0 | PASS | `docs/audit/ui-review.md` | 12 passed in 3.2s across 390x844, 768x1024 and 1440x1000; no external host.
+S05-CANDIDATE-DEPENDENCY-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | `pip-audit -r requirements.lock`; `pip-audit -r requirements-server.lock` | network-enabled audit runner | 2026-09-21 | 0 | PASS | `docs/audit/security-review.md` | Both lockfiles reported `No known vulnerabilities found`; no dependency changed.
+S05-CANDIDATE-IMAGE-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | fixture-env `docker compose --env-file /dev/null build app` | isolated Docker builder | 2026-09-21 | 0 | PASS | `Dockerfile` | Current candidate image built locally; no deploy or external MAX action.
+S05-CANDIDATE-DR-FINAL | 36d27c3022c6e640de28ca5dbac5fbeb58d54ace | `COMPOSE_PROJECT_NAME=maxbot-production-candidate-dr ... bash scripts/dr-smoke.sh` with fixture secrets and `DOMAIN=example.com` | isolated Compose project | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | PostgreSQL/SQLite backup-restore, stack health and `verify_deploy.sh` passed; health reported `max_external_actions=held` and `recovery_hold=true`; all temporary containers, volumes and network were removed.
+MASTER-SOURCE-CURRENT | 3c40b659c2cdedf97adf685049bae09b931c57c5 | `sha256sum /mnt/c/Users/Edifi/Documents/MAXBOT_MASTER_V3_EN_2026-09-20.md`; deterministic parser of `### ...-C<number>` headings | local read-only source review | 2026-09-21 | 0 | PASS | `docs/audit/2026-09-20-maxbot-master-v3-independent-audit.md` | Expected SHA-256 `8c7a57092be519ea5df0379abc6030124d1e099867adbc72a06174027c90392d`; `365` case headings counted. Availability/provenance only; cases remain NOT RUN until their defined assertions execute.
+S05-CANDIDATE-ERROR-FINAL | c5f52980dd7297d97ad440efe8a0fdf94997fb1b | `python -m pytest tests/test_error_taxonomy_v2.py -q` plus `BASE_URL=... CI=1 npm run browser:e2e -- --reporter=line` | writable Python 3.12 fixture and loopback Chromium | 2026-09-21 | 0 | PASS | `docs/audit/ui-review.md` | Python error contract `7 passed`; browser matrix `15 passed` across 390x844, 768x1024 and 1440x1000; redacted `safe_message` preserved for a code absent from legacy maps.
+S05-CANDIDATE-FULL-UI-FINAL | c5f52980dd7297d97ad440efe8a0fdf94997fb1b | writable Python 3.12 container `python -m pytest tests/ -q --tb=short` | isolated CI container | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 498 passed, 19 planned PostgreSQL skips in 15.68s; no external MAX action.
+S05-CANDIDATE-PG-UI-FINAL | c5f52980dd7297d97ad440efe8a0fdf94997fb1b | dedicated PG module and E2E process | pinned PostgreSQL 16 isolated Compose fixture | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 23 passed; 62 warnings; temporary PG container, volume and network removed; no external MAX action.
+S05-CANDIDATE-IMAGE-UI-FINAL | c5f52980dd7297d97ad440efe8a0fdf94997fb1b | fixture-env `docker compose --env-file /dev/null build app` | isolated Docker builder | 2026-09-21 | 0 | PASS | `Dockerfile` | Candidate image rebuilt locally after the frontend fix; no deploy or external MAX action.
+S05-CANDIDATE-MASTER-UI-FINAL | c5f52980dd7297d97ad440efe8a0fdf94997fb1b | normative Master `T00..T33` and 365 acceptance cases | independent review boundary | 2026-09-21 | — | NOT RUN | `docs/audit/final-review.md` | Source checksum and 365-case inventory are verified, but defined case assertions and broader HTTP consumer waves remain unexecuted.
+
+S05-CANDIDATE-UI-CONTRAST-REFLOW-FINAL | 24b75c3fd87385ff1af7e2284d581a9a0b558215 | `.venv/bin/python -m pytest tests/test_ui_assets_contract.py tests/test_ui_review_contract.py -q` | local Python 3.12 candidate environment | 2026-09-21 | 0 | PASS | `tests/test_ui_assets_contract.py`, `docs/audit/ui-review.md` | 4 passed; semantic foreground tokens meet WCAG AA against both panel backgrounds; true full rendered-state contrast review remains open.
+S05-CANDIDATE-BROWSER-REFLOW-FINAL | 24b75c3fd87385ff1af7e2284d581a9a0b558215 | `BASE_URL=http://127.0.0.1:18765 CI=1 npm run browser:e2e -- --reporter=line` with temporary loopback app fixture | regular Playwright + Chromium, no external origin | 2026-09-21 | 0 | PASS | `tests/browser/`, `docs/audit/ui-review.md` | 21 passed in 9.2s across 390x844, 768x1024 and 1440x1000; 195x422 200%-equivalent reflow, keyboard, recovery-hold and safe-error checks passed; no external MAX/provider traffic.
+S05-CANDIDATE-FULL-UI-REFLOW-FINAL | 24b75c3fd87385ff1af7e2284d581a9a0b558215 | `timeout 600s docker run --rm ... python:3.12-slim python -m pytest tests/ -q --tb=short` with read-only installed environment mount | isolated Python 3.12 CI container | 2026-09-21 | 0 | PASS | `docs/audit/performance.md` | 499 passed, 19 planned PostgreSQL skips in 16.09s; new UI contrast contract included; no external MAX action.
+
+The source candidate is technically green for the recorded local gates, but
+the release verdict remains `FIX` until independent platform authorization,
+Master acceptance, image CVE review, secret-history owner review and
+production verification are separately closed.
+
+## Current local continuation rerun (2026-09-22)
+
+These rows are bound to runtime/test candidate
+`266022fe39a05c978b738565633e714047bc740e`. The documentation/configuration
+reconciliation was present as a working-tree continuation during the relevant
+checks; no runtime or test source changed after this SHA.
+
+CURRENT-FINAL-FOCUSED | 266022fe39a05c978b738565633e714047bc740e | combined platform, gateway, recovery, campaign, daily-plan, UI, security and policy contract matrix | local Python 3.12.3 SQLite/fake-gateway environment | 2026-09-22T19:06:09Z | 0 | PASS | final focused matrix | 150 passed; no live MAX/provider action.
+CURRENT-FOCUSED-INTEGRATION | 266022fe39a05c978b738565633e714047bc740e | `python -m pytest -q tests/test_daily_plan_integration_v2.py tests/test_campaign_operation_integration_v2.py tests/test_operation_ledger_v2.py tests/test_campaign_commands_v2.py tests/test_campaign_auto_run.py tests/test_error_taxonomy_v2.py tests/test_ui_review_contract.py tests/test_ui_assets_contract.py tests/test_browser_ci_contract.py` | local Python 3.12.3 SQLite/fake-gateway environment | 2026-09-22T18:20:00Z | 0 | PASS | focused integration/UI matrix | 71 passed; no live MAX/provider action.
+CURRENT-POLICY-CONTRACT | 266022fe39a05c978b738565633e714047bc740e | `python -m pytest -q tests/test_final_review_contract.py tests/test_security_regressions_v2.py tests/test_ui_review_contract.py tests/test_ui_assets_contract.py tests/test_saas_ux_static.py tests/test_no_artificial_presence.py tests/test_admin_tenant_settings.py tests/test_role_plan_percent.py tests/test_global_pacing_settings.py` | local Python 3.12.3 policy/docs fixture | 2026-09-22T18:30:00Z | 0 | PASS | policy/runtime documentation contracts | 50 passed; fixed worker/timezone/role/presence contract remains local-only.
+CURRENT-SOURCE-STATIC | 266022fe39a05c978b738565633e714047bc740e | compileall, Node syntax, shell syntax, JSON validation, `pip check`, `git diff --check` | local Python 3.12.3/Node/Docker Compose CLI | 2026-09-22T18:45:00Z | 0 | PASS | source/static/config gates | Static commands and `docker compose config -q` passed; Docker daemon was not contacted by Compose config validation.
+CURRENT-COLLECT | 266022fe39a05c978b738565633e714047bc740e | `pytest tests/ --collect-only -q` | local Python 3.12.3 sandbox | 2026-09-22T18:45:00Z | 0 | PASS | current test tree | 518 tests collected; collection is not full execution evidence.
+CURRENT-FULL-SANDBOX | 266022fe39a05c978b738565633e714047bc740e | `timeout 90s env MAX_TEST=1 MAX_SERVER_MODE=1 JWT_SECRET=... pytest tests/ -q --tb=short --maxfail=1` | restricted sandbox Python 3.12.3 | 2026-09-22T18:47:00Z | 124 | BLOCKED | `tests/test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails` | The first 10 tests passed, then filesystem mutation inside `asyncio.to_thread()` did not return; Docker daemon access was also denied. No test was skipped silently.
+CURRENT-BROWSER-SANDBOX | 266022fe39a05c978b738565633e714047bc740e | `npm run browser:e2e -- --reporter=line` against loopback fixture | Chromium in restricted sandbox | 2026-09-22T18:52:00Z | 1 | BLOCKED | `tests/browser/`, Playwright error context | 21 tests could not launch Chromium because `sandbox_host_linux.cc` returned `Operation not permitted`; no UI assertion was converted to PASS.
+CURRENT-DOCKER-DAEMON | 266022fe39a05c978b738565633e714047bc740e | `docker info --format '{{.ServerVersion}}'` | local Docker socket | 2026-09-22T18:55:00Z | 1 | BLOCKED | Docker daemon boundary | Permission denied on `/var/run/docker.sock`; image build, DR smoke and image-CVE scan were not rerun here.
+
+## Current extended local rerun (2026-09-22)
+
+The restricted rows immediately above are retained as environment-specific
+evidence. The following rows were executed in an extended writable local
+runner against the runtime/test tree at
+`473eb404f374400323e9a397acb20e2818ed7637`; the subsequent documentation-only
+reconciliation does not alter runtime or test source.
+
+CURRENT-EXTENDED-FULL | 473eb404f374400323e9a397acb20e2818ed7637 | `timeout 120s env MAX_TEST=1 MAX_SERVER_MODE=1 JWT_SECRET=... python -m pytest tests/ -q --tb=short --maxfail=1` | extended writable local Python 3.12.3 runner | 2026-09-22 | 0 | PASS | `tests/` | 499 passed, 19 skipped in 19.23s; PostgreSQL skips are the planned SQLite-suite skips; no live MAX/provider action.
+CURRENT-EXTENDED-BROWSER | 473eb404f374400323e9a397acb20e2818ed7637 | `BASE_URL=http://127.0.0.1:18765 npm run browser:e2e -- --reporter=line` against bounded loopback fixture | extended local Chromium runner, temporary MAX_TEST fixture | 2026-09-22 | 0 | PASS | `tests/browser/`, `playwright.config.js` | 21 passed in 5.3s across 390x844, 768x1024 and 1440x1000; no external MAX/provider traffic.
+CURRENT-EXTENDED-SOURCE | 473eb404f374400323e9a397acb20e2818ed7637 | compileall, Node syntax, shell syntax, JSON validation, `pip check`, `git diff --check`, fixture `docker compose config -q` | extended local Python 3.12.3/Node/Docker Compose CLI | 2026-09-22 | 0 | PASS | source/static/config gates | All commands exited 0; Compose config validation did not contact the Docker daemon.
+
+The release verdict remains `FIX/PARTIAL`: automated local regression and UI
+evidence are now green, while normative Master acceptance, platform
+authorization, image-CVE transfer review, secret-history owner review,
+production/VPS verification and real MAX/provider delivery remain
+`NOT RUN` or `BLOCKED`.

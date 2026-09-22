@@ -1,4 +1,4 @@
-# ADR 005: Admin-only per-tenant worker pool size
+# ADR 005: Fixed per-tenant campaign owner
 
 **Status:** Accepted (2026-08-07)  
 **Feature:** FEATURE-SAAS-UX-2026  
@@ -6,26 +6,26 @@
 
 ## Context
 
-`worker_pool_size` controls parallel send workers within one tenant. Default `1` is safest for anti-ban (ADR 002). Tenants should not self-raise parallelism; only operators/admins may tune per institution.
+`worker_pool_size` was previously considered an admin-tunable parallelism
+setting. The production-safety remediation fixed the campaign owner to one
+worker per tenant so that the operation ledger, Stop fence and recovery hold
+have one unambiguous owner.
 
 ## Decision
 
-1. Default `worker_pool_size = 1` in `main.DEFAULTS` for all tenants.
-2. **Admin-only** per-tenant API:
-   - `GET /api/admin/tenants/{tenant_id}/settings` → `{ worker_pool_size }`
-   - `PUT /api/admin/tenants/{tenant_id}/settings` → `{ worker_pool_size: 1..32 }`
-3. Regular users: `worker_pool_size` **stripped** on `PUT /api/settings`.
-4. Admins may still set global pool via `PUT /api/settings` when in admin context.
-5. If tenant worker is running and size changes → stop + restart worker in `tenant_scope`.
+1. `worker_pool_size = 1` is fixed in `main.DEFAULTS` and the runtime pool-size policy.
+2. Admin and tenant settings APIs expose the value for observability only and accept only `1`.
+3. `.env` and Compose examples must pass `1`; they do not provide a parallelism override.
+4. Celery remains trigger-only and does not create a second campaign owner.
 
 ## Consequences
 
-- Parallel workers remain isolated per tenant via `REGISTRY.worker_for(tenant_id)` (ADR 001).
-- Admin UI (Round 3) consumes these endpoints; tenant Settings tab should hide pool control for users.
-- Raising pool size increases ban risk — admin UI should surface ADR 002 guidance.
+- Each tenant has one `REGISTRY.worker_for(tenant_id)` campaign owner (ADR 001).
+- The settings UI does not expose a pool-size control; the fixed value can be shown as policy state.
+- Removing parallelism avoids split-brain ledger ownership and makes recovery/stop behavior auditable.
 
 ## Implementation
 
-- `app/routes_admin.py` — GET/PUT tenant settings
-- `app/routes_settings.py` — strip for non-admin
-- `tests/test_admin_tenant_settings.py`, e2e in `test_e2e_server.py`
+- `app/routes_admin.py` — fixed `Literal[1]` tenant setting
+- `app/routes_settings.py` — fixed policy fan-out
+- `tests/test_admin_tenant_settings.py`, `tests/test_no_artificial_presence.py`, e2e in `test_e2e_server.py`
