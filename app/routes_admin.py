@@ -33,7 +33,7 @@ def _bulk_set_groups_active(active: int) -> dict:
     skipped: list[dict[str, object]] = []
     for row in db_pg.list_tenants_with_users():
         tid = int(row["tenant_id"])
-        db_path = app_main.ROOT / "data" / "tenants" / str(tid) / "app.db"
+        db_path = app_main._resolve_data_root() / "tenants" / str(tid) / "app.db"
         if not db_path.is_file():
             skipped.append({"tenant_id": tid, "reason": "no_db"})
             continue
@@ -197,7 +197,7 @@ async def revoke_subscription(tenant_id: int):
 
 
 def _tenant_sqlite_dir(tenant_id: int) -> Path:
-    return app_main.ROOT / "data" / "tenants" / str(tenant_id)
+    return app_main._resolve_data_root() / "tenants" / str(tenant_id)
 
 
 def _evict_tenant_sqlite_conn(data_dir: Path) -> None:

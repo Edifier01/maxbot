@@ -11,6 +11,8 @@ from typing import Any
 _redis_client = None
 _redis_failed = False
 _last_redis_retry: float = 0.0
+MEMORY_MAX_KEYS = 4096
+_last_memory_prune: float = 0.0
 
 
 def client_ip(request: Any) -> str:
@@ -96,9 +98,31 @@ def check_auth_rate_limit(key: str, limit: int, window: float) -> bool:
 _memory: dict[str, list[float]] = defaultdict(list)
 
 
+def _prune_memory(now: float) -> None:
+    global _last_memory_prune
+    if now - _last_memory_prune < 1.0 and len(_memory) <= MEMORY_MAX_KEYS:
+        return
+    _last_memory_prune = now
+    expired = [
+        key for key, bucket in _memory.items()
+        if not bucket or now - bucket[-1] >= auth_rate_limit_config()[1]
+    ]
+    for key in expired:
+        _memory.pop(key, None)
+    overflow = len(_memory) - MEMORY_MAX_KEYS
+    if overflow > 0:
+        oldest = sorted(_memory.items(), key=lambda item: item[1][-1])
+        for key, _bucket in oldest[:overflow]:
+            _memory.pop(key, None)
+
+
 def _memory_check(key: str, limit: int, window: float) -> bool:
     now = time.monotonic()
-    bucket = [t for t in _memory[key] if now - t < window]
+    _prune_memory(now)
+    if key not in _memory and len(_memory) >= MEMORY_MAX_KEYS:
+        oldest_key = min(_memory, key=lambda item: _memory[item][-1])
+        _memory.pop(oldest_key, None)
+    bucket = [t for t in _memory.get(key, []) if now - t < window]
     if len(bucket) >= limit:
         _memory[key] = bucket
         return False
@@ -108,12 +132,20 @@ def _memory_check(key: str, limit: int, window: float) -> bool:
 
 
 def reset_memory_limits() -> None:
+    global _last_memory_prune
     _memory.clear()
+    _last_memory_prune = 0.0
+
+
+def memory_bucket_count() -> int:
+    _prune_memory(time.monotonic())
+    return len(_memory)
 
 
 def reset_for_tests() -> None:
-    global _redis_client, _redis_failed, _last_redis_retry
+    global _redis_client, _redis_failed, _last_redis_retry, _last_memory_prune
     _redis_client = None
     _redis_failed = False
     _last_redis_retry = 0.0
     _memory.clear()
+    _last_memory_prune = 0.0

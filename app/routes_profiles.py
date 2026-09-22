@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
-import antiban_core
-
 from fastapi import APIRouter, HTTPException
 
 from app.routes_models import CodeIn, ProfilePatchIn
 from app.runtime import main as m
+from app.services.errors import classify_exception, redact_error
 from app.tenant import (
     clear_context,
     is_cabinet_user,
@@ -22,6 +21,17 @@ from app.tenant import (
 router = APIRouter(tags=["profiles"])
 
 _CABINET_DENIED = "Недоступно в личном кабинете"
+
+
+async def _run_login_attempt(
+    profile_id: int,
+    phone: str,
+    *,
+    fresh: bool,
+    group_id: int | None,
+) -> int:
+    """Run exactly the user-selected login mode once."""
+    return await m._login_max(profile_id, phone, fresh=fresh, group_id=group_id)
 
 
 @router.get("/api/profiles")
@@ -160,19 +170,11 @@ async def login_profile(
         if ctx_snap is not None:
             restore_context(ctx_snap)
         try:
-            me_id = None
-            try:
-                me_id = await m._login_max(
-                    profile_id, p["phone"], fresh=fresh, group_id=group_id
-                )
-            except Exception:
-                if not fresh:
-                    m.append_log(f"Профиль #{profile_id}: сессия не подошла, повтор по SMS…")
-                    me_id = await m._login_max(
-                        profile_id, p["phone"], fresh=True, group_id=group_id
-                    )
-                else:
-                    raise
+            # A saved-session failure is not proof that its token is invalid.
+            # Fresh login is an explicit user action (`fresh=true`) only.
+            me_id = await _run_login_attempt(
+                profile_id, p["phone"], fresh=fresh, group_id=group_id
+            )
             with m._conn() as c:
                 c.execute(
                     "UPDATE profiles SET status=?, last_error='' WHERE id=?",
@@ -182,8 +184,11 @@ async def login_profile(
             m._set_auth_step(profile_id, "idle")
             m.append_log(f"Профиль #{profile_id} авторизован (id={me_id})")
         except Exception as e:
-            err = str(e)
-            if antiban_core.is_ban_error(err):
+            info = redact_error(
+                classify_exception(e, source="max", stage="login", outcome="rejected")
+            )
+            err = info.safe_message
+            if info.code == "MAX_ACCOUNT_BANNED":
                 with m._conn() as c:
                     c.execute(
                         "UPDATE profiles SET status=?, last_error=? WHERE id=?",
@@ -237,8 +242,8 @@ async def submit_password(profile_id: int, body: CodeIn):
     sess = m._auth_sessions.get(m._auth_session_key(profile_id))
     if not sess:
         raise HTTPException(404, "Сначала нажмите «Войти»")
-    code = body.code.strip()
-    if not code:
+    code = body.code
+    if not code or not code.strip():
         raise HTTPException(400, "Введите облачный пароль")
     await sess["pwd_q"].put(code)
     m._set_auth_step(profile_id, "verifying_password")
@@ -255,5 +260,3 @@ async def disable_profile(profile_id: int):
             (m.ProfileStatus.DISABLED, profile_id),
         )
     return {"ok": True}
-
-

@@ -186,14 +186,18 @@ def _admin_save_global_body() -> str:
 
 
 def test_admin_global_pacing_form_covers_allowlist():
-    from app.settings_scope import GLOBAL_PACING_NEVER_COPY, GLOBAL_PACING_SETTING_KEYS
+    from app.settings_scope import (
+        GLOBAL_PACING_LEGACY_INACTIVE,
+        GLOBAL_PACING_NEVER_COPY,
+        GLOBAL_PACING_SETTING_KEYS,
+    )
 
     assert "windowsWeekday" in ADMIN
     assert "human_rhythm" in ADMIN_ALL
-    assert "presenceOn" in ADMIN
+    assert "Искусственное присутствие отключено политикой безопасности" in ADMIN
     assert "circuitMins" in ADMIN
     assert "send_windows_weekday" in ADMIN_JS
-    assert "human_presence_enabled" in ADMIN_JS
+    assert "human_presence_enabled" not in ADMIN_JS
     assert "circuit_break_minutes" in ADMIN_JS
 
     body = _admin_save_global_body()
@@ -211,6 +215,8 @@ def test_admin_global_pacing_form_covers_allowlist():
     for key in fixed_keys:
         assert key not in body, key
     for key in GLOBAL_PACING_NEVER_COPY:
+        assert key not in body, key
+    for key in GLOBAL_PACING_LEGACY_INACTIVE:
         assert key not in body, key
     assert "worker_pool_size" not in body
     assert "worker_pool_size" not in ADMIN_JS

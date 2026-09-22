@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from pathlib import Path
 from urllib.parse import urlsplit
 
 MAX_SERVER_MODE = os.environ.get("MAX_SERVER_MODE", "").strip().lower() in (
@@ -23,6 +24,22 @@ ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip().lower()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
 INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "").strip()
+
+
+def platform_authorization_file() -> Path | None:
+    """Return the configured authorization path without reading it at import time."""
+    raw = os.environ.get("MAX_PLATFORM_AUTHORIZATION_FILE", "").strip()
+    return Path(raw) if raw else None
+
+
+def recovery_hold_file() -> Path | None:
+    """Return the external recovery-control path without reading it at import time."""
+    raw = os.environ.get("MAX_RECOVERY_HOLD_FILE", "").strip()
+    if raw:
+        return Path(raw)
+    if is_server_mode():
+        return Path("/app/control/recovery-hold.json")
+    return None
 
 
 def webhook_url_allowed(value: str) -> bool:

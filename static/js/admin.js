@@ -5,11 +5,23 @@ function jsonHeaders(json = true) {
     }
     function formatApiError(detail) {
       if (!detail) return '';
+      if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+        const safe = {
+          PROXY_AUTH_FAILED: 'Проверьте учётные данные прокси.',
+          PROXY_CONNECT_FAILED: 'Не удалось подключиться через прокси.',
+          MAX_ACCOUNT_BANNED: 'Аккаунт MAX заблокирован. Отправка остановлена.',
+          SEND_OUTCOME_UNKNOWN: 'Результат действия неизвестен. Сначала выполните сверку.',
+          NETWORK_UNAVAILABLE: 'Сеть недоступна. Проверьте соединение.',
+          UNCLASSIFIED: 'Операция не выполнена. Требуется проверка.',
+        };
+        if (safe[detail.code]) return safe[detail.code];
+        return 'Операция не выполнена.';
+      }
       if (typeof detail === 'string') return detail;
       if (Array.isArray(detail)) {
-        return detail.map(d => (d && d.msg) ? d.msg : JSON.stringify(d)).join('; ');
+        return detail.map(d => (d && d.msg) ? d.msg : 'Некорректный ввод').join('; ');
       }
-      return String(detail);
+      return 'Операция не выполнена.';
     }
     const ruDateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short' });
     function formatAdminDate(iso) {
@@ -214,12 +226,6 @@ function jsonHeaders(json = true) {
       document.getElementById('breakMax').value = s.break_max_sec || '1200';
       document.getElementById('jitterMorning').value = s.jitter_morning_percent || '55';
       document.getElementById('jitterEvening').value = s.jitter_evening_percent || '35';
-      document.getElementById('presenceOn').checked = String(s.human_presence_enabled || '1') === '1';
-      document.getElementById('presHist').value = s.presence_history_chance || '70';
-      document.getElementById('presRead').value = s.presence_read_chance || '40';
-      document.getElementById('presReact').value = s.presence_react_chance || '12';
-      document.getElementById('presReactions').value = s.presence_reactions || '👍,❤️,🔥,😂';
-      document.getElementById('presIdle').value = s.presence_idle_chance || '5';
       document.getElementById('textsOn').checked = String(s.human_texts_enabled || '1') === '1';
       document.getElementById('dedupeOn').checked = String(s.text_dedupe_enabled || '1') === '1';
       document.getElementById('lenVarietyOn').checked = String(s.text_length_variety || '1') === '1';
@@ -265,12 +271,6 @@ function jsonHeaders(json = true) {
         break_max_sec: +document.getElementById('breakMax').value,
         jitter_morning_percent: +document.getElementById('jitterMorning').value,
         jitter_evening_percent: +document.getElementById('jitterEvening').value,
-        human_presence_enabled: document.getElementById('presenceOn').checked ? 1 : 0,
-        presence_history_chance: +document.getElementById('presHist').value,
-        presence_read_chance: +document.getElementById('presRead').value,
-        presence_react_chance: +document.getElementById('presReact').value,
-        presence_reactions: document.getElementById('presReactions').value.trim(),
-        presence_idle_chance: +document.getElementById('presIdle').value,
         human_texts_enabled: document.getElementById('textsOn').checked ? 1 : 0,
         text_dedupe_enabled: document.getElementById('dedupeOn').checked ? 1 : 0,
         text_length_variety: document.getElementById('lenVarietyOn').checked ? 1 : 0,

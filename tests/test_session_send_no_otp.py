@@ -4,10 +4,39 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from app.platform_policy import AuthorizationRecord, MaxAction, MaxTransport
+
+
+def _fixture_authorization_record() -> AuthorizationRecord:
+    now = datetime.now(UTC)
+    return AuthorizationRecord(
+        schema_version=1,
+        reference="fixture-session-runtime",
+        transport=MaxTransport.AUTHORIZED_USER_SESSION,
+        allowed_actions=frozenset({MaxAction.CONNECT}),
+        valid_from=now - timedelta(minutes=1),
+        valid_until=now + timedelta(minutes=5),
+    )
+
+
+def _install_fake_runtime(m, monkeypatch) -> None:
+    monkeypatch.setattr(
+        m,
+        "_platform_authorization_record",
+        _fixture_authorization_record,
+    )
+    monkeypatch.setattr(m, "_ensure_session_identity", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        m,
+        "_build_pymax_client",
+        lambda **_kwargs: _fake_connected_client()(),
+    )
 
 
 def _setup_db(tmp_path, monkeypatch):
@@ -68,17 +97,12 @@ def test_send_without_session_does_not_construct_client(tmp_path, monkeypatch):
 
 def test_stop_failure_cannot_skip_session_reseal(tmp_path, monkeypatch):
     m = _setup_db(tmp_path, monkeypatch)
+    _install_fake_runtime(m, monkeypatch)
     encrypt = MagicMock()
     monkeypatch.setattr(m, "_session_db_has_token", lambda _id: True)
     monkeypatch.setattr(m, "_decrypt_session", lambda _id: None)
     monkeypatch.setattr(m, "_encrypt_session", encrypt)
-    monkeypatch.setattr(m, "_session_device_fields", lambda _id: (None, None))
     monkeypatch.setattr(m, "_safe_stop", AsyncMock(side_effect=OSError("stop failed")))
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "pymax",
-        SimpleNamespace(Client=_fake_started_client(), ExtraConfig=lambda **k: object()),
-    )
 
     async def _run():
         async def _fn(_c):
@@ -91,21 +115,13 @@ def test_stop_failure_cannot_skip_session_reseal(tmp_path, monkeypatch):
     encrypt.assert_called_once_with(1)
 
 
-def _fake_started_client():
+def _fake_connected_client():
     class FakeClient:
         def __init__(self, *args, **kwargs):
-            self._app = SimpleNamespace(started=True)
-            self._on_start = None
+            self.connected = False
 
-        def on_start(self):
-            def deco(fn):
-                self._on_start = fn
-                return fn
-
-            return deco
-
-        async def start(self):
-            await self._on_start(self)
+        async def connect(self):
+            self.connected = True
 
         async def stop(self):
             pass
@@ -115,6 +131,7 @@ def _fake_started_client():
 
 def test_send_does_not_set_connecting_auth_step(tmp_path, monkeypatch):
     m = _setup_db(tmp_path, monkeypatch)
+    _install_fake_runtime(m, monkeypatch)
     pid = 1
     steps: list[str] = []
     orig = m._set_auth_step
@@ -127,13 +144,7 @@ def test_send_does_not_set_connecting_auth_step(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_session_db_has_token", lambda _id: True)
     monkeypatch.setattr(m, "_decrypt_session", lambda _id: None)
     monkeypatch.setattr(m, "_encrypt_session", lambda _id: None)
-    monkeypatch.setattr(m, "_session_device_fields", lambda _id: (None, None))
     monkeypatch.setattr(m, "_safe_stop", AsyncMock())
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "pymax",
-        SimpleNamespace(Client=_fake_started_client(), ExtraConfig=lambda **k: object()),
-    )
     m._set_auth_step(pid, "idle")
     steps.clear()
 
@@ -150,17 +161,12 @@ def test_send_does_not_set_connecting_auth_step(tmp_path, monkeypatch):
 
 def test_send_clears_stale_connecting_step(tmp_path, monkeypatch):
     m = _setup_db(tmp_path, monkeypatch)
+    _install_fake_runtime(m, monkeypatch)
     pid = 1
     monkeypatch.setattr(m, "_session_db_has_token", lambda _id: True)
     monkeypatch.setattr(m, "_decrypt_session", lambda _id: None)
     monkeypatch.setattr(m, "_encrypt_session", lambda _id: None)
-    monkeypatch.setattr(m, "_session_device_fields", lambda _id: (None, None))
     monkeypatch.setattr(m, "_safe_stop", AsyncMock())
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "pymax",
-        SimpleNamespace(Client=_fake_started_client(), ExtraConfig=lambda **k: object()),
-    )
     m._set_auth_step(pid, "connecting")
 
     async def _run():

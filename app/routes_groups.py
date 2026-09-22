@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import shutil
 
 from fastapi import APIRouter, HTTPException
@@ -38,13 +40,15 @@ def _delete_orphan_profile(c, profile_id: int) -> bool:
     return True
 
 
-def _cleanup_profile_runtime(profile_id: int) -> None:
-    """Best-effort cleanup after the database transaction has committed."""
+async def _cleanup_profile_runtime(profile_id: int) -> None:
+    """Cancel and await login before removing the session runtime directory."""
     session_key = m._auth_session_key(profile_id)
-    m._auth_sessions.pop(session_key, None)
     task = m._login_tasks.pop(session_key, None)
     if task and not task.done():
         task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    m._auth_sessions.pop(session_key, None)
     session_dir = m._resolve_data_dir() / "sessions" / str(profile_id)
     shutil.rmtree(session_dir, ignore_errors=True)
 
@@ -340,7 +344,7 @@ async def delete_group(group_id: int):
         c.execute("DELETE FROM groups WHERE id=?", (group_id,))
         deleted_profiles = [pid for pid in pids if _delete_orphan_profile(c, pid)]
     for pid in deleted_profiles:
-        _cleanup_profile_runtime(pid)
+        await _cleanup_profile_runtime(pid)
     m.append_log(f"Группа #{group_id} удалена")
     return {"ok": True}
 
@@ -363,8 +367,6 @@ async def remove_group_profile(group_id: int, profile_id: int):
         )
         deleted_profile = _delete_orphan_profile(c, profile_id)
     if deleted_profile:
-        _cleanup_profile_runtime(profile_id)
+        await _cleanup_profile_runtime(profile_id)
     m.append_log(f"Профиль #{profile_id} удалён из группы #{group_id}")
     return {"ok": True}
-
-

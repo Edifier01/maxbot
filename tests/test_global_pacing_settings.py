@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.settings_scope import (
+    GLOBAL_PACING_LEGACY_INACTIVE,
     GLOBAL_PACING_NEVER_COPY,
     GLOBAL_PACING_SETTING_KEYS,
     filter_pacing_updates,
@@ -74,7 +75,12 @@ def test_allowlist_classifies_every_default_key():
     import main as m
 
     assert GLOBAL_PACING_SETTING_KEYS.isdisjoint(GLOBAL_PACING_NEVER_COPY)
-    assert set(m.DEFAULTS) == GLOBAL_PACING_SETTING_KEYS | GLOBAL_PACING_NEVER_COPY
+    assert (
+        set(m.DEFAULTS)
+        == GLOBAL_PACING_SETTING_KEYS
+        | GLOBAL_PACING_NEVER_COPY
+        | GLOBAL_PACING_LEGACY_INACTIVE
+    )
     for secret in (
         "api_pin",
         "telegram_bot_token",

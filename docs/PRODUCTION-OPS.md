@@ -4,11 +4,67 @@ Runbook для VPS после `bootstrap-vps.sh` и первого `deploy.sh`.
 
 ## D-1 — Deploy verify
 
+### Platform authorization record
+
+`MAX_PLATFORM_AUTHORIZATION_FILE` is optional configuration for the bounded
+platform-action authorization record. The runtime fails closed when the path is
+unset, missing, malformed, expired, or does not include the requested action.
+The JSON contains only a non-secret approval reference, declared transport,
+action scope, and validity window; it is not proof that the underlying contract
+or permission exists. A reviewer must verify that underlying authorization
+separately. Runtime validation only applies the record's declared scope and
+expiry, and does not create or renew authorization.
+
+### Recovery hold
+
+Server mode keeps `/app/control/recovery-hold.json` in the separate
+`max_server_control` volume. It is not part of the restored `max_server_data`
+archive. While the file exists, scheduler, manual start/test, and every
+guarded MAX adapter call are held; the health response reports
+`max_external_actions: held` and `recovery_hold: true`. This hold is not
+automatically removed by startup, health checks, or restore completion.
+
+Release is a separate operator action after the restored revision and
+platform authorization have been reviewed:
+
+```bash
+.venv/bin/python scripts/release-recovery-hold.py \
+  --expected-revision restore-20260920-120000 \
+  --authorization-reference OPS-CHANGE-1234
+```
+
+The reference is a non-secret change/approval identifier. The command appends
+release evidence before atomically removing the hold and never starts a
+worker. `REQUIRE_MAX_ACTIONS=1 bash scripts/verify_deploy.sh` additionally
+fails unless the health response says that the recovery gate is released.
+
+### PyMax 2.4.1 lifecycle boundary
+
+The application is pinned to `maxapi-python==2.4.1`. Before any client network
+call, the encrypted session is restored, its identity is checked or migrated
+offline once, and the runtime uses `Client.connect()` with the persisted device
+ID, instance ID, and user-agent. Runtime catalog resolution is local-only;
+`VersionCatalog(remote=True)` is not part of the production path. The effective
+TCP target is `api2.oneme.ru:443`; reconnect, relogin, and telemetry remain
+disabled while session persistence remains enabled.
+
+Before a deploy, stop the campaign owner, create the ordinary encrypted-volume
+backup, and enable the S03 recovery hold. Rollback uses the previous complete
+image/commit with its matching PyMax 2.4.0 lifecycle rather than replacing only
+the wheel inside the new code. The nullable `user_agent` session column remains
+backward-readable for that rollback and is not removed.
+
+After deploy, run offline/session-schema checks first and then local fake smoke
+checks. A real canary login or send is outside this task and requires a separate
+bounded runbook with explicitly approved account, group, action scope, and stop
+conditions.
+
 ### Pre-deploy checklist
 
 - [ ] CI зелёный (`server-smoke`, `compose-config`, `server-e2e`)
 - [ ] `.env` без `change-me*`
 - [ ] `bash scripts/backup-volumes.sh` (перед каждым prod deploy)
+- [ ] recovery hold включён до restore/deploy; release остаётся отдельным шагом
 - [ ] DNS A-запись → IP VPS
 
 ### Deploy
@@ -29,6 +85,10 @@ bash scripts/verify_deploy.sh   # полная проверка
 3. `/api/health` внутри `app` (`db_ok: true`)
 4. HTTPS через Caddy (если `DOMAIN` не example.com)
 5. Celery worker ping (если `USE_CELERY=1`)
+
+With `REQUIRE_MAX_ACTIONS=1`, it also requires
+`max_external_actions: authorized` and `recovery_hold: false`; normal health
+readiness remains usable while external actions are held.
 
 Переменные:
 
@@ -135,7 +195,20 @@ bash scripts/restore-volumes.sh ./backups/20260729-030000
 bash scripts/restore-volumes.sh --yes ./backups/20260729-030000
 ```
 
-Скрипт останавливает `app`/`celery-worker`, сначала extract+verify+swap data volume (live children → `.outgoing-restore`, **without** deleting that dir yet), затем `pg_restore --exit-on-error --single-transaction`. If PG restore fails, live data is swapped back from `.outgoing-restore` and the script exits non-zero — a failed PG restore rolls the data volume back. The attempted restore stays in leftover `.outgoing-restore` (inspect/remove before retry). On success, `.outgoing-restore` is removed, the stack is started, and `verify_deploy.sh` runs. An interrupted swap also leaves `.outgoing-restore` — retry will not proceed while that directory exists.
+Скрипт останавливает `app`/`celery-worker`, перед data swap атомарно создаёт
+recovery hold в отдельном control volume, затем делает extract+verify+swap data
+volume (live children → `.outgoing-restore`, **without** deleting that dir yet)
+и выполняет `pg_restore --exit-on-error --single-transaction`. If PG restore
+fails, live data is swapped back from `.outgoing-restore` and the script exits
+non-zero — a failed PG restore rolls the data volume back. The hold remains
+active on success, failure, or health-check completion. The attempted restore
+stays in leftover `.outgoing-restore` (inspect/remove before retry). On
+success, `.outgoing-restore` is removed, the stack is started, and
+`verify_deploy.sh` runs. An interrupted swap also leaves `.outgoing-restore` —
+retry will not proceed while that directory exists.
+
+Do not use the legacy data-only snippet below for a production restore; it does
+not provision the external control hold. Use `restore-volumes.sh` instead.
 
 ### Ручной PG-only restore
 

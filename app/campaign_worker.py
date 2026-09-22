@@ -18,7 +18,12 @@ from fastapi import HTTPException
 from app.config import webhook_url_allowed
 from app.runtime import main
 from app.campaign_runtime import REGISTRY, RUNTIME
-from app.campaign_send import SendTracker, send_with_retry, sleep_send_delay
+from app.campaign_send import (
+    SendTracker,
+    recover_inflight_operations,
+    send_with_retry,
+    sleep_send_delay,
+)
 
 
 def worker_shutdown(reason: str) -> None:
@@ -69,6 +74,49 @@ def campaign_config_snapshot() -> str:
         },
         ensure_ascii=False,
     )
+
+
+def materialize_daily_plans() -> int:
+    """Pin one account/day plan per eligible account from the current library."""
+    from app.repositories.daily_plans import DailyPlanRepository
+    from app.repositories.message_sets import MessageSetRepository
+    from app.services.daily_plans import DailyPlanService, LibraryItem
+
+    connection, scope = main._message_library_storage()
+    message_sets = MessageSetRepository(connection)
+    version = message_sets.current(scope)
+    if version is None:
+        return 0
+    library_items = tuple(
+        LibraryItem(
+            item_id=str(row["item_id"]),
+            text=str(row["text"]),
+            version_id=str(version["version_id"]),
+        )
+        for row in message_sets.items(scope, str(version["version_id"]))
+    )
+    service = DailyPlanService(DailyPlanRepository(connection))
+    selected: dict[int, tuple[Any, Any]] = {}
+    for group in main._active_groups():
+        for profile in main._active_profiles_for_group(int(group["id"])):
+            selected.setdefault(int(profile["id"]), (profile, group))
+    business_date = main._local_today().isoformat()
+    materialized = 0
+    for profile, group in selected.values():
+        role = str(profile["day_role"] or "active") if "day_role" in profile.keys() else "active"
+        service.materialize_day(
+            scope,
+            int(profile["id"]),
+            business_date,
+            sampled_limit=main._ensure_daily_limit(int(profile["id"]), log=False),
+            role=role,
+            quiet_limit=main._quiet_limit(),
+            work_group_id=int(group["id"]),
+            library_items=library_items,
+            mode=main._message_pick_mode(),
+        )
+        materialized += 1
+    return materialized
 
 
 def begin_campaign(*, scheduled_for: str | None = None) -> int:
@@ -271,15 +319,201 @@ def _restore_claim(job: dict[str, Any], tracker: SendTracker) -> None:
         )
 
 
+def _daily_library_current() -> bool:
+    from app.repositories.message_sets import MessageSetRepository
+
+    connection, scope = main._message_library_storage()
+    return MessageSetRepository(connection).current(scope) is not None
+
+
+def _campaign_control_scope() -> str:
+    if not main._is_server_mode():
+        return "local"
+    from app.tenant import get_tenant_id
+
+    tenant_id = get_tenant_id()
+    return f"tenant:{int(tenant_id)}" if tenant_id is not None else "global"
+
+
+def _campaign_control_allows_claim(expected_generation: int | None = None) -> bool:
+    """Fence worker claims after a persisted Stop without requiring new schema on legacy DBs."""
+
+    scope = _campaign_control_scope()
+    if not scope:
+        return False
+    try:
+        with main._conn() as connection:
+            table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='campaign_control'"
+            ).fetchone()
+            if table is None:
+                return True
+            control = connection.execute(
+                "SELECT generation, auto_run, stop_requested, state "
+                "FROM campaign_control WHERE scope=?",
+                (scope,),
+            ).fetchone()
+    except sqlite3.Error:
+        return False
+    if control is None:
+        return False
+    if int(control["auto_run"]) != 1 or int(control["stop_requested"]) != 0:
+        return False
+    if str(control["state"]) != "running":
+        return False
+    return expected_generation is None or int(control["generation"]) == int(expected_generation)
+
+
+def _daily_eligible_assignments() -> tuple[tuple[int, int], ...]:
+    """Return currently eligible pinned account/group pairs.
+
+    Daily slots are already allocated, so this deliberately does not apply the
+    free-capacity check.  It still fences disabled groups, role=skip, circuit
+    breakers, cooldowns, and human breaks before claiming a slot.
+    """
+
+    assignments: list[tuple[int, int]] = []
+    for group in main._active_groups():
+        group_id = int(group["id"])
+        if group_id in RUNTIME.groups_in_flight:
+            continue
+        for profile in main._active_profiles_for_group(group_id):
+            profile_id = int(profile["id"])
+            if main._is_circuit_open(profile_id):
+                continue
+            if main._is_in_cooldown(profile):
+                continue
+            if main._is_in_human_break(profile_id):
+                continue
+            assignments.append((profile_id, group_id))
+    return tuple(assignments)
+
+
+def _daily_wait_state(connection: sqlite3.Connection, scope: str) -> str:
+    today = main._local_today().isoformat()
+    plans = connection.execute(
+        "SELECT plan_id, status, target FROM profile_daily_plans "
+        "WHERE scope=? AND business_date=?",
+        (scope, today),
+    ).fetchall()
+    if not plans:
+        return "DAILY_WAIT"
+    if RUNTIME.jobs_in_flight > 0:
+        return "DAILY_WAIT"
+    if any(str(plan["status"]) == "waiting_pool" for plan in plans):
+        return "DAILY_WAIT"
+    pending = connection.execute(
+        "SELECT COUNT(*) AS n FROM profile_message_slots s "
+        "JOIN profile_daily_plans p ON p.plan_id=s.plan_id "
+        "WHERE s.scope=? AND p.business_date=? "
+        "AND s.status IN ('queued', 'claimed', 'in_flight')",
+        (scope, today),
+    ).fetchone()
+    if int(pending["n"] if pending else 0) > 0:
+        return "DAILY_WAIT"
+    return "DAILY_DONE"
+
+
+def _claim_daily_job_sync() -> dict[str, Any] | str | None:
+    """Claim one existing personal slot; ``None`` keeps legacy mode available."""
+
+    if not _daily_library_current():
+        return None
+    from app.repositories.daily_plans import DailyPlanRepository
+    from app.services.daily_plans import DailyPlanService, WaitDecision
+
+    connection, scope = main._message_library_storage()
+    service = DailyPlanService(DailyPlanRepository(connection))
+    decision = service.claim_next_slot(
+        scope,
+        datetime.now(timezone.utc),
+        eligible_assignments=_daily_eligible_assignments(),
+    )
+    if isinstance(decision, WaitDecision):
+        return _daily_wait_state(connection, scope)
+    profile_id = int(decision.profile_id)
+    group_id = int(decision.work_group_id) if decision.work_group_id is not None else None
+    if group_id is None:
+        service.retry_slot(decision.slot_id, proof_no_send=True)
+        return "DAILY_WAIT"
+    with main._conn() as current:
+        profile = current.execute(
+            "SELECT * FROM profiles WHERE id=?", (profile_id,)
+        ).fetchone()
+        group = current.execute(
+            "SELECT * FROM groups WHERE id=?", (group_id,)
+        ).fetchone()
+        ordinal = current.execute(
+            "SELECT ordinal FROM profile_message_slots WHERE slot_id=?",
+            (decision.slot_id,),
+        ).fetchone()
+    if profile is None or group is None:
+        service.retry_slot(decision.slot_id, proof_no_send=True)
+        return "DAILY_WAIT"
+    return {
+        "profile": profile,
+        "group": group,
+        "text": decision.rendered_text,
+        "mi": int(ordinal["ordinal"] if ordinal else 0),
+        "pi": 0,
+        "gi_next": 0,
+        "mi_next": 0,
+        "queue_before": None,
+        "daily_plan_id": decision.plan_id,
+        "slot_id": decision.slot_id,
+        "daily_plan": True,
+    }
+
+
+def _finalize_daily_job(
+    job: dict[str, Any], sent: bool, tracker: SendTracker
+) -> None:
+    slot_id = str(job.get("slot_id") or "").strip()
+    if not slot_id:
+        return
+    from app.repositories.daily_plans import DailyPlanRepository
+    from app.services.daily_plans import DailyPlanService
+
+    connection, _scope = main._message_library_storage()
+    service = DailyPlanService(DailyPlanRepository(connection))
+    try:
+        if sent or tracker.provider_message_id:
+            service.mark_slot_accepted(slot_id)
+        elif tracker.may_requeue:
+            operation = None
+            if tracker.operation_ledger is not None and tracker.operation_id:
+                operation = tracker.operation_ledger.get(tracker.operation_id)
+            if operation is None or (
+                operation.status == "failed_unsent"
+                and operation.pre_effect_retry_count < operation.max_pre_effect_retries
+            ):
+                service.retry_slot(slot_id, proof_no_send=True)
+            else:
+                service.mark_slot_failed_unsent(
+                    slot_id, tracker.error or "bounded pre-send retries exhausted"
+                )
+        else:
+            service.mark_slot_unknown(slot_id, tracker.error or "send outcome unknown")
+    except Exception as exc:
+        main.append_log(f"Не удалось завершить daily slot {slot_id}: {exc}")
+
+
 def _claim_next_job_sync() -> dict[str, Any] | str | None:
     """Синхронное тело claim_next_job (SQLite под asyncio.to_thread)."""
     if REGISTRY.app.shutting_down:
+        return "STOP"
+    if not _campaign_control_allows_claim():
         return "STOP"
     with main._conn() as c:
         qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
         if not qs or not qs["running"]:
             return "STOP"
         main._reset_daily_counts(c)
+
+    daily_job = _claim_daily_job_sync()
+    if daily_job is not None:
+        return daily_job
 
     messages = main.load_message_pool()
     groups = main._active_groups()
@@ -413,7 +647,6 @@ async def poolworker_loop(worker_id: int) -> None:
             return
         if await main._wait_if_outside_send_window():
             continue
-        await main._maybe_idle_presence()
         job = await claim_next_job()
         if job == "STOP":
             main.append_log(f"Воркер пула #{worker_id} остановлен")
@@ -429,6 +662,12 @@ async def poolworker_loop(worker_id: int) -> None:
         if job == "NO_PROFILES":
             worker_shutdown("Нет активных профилей ни в одной группе")
             return
+        if job == "DAILY_DONE":
+            worker_shutdown("Готово: дневные планы выполнены")
+            return
+        if job == "DAILY_WAIT":
+            await asyncio.sleep(2)
+            continue
         if job is None:
             if not main._has_sendable_profile():
                 if main._has_sendable_profile(ignore_human_break=True):
@@ -448,6 +687,7 @@ async def poolworker_loop(worker_id: int) -> None:
             continue
 
         group_id = int(job["group"]["id"])
+        daily_job = bool(job.get("daily_plan"))
         sent = False
         tracker = SendTracker()
         try:
@@ -462,9 +702,14 @@ async def poolworker_loop(worker_id: int) -> None:
                     job["mi_next"],
                     advance_queue=False,
                     tracker=tracker,
+                    daily_plan_id=job.get("daily_plan_id"),
+                    slot_id=job.get("slot_id"),
                 )
             except asyncio.CancelledError:
-                _restore_claim(job, tracker)
+                if daily_job:
+                    _finalize_daily_job(job, False, tracker)
+                else:
+                    _restore_claim(job, tracker)
                 raise
         finally:
             RUNTIME.groups_in_flight.discard(group_id)
@@ -475,8 +720,11 @@ async def poolworker_loop(worker_id: int) -> None:
                 RUNTIME.profile_reserved.pop(pid, None)
             else:
                 RUNTIME.profile_reserved[pid] = left
-        if not sent:
+        if daily_job:
+            _finalize_daily_job(job, sent, tracker)
+        elif not sent:
             _restore_claim(job, tracker)
+        if not sent:
             await asyncio.sleep(3)
             main._touch_worker_activity()
             continue
@@ -543,18 +791,23 @@ async def scheduler_tick() -> None:
                 main.append_log(f"Расписание: пропуск — {e.detail}")
             else:
                 if main.load_message_pool() and main._has_sendable_profile():
-                    await main._preflight_group_proxies()
-                    started = await start_worker(scheduled_for=row["start_at"])
-                    if started:
-                        main.set_setting("auto_run", "1")
-                        with main._conn() as c:
-                            c.execute(
-                                "UPDATE campaign_schedule SET enabled=0 WHERE id=1"
-                            )
-                    else:
+                    if not _campaign_control_allows_claim():
                         main.append_log(
-                            "Расписание: воркер занят — запуск сохранён для повтора"
+                            "Расписание: запуск заблокирован сохранённой командой Stop"
                         )
+                    else:
+                        await main._preflight_group_proxies()
+                        started = await start_worker(scheduled_for=row["start_at"])
+                        if started:
+                            main.set_setting("auto_run", "1")
+                            with main._conn() as c:
+                                c.execute(
+                                    "UPDATE campaign_schedule SET enabled=0 WHERE id=1"
+                                )
+                        else:
+                            main.append_log(
+                                "Расписание: воркер занят — запуск сохранён для повтора"
+                            )
                 else:
                     main.append_log("Расписание: нет сообщений или профилей — пропуск")
     await main._try_auto_resume(log_prefix="Автовозобновление")
@@ -618,6 +871,7 @@ async def start_worker(
     *,
     record_campaign: bool = True,
     scheduled_for: str | None = None,
+    control_generation: int | None = None,
 ) -> bool:
     """Запуск воркера / пула без сброса индексов прогресса."""
     from app.tenant import clear_context, get_tenant_id, restore_context, snapshot_context
@@ -644,9 +898,24 @@ async def start_worker(
                 return False
             if rt.worker_task and not rt.worker_task.done():
                 return False
+            if not _campaign_control_allows_claim(control_generation):
+                return False
             rt.touch_activity()
             rt.pool_done_announced = False
+            materialized_plans = materialize_daily_plans()
+            if materialized_plans:
+                main.append_log(
+                    f"Подготовлены дневные планы аккаунтов: {materialized_plans}"
+                )
+            recovered_operations = recover_inflight_operations()
+            if recovered_operations:
+                main.append_log(
+                    "Восстановлены незавершённые операции отправки: "
+                    + ", ".join(recovered_operations)
+                )
             await main._preflight_group_proxies()
+            if not _campaign_control_allows_claim(control_generation):
+                return False
             with main._conn() as c:
                 c.execute("UPDATE queue_state SET running=1 WHERE id=1")
                 msgs = main.load_message_pool()

@@ -129,9 +129,11 @@ def test_campaign_test_idle_does_not_advance_queue(setup_local, monkeypatch):
     monkeypatch.setattr(m, "_active_profiles_for_group", lambda _gid: [profile])
     monkeypatch.setattr(m, "_is_circuit_open", lambda _pid: False)
     monkeypatch.setattr(m, "_can_send_in_group", lambda _p, _gid: True)
-    monkeypatch.setattr(m, "_preflight_group_proxies", AsyncMock())
+    from app import routes_campaign
+
+    monkeypatch.setattr(routes_campaign.m, "_preflight_group_proxies", AsyncMock(), raising=False)
     send = AsyncMock(return_value=True)
-    monkeypatch.setattr(m, "_send_with_retry", send)
+    monkeypatch.setattr(routes_campaign.m, "_send_with_retry", send, raising=False)
 
     from app.routes_campaign import campaign_test
 

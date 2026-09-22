@@ -5,16 +5,44 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from urllib.parse import urlsplit
 
 import jwt
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
+from app import recovery_hold
 from app.runtime import main as m
 
 router = APIRouter(tags=["monitor"])
 
 _WS_AUTH_TIMEOUT = 5.0
 _WS_REVALIDATE_EVERY = 30
+
+
+def _ws_origin_allowed(ws: WebSocket) -> bool:
+    """Require same-origin browser handshakes in server mode."""
+    from app.config import is_server_mode
+
+    if not is_server_mode():
+        return True
+    headers = getattr(ws, "headers", {}) or {}
+    origin = str(headers.get("origin", "")).strip()
+    host = str(headers.get("host", "")).strip()
+    if not origin or not host:
+        return False
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and parsed.netloc.lower() == host.lower()
+
+
+def _external_action_health() -> dict[str, object]:
+    state, hold_active = recovery_hold.external_actions_status()
+    return {
+        "max_external_actions": state,
+        "recovery_hold": hold_active,
+    }
 
 
 async def _authenticate_ws(ws: WebSocket) -> bool:
@@ -84,6 +112,7 @@ def _health_public(db_ok: bool) -> dict:
         "ok": db_ok and (vs["unlocked"] or vs["needs_setup"] or vs["legacy"]),
         "db_ok": db_ok,
         "server_mode": m._is_server_mode(),
+        **_external_action_health(),
     }
 
 
@@ -143,6 +172,7 @@ async def health(request: Request):
     return {
         "ok": db_ok and (vs["unlocked"] or vs["needs_setup"] or vs["legacy"]),
         "db_ok": db_ok,
+        **_external_action_health(),
         "pg_latency_ms": pg_latency,
         "redis_ok": redis_ok,
         "server_mode": m._is_server_mode(),
@@ -236,6 +266,9 @@ async def ws_status(ws: WebSocket):
     from app.config import is_server_mode
     from app.tenant import clear_context
 
+    if not _ws_origin_allowed(ws):
+        await ws.close(code=4403)
+        return
     await ws.accept()
     if not await _authenticate_ws(ws):
         await ws.close(code=4401)

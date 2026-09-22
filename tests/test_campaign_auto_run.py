@@ -195,6 +195,38 @@ def test_scheduler_tick_sets_auto_run(m, monkeypatch):
     assert int(row["enabled"]) == 0
 
 
+def test_scheduler_does_not_preflight_after_persisted_stop_fence(m, monkeypatch):
+    from app.routes_campaign import CampaignCommandCoordinator
+
+    coordinator = CampaignCommandCoordinator(m._conn(), scope="local")
+    coordinator.stop("stop-before-scheduled-start")
+    m.set_setting("auto_run", "0")
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    with m._conn() as c:
+        c.execute(
+            "UPDATE campaign_schedule SET enabled=1, start_at=? WHERE id=1",
+            (past,),
+        )
+
+    monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["hello"])
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+    preflight = AsyncMock()
+    start_worker = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_preflight_group_proxies", preflight)
+
+    import app.campaign_worker as cw
+
+    monkeypatch.setattr(cw, "start_worker", start_worker)
+    monkeypatch.setattr(m, "_try_auto_resume", AsyncMock(return_value=False))
+
+    asyncio.run(cw.scheduler_tick())
+
+    preflight.assert_not_awaited()
+    start_worker.assert_not_awaited()
+    assert m.get_setting("auto_run") == "0"
+
+
 def test_scheduler_keeps_due_schedule_when_start_fails(m, monkeypatch):
     m.set_setting("auto_run", "0")
     past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
@@ -248,7 +280,6 @@ def test_scheduler_logs_errors_in_the_tenant_journal(m, monkeypatch):
 def test_try_auto_resume_skips_expired_subscription(m, monkeypatch):
     import app.db_pg as db_pg
 
-    m.set_setting("auto_run", "1")
     monkeypatch.setattr(m, "_is_server_mode", lambda: True)
     monkeypatch.setattr(db_pg, "subscription_active", lambda _tid: False)
     start_mock = AsyncMock()
@@ -260,6 +291,8 @@ def test_try_auto_resume_skips_expired_subscription(m, monkeypatch):
 
     async def _run():
         with tenant_scope(tenant_id=42, role="user"):
+            m.init_db()
+            m.set_setting("auto_run", "1")
             resumed = await m._try_auto_resume(log_prefix="Автовозобновление")
             return resumed, m.get_setting("auto_run")
 
@@ -273,14 +306,6 @@ def test_scheduler_tick_skips_expired_subscription(m, monkeypatch):
     import app.campaign_worker as cw
     import app.db_pg as db_pg
 
-    m.set_setting("auto_run", "1")
-    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-    with m._conn() as c:
-        c.execute(
-            "UPDATE campaign_schedule SET enabled=1, start_at=? WHERE id=1",
-            (past,),
-        )
-
     monkeypatch.setattr(m, "_is_server_mode", lambda: True)
     monkeypatch.setattr(db_pg, "subscription_active", lambda _tid: False)
     start_mock = AsyncMock()
@@ -293,6 +318,14 @@ def test_scheduler_tick_skips_expired_subscription(m, monkeypatch):
 
     async def _run():
         with tenant_scope(tenant_id=42, role="user"):
+            m.init_db()
+            m.set_setting("auto_run", "1")
+            past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+            with m._conn() as c:
+                c.execute(
+                    "UPDATE campaign_schedule SET enabled=1, start_at=? WHERE id=1",
+                    (past,),
+                )
             await cw.scheduler_tick()
             return m.get_setting("auto_run")
 

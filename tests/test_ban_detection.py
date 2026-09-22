@@ -32,6 +32,8 @@ def test_mark_profile_failed_sets_banned(tmp_path, monkeypatch):
 
     import main as m
 
+    m.reset_test_runtime()
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
     monkeypatch.setattr(m, "ROOT", tmp_path)
     tenant_dir = tmp_path / "data" / "tenants" / "4"
     tenant_dir.mkdir(parents=True)
@@ -66,6 +68,8 @@ def test_handle_profile_banned_stops_worker_and_auto_run(tmp_path, monkeypatch):
 
     import main as m
 
+    m.reset_test_runtime()
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
     monkeypatch.setattr(m, "ROOT", tmp_path)
     tenant_dir = tmp_path / "data" / "tenants" / "9"
     tenant_dir.mkdir(parents=True)
@@ -111,6 +115,8 @@ def test_send_with_retry_triggers_ban_shutdown(tmp_path, monkeypatch):
     import main as m
     from app.campaign_send import send_with_retry
 
+    m.reset_test_runtime()
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
     monkeypatch.setattr(m, "ROOT", tmp_path)
     tenant_dir = tmp_path / "data" / "tenants" / "6"
     tenant_dir.mkdir(parents=True)

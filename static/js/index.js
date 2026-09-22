@@ -282,6 +282,41 @@ let openGroupId = null;
       connectStatusWs();
     }
 
+    const SAFE_ERROR_MESSAGES = Object.freeze({
+      PROXY_AUTH_FAILED: 'Проверьте учётные данные прокси.',
+      PROXY_CONNECT_FAILED: 'Не удалось подключиться через прокси.',
+      MAX_ACCOUNT_BANNED: 'Аккаунт MAX заблокирован. Отправка остановлена.',
+      MAX_SESSION_REVOKED: 'Сессия MAX отозвана. Требуется повторный вход.',
+      MAX_RATE_LIMIT: 'MAX временно ограничил частоту действий. Дождитесь разрешённого времени.',
+      SEND_OUTCOME_UNKNOWN: 'Результат действия неизвестен. Сначала выполните сверку.',
+      NETWORK_UNAVAILABLE: 'Сеть недоступна. Проверьте соединение.',
+      SERVER_UNAVAILABLE: 'Сервис временно недоступен.',
+      RESTORE_HOLD: 'Внешние действия остановлены до проверки восстановления.',
+      UNCLASSIFIED: 'Операция не выполнена. Требуется проверка.',
+    });
+
+    function formatStructuredApiError(detail, status) {
+      if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+        const code = typeof detail.code === 'string' ? detail.code : '';
+        if (SAFE_ERROR_MESSAGES[code]) return SAFE_ERROR_MESSAGES[code];
+      }
+      if (typeof detail === 'string') return detail.slice(0, 300);
+      if (Array.isArray(detail)) {
+        return detail.map(x => (x && typeof x.msg === 'string' ? x.msg : 'Некорректный ввод')).join('; ');
+      }
+      return status >= 500 ? 'Сервис временно недоступен.' : 'Операция не выполнена.';
+    }
+
+    class PanelApiError extends Error {
+      constructor(message, status, code, retryAfter) {
+        super(message);
+        this.name = 'PanelApiError';
+        this.status = status;
+        this.code = code;
+        this.retryAfter = retryAfter;
+      }
+    }
+
     const api = (path, opts = {}) => {
       opts.credentials = opts.credentials || 'same-origin';
       opts.headers = opts.headers || {};
@@ -293,11 +328,15 @@ let openGroupId = null;
         let j = {};
         try { j = await r.json(); } catch (_) {}
         if (!r.ok) {
-          const detail = j.detail;
-          const msg = typeof detail === 'string'
-            ? detail
-            : (Array.isArray(detail) ? detail.map(x => x.msg || JSON.stringify(x)).join('; ') : '');
-          throw new Error(msg || r.statusText || ('HTTP ' + r.status));
+          const detail = j && j.detail;
+          const code = detail && typeof detail === 'object' && detail.code ? String(detail.code) : '';
+          const retryAfter = r.headers.get('Retry-After');
+          throw new PanelApiError(
+            formatStructuredApiError(detail, r.status) || r.statusText || ('HTTP ' + r.status),
+            r.status,
+            code || ('HTTP_' + r.status),
+            retryAfter,
+          );
         }
         return j;
       });
@@ -623,11 +662,7 @@ let openGroupId = null;
     }
 
     async function findProfile(profileId) {
-      try {
-        return await api(`/profiles/${profileId}`);
-      } catch {
-        return null;
-      }
+      return await api(`/profiles/${profileId}`);
     }
 
     async function startLoginWatch(profileId, initialStep = 'connecting') {
@@ -799,7 +834,7 @@ let openGroupId = null;
 
     function stopStatusPoll() {
       if (_statusPollTimer) {
-        clearInterval(_statusPollTimer);
+        clearTimeout(_statusPollTimer);
         _statusPollTimer = null;
       }
     }
@@ -819,10 +854,21 @@ let openGroupId = null;
     }
 
     function startStatusPoll() {
-      if (_statusPollTimer) return;
+      if (_statusPollTimer || document.visibilityState === 'hidden') return;
       setLiveBadge('poll');
-      _statusPollTimer = setInterval(() => { refreshStatus().catch(() => {}); }, 2000);
+      _statusPollTimer = setTimeout(async () => {
+        _statusPollTimer = null;
+        if (document.visibilityState !== 'hidden') {
+          await refreshStatus().catch(() => {});
+          startStatusPoll();
+        }
+      }, 5000);
     }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') stopStatusPoll();
+      else if (!_statusWs) startStatusPoll();
+    });
 
     function connectStatusWs() {
       if (_statusWs && (_statusWs.readyState === WebSocket.OPEN || _statusWs.readyState === WebSocket.CONNECTING)) {
@@ -1593,12 +1639,6 @@ let openGroupId = null;
       document.getElementById('breakMax').value = s.break_max_sec || '1200';
       document.getElementById('jitterMorning').value = s.jitter_morning_percent || '55';
       document.getElementById('jitterEvening').value = s.jitter_evening_percent || '35';
-      document.getElementById('presenceOn').checked = String(s.human_presence_enabled || '1') === '1';
-      document.getElementById('presHist').value = s.presence_history_chance || '70';
-      document.getElementById('presRead').value = s.presence_read_chance || '40';
-      document.getElementById('presReact').value = s.presence_react_chance || '12';
-      document.getElementById('presReactions').value = s.presence_reactions || '👍,❤️,🔥,😂';
-      document.getElementById('presIdle').value = s.presence_idle_chance || '5';
       document.getElementById('textsOn').checked = String(s.human_texts_enabled || '1') === '1';
       document.getElementById('dedupeOn').checked = String(s.text_dedupe_enabled || '1') === '1';
       document.getElementById('lenVarietyOn').checked = String(s.text_length_variety || '1') === '1';
@@ -1664,12 +1704,6 @@ let openGroupId = null;
         break_max_sec: +document.getElementById('breakMax').value,
         jitter_morning_percent: +document.getElementById('jitterMorning').value,
         jitter_evening_percent: +document.getElementById('jitterEvening').value,
-        human_presence_enabled: document.getElementById('presenceOn').checked ? 1 : 0,
-        presence_history_chance: +document.getElementById('presHist').value,
-        presence_read_chance: +document.getElementById('presRead').value,
-        presence_react_chance: +document.getElementById('presReact').value,
-        presence_reactions: document.getElementById('presReactions').value.trim(),
-        presence_idle_chance: +document.getElementById('presIdle').value,
         human_texts_enabled: document.getElementById('textsOn').checked ? 1 : 0,
         text_dedupe_enabled: document.getElementById('dedupeOn').checked ? 1 : 0,
         text_length_variety: document.getElementById('lenVarietyOn').checked ? 1 : 0,
@@ -1768,14 +1802,3 @@ let openGroupId = null;
       connectStatusWs();
       try { await loadDashboard(); } catch (e) { toast(e.message, 'error'); }
     })();
-    setInterval(() => {
-      if (document.getElementById('groups').classList.contains('active') && !authModalOpen) loadGroups();
-      if (document.getElementById('campaign').classList.contains('active') && !isSimpleCampaignView()) {
-        loadSendLog(sendLogOffset);
-        loadCampaigns();
-        loadScheduleHint();
-      }
-      if (document.getElementById('campaign').classList.contains('active')) {
-        loadDashboard().catch(() => {});
-      }
-    }, 2000);

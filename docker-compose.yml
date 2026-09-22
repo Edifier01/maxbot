@@ -32,6 +32,7 @@ services:
       AUTH_RATE_WINDOW_SEC: "${AUTH_RATE_WINDOW_SEC:-900}"
     volumes:
       - max_server_data:/app/data
+      - max_server_control:/app/control
     depends_on:
       redis:
         condition: service_healthy
@@ -113,6 +114,7 @@ services:
       INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?задайте INTERNAL_SERVICE_TOKEN в .env}"
     volumes:
       - max_server_data:/app/data
+      - max_server_control:/app/control
     depends_on:
       app:
         condition: service_healthy
@@ -150,6 +152,7 @@ networks:
 
 volumes:
   max_server_data:
+  max_server_control:
   max_server_redis:
   max_server_pg:
   caddy_data:

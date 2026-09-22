@@ -128,9 +128,16 @@ def use_global_data() -> bool:
 
 
 def get_effective_data_dir(root: Path) -> Path:
+    import os
+
+    from app.domain.contracts import Scope, resolve_data_root, resolve_scope_dir
+
+    data_root = resolve_data_root(
+        {"MAX_DATA": os.environ.get("MAX_DATA", ""), "ROOT": root}
+    )
     if _use_global_data.get():
-        return root / "data" / "global"
+        return resolve_scope_dir(data_root, Scope.GLOBAL)
     tid = _tenant_id.get()
     if tid is not None:
-        return root / "data" / "tenants" / str(tid)
-    return root / "data"
+        return resolve_scope_dir(data_root, Scope.TENANT, tenant_id=tid)
+    return resolve_scope_dir(data_root, Scope.GLOBAL)

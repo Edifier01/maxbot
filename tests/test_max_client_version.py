@@ -1,40 +1,64 @@
-"""MAX handshake must advertise a current client version."""
+"""Existing-session identity is explicit and never regenerated on connect."""
 
-from __future__ import annotations
+from pymax import ExtraConfig
+from pymax.versions.catalog import VersionCatalog
 
-from types import SimpleNamespace
-
-
-class _UA:
-    def __init__(self, app_version: str, build_number: int) -> None:
-        self.app_version = app_version
-        self.build_number = build_number
-
-    def model_copy(self, update=None):
-        data = {"app_version": self.app_version, "build_number": self.build_number}
-        data.update(update or {})
-        return _UA(data["app_version"], data["build_number"])
+from app.services.pymax_runtime import (
+    PyMaxSessionIdentity,
+    build_extra_config,
+)
 
 
-def test_prefer_current_max_user_agent_pins_preferred_build(monkeypatch):
-    import main as m
+def test_existing_identity_is_passed_without_user_agent_generation(monkeypatch):
+    catalog = VersionCatalog(remote=False)
+    app_version = VersionCatalog.RECOMMENDED_APP_VERSION
+    fingerprint = catalog.resolve(app_version)
+    fixture_extra = ExtraConfig(reconnect=False, telemetry=False)
+    identity = PyMaxSessionIdentity(
+        device_id="device-1",
+        mt_instance_id="instance-1",
+        user_agent=fixture_extra.generate_user_agent(
+            app_version,
+            fingerprint.build_number,
+        ),
+        migrated=False,
+    )
+
+    def fail_generation(*_args, **_kwargs):
+        raise AssertionError("existing-session path must not generate a user-agent")
+
+    monkeypatch.setattr(ExtraConfig, "generate_user_agent", fail_generation)
+    extra = build_extra_config(proxy=None, identity=identity)
+
+    assert extra.device_id == "device-1"
+    assert extra.mt_instance_id == "instance-1"
+    assert extra.user_agent == identity.user_agent
+    assert extra.reconnect is False
+    assert extra.relogin is False
+    assert extra.telemetry is False
+
+
+def test_identity_is_not_replaced_by_catalog_defaults(monkeypatch):
+    catalog = VersionCatalog(remote=False)
+    app_version = VersionCatalog.RECOMMENDED_APP_VERSION
+    fingerprint = catalog.resolve(app_version)
+    fixture_extra = ExtraConfig(reconnect=False, telemetry=False)
+    identity = PyMaxSessionIdentity(
+        device_id="device-2",
+        mt_instance_id="instance-2",
+        user_agent=fixture_extra.generate_user_agent(
+            app_version,
+            fingerprint.build_number,
+        ),
+        migrated=False,
+    )
 
     monkeypatch.setattr(
-        m, "_preferred_max_app_versions", lambda: (("26.25.0", 6790), ("26.17.1", 6712))
+        ExtraConfig,
+        "generate_user_agent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected user-agent generation")
+        ),
     )
-    extra = SimpleNamespace(
-        user_agent=None,
-        generate_user_agent=lambda: _UA("26.9.1", 6643),
-    )
-    m._prefer_current_max_user_agent(extra)
-    assert extra.user_agent.app_version == "26.25.0"
-    assert extra.user_agent.build_number == 6790
-
-
-def test_prefer_current_max_user_agent_keeps_explicit_ua():
-    import main as m
-
-    existing = _UA("26.1.0", 1)
-    extra = SimpleNamespace(user_agent=existing, generate_user_agent=lambda: _UA("26.9.1", 6643))
-    m._prefer_current_max_user_agent(extra)
-    assert extra.user_agent is existing
+    extra = build_extra_config(proxy="socks5://fixture.example:1080", identity=identity)
+    assert extra.user_agent is identity.user_agent

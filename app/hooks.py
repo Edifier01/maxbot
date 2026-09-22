@@ -11,6 +11,7 @@ def before_start() -> None:
         return
 
     from app import auth, db_pg, instance_lock
+    from app import recovery_hold
     from app.config import (
         ADMIN_EMAIL,
         ADMIN_PASSWORD,
@@ -30,6 +31,11 @@ def before_start() -> None:
         if any(reconciled.values()):
             app_main.append_log(f"Tenant quarantine reconciliation: {reconciled}")
         init_global_db(app_main)
+        action_state, hold_active = recovery_hold.external_actions_status()
+        if hold_active:
+            app_main.append_log(
+                f"Recovery hold active at startup; external actions={action_state}"
+            )
 
         if ADMIN_EMAIL and ADMIN_PASSWORD and not db_pg.admin_exists():
             db_pg.create_user(

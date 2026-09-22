@@ -19,7 +19,11 @@ def acquire(root: Path) -> None:
     except ImportError as exc:  # pragma: no cover - production image is Linux
         raise RuntimeError("Server instance lock requires POSIX flock") from exc
 
-    lock_path = root / "data" / ".app-instance.lock"
+    from app.domain.contracts import resolve_data_root
+
+    lock_path = resolve_data_root(
+        {"MAX_DATA": os.environ.get("MAX_DATA", ""), "ROOT": root}
+    ) / ".app-instance.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     handle = lock_path.open("a+", encoding="utf-8")
     try:

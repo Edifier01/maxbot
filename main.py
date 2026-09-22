@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import webbrowser
+from collections.abc import Mapping
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time as dt_time, timedelta, timezone
@@ -126,14 +127,27 @@ def _is_server_mode() -> bool:
 
 
 def _resolve_data_dir() -> Path:
-    override = os.environ.get("MAX_DATA", "").strip()
-    if override:
-        return Path(override)
-    if _is_server_mode():
-        from app.tenant import get_effective_data_dir
+    from app.domain.contracts import Scope, resolve_data_root, resolve_scope_dir
 
-        return get_effective_data_dir(ROOT)
-    return ROOT / "data"
+    root = resolve_data_root(
+        {"MAX_DATA": os.environ.get("MAX_DATA", ""), "ROOT": ROOT}
+    )
+    if not _is_server_mode():
+        return resolve_scope_dir(root, Scope.LOCAL)
+    from app.tenant import get_tenant_id, use_global_data
+
+    tenant_id = get_tenant_id()
+    if use_global_data() or tenant_id is None:
+        return resolve_scope_dir(root, Scope.GLOBAL)
+    return resolve_scope_dir(root, Scope.TENANT, tenant_id=tenant_id)
+
+
+def _resolve_data_root() -> Path:
+    from app.domain.contracts import resolve_data_root
+
+    return resolve_data_root(
+        {"MAX_DATA": os.environ.get("MAX_DATA", ""), "ROOT": ROOT}
+    )
 
 
 def _refresh_data_paths() -> None:
@@ -206,8 +220,8 @@ DEFAULTS = {
     "warmup_start_max": "2",
     "lazy_day_percent": "15",
     "lazy_day_factor": "0.4",
-    # Человечность E: presence + тексты
-    "human_presence_enabled": "1",
+    # Человечность E: legacy presence values remain auditable but are inactive.
+    "human_presence_enabled": "0",
     "presence_history_chance": "70",
     "presence_read_chance": "40",
     "presence_react_chance": "12",
@@ -521,7 +535,7 @@ def _messages_file() -> Path:
         from app.tenant import use_global_data
 
         if use_global_data():
-            return ROOT / "data" / "global" / "messages" / "active.txt"
+            return _resolve_data_root() / "global" / "messages" / "active.txt"
         return _resolve_data_dir() / "messages" / "active.txt"
     return MESSAGES_FILE
 
@@ -552,6 +566,24 @@ def load_message_pool() -> list[str]:
     return [r["text"] for r in rows]
 
 
+def _message_library_storage() -> tuple[sqlite3.Connection, str]:
+    if not _is_server_mode():
+        return _conn(), "local"
+    from app.tenant import get_tenant_id, use_global_data
+
+    if use_global_data() or get_tenant_id() is None:
+        return _global_conn(), "global"
+    tenant_id = get_tenant_id()
+    return _conn(), f"tenant:{int(tenant_id)}"
+
+
+def _publish_message_library_version(messages: list[str]) -> None:
+    from app.repositories.message_sets import MessageSetRepository
+
+    connection, scope = _message_library_storage()
+    MessageSetRepository(connection).publish(scope, tuple(messages))
+
+
 def _reset_current_queue_for_new_pool(n: int) -> None:
     """Reset send-queue indices + message bag. Does not touch send_log."""
     with _conn() as c:
@@ -565,7 +597,7 @@ def _reset_all_tenants_queue_for_new_pool(n: int) -> list[int]:
     """After global TXT replace, every tenant must restart pool indices."""
     from app.tenant import tenant_scope
 
-    tenants_root = ROOT / "data" / "tenants"
+    tenants_root = _resolve_data_root() / "tenants"
     if not tenants_root.is_dir():
         return []
     failed: list[int] = []
@@ -610,6 +642,7 @@ def save_messages_file(content: bytes) -> int:
                 [(m, i) for i, m in enumerate(messages)],
             )
         _reset_current_queue_for_new_pool(len(messages))
+    _publish_message_library_version(messages)
     return len(messages)
 
 
@@ -791,6 +824,13 @@ async def _try_auto_resume(*, log_prefix: str = "Автовозобновлен�
         return False
     if not _auto_run_enabled():
         return False
+    from app import recovery_hold
+
+    try:
+        recovery_hold.require_external_actions_released()
+    except recovery_hold.RecoveryHoldActive as exc:
+        append_log(f"{log_prefix}: recovery hold активен — пропуск ({exc})")
+        return False
     if _is_server_mode():
         from app.tenant import get_tenant_id
 
@@ -849,25 +889,6 @@ def _session_db_has_token(profile_id: int) -> bool:
     from app import vault as vault_mod
 
     return vault_mod.sqlite_has_auth_token(_session_dir(profile_id) / "session.db")
-
-
-def _session_device_fields(profile_id: int) -> tuple[str | None, str | None]:
-    db = _session_dir(profile_id) / "session.db"
-    if not db.is_file():
-        return None, None
-    try:
-        with sqlite3.connect(str(db)) as conn:
-            row = conn.execute(
-                "SELECT device_id, mt_instance_id FROM sessions "
-                "WHERE token IS NOT NULL AND token != '' LIMIT 1"
-            ).fetchone()
-    except sqlite3.Error:
-        return None, None
-    if not row:
-        return None, None
-    device_id = (row[0] or "").strip() or None
-    mt_id = (row[1] or "").strip() or None
-    return device_id, mt_id
 
 
 def _profile_client_lock(profile_id: int) -> asyncio.Lock:
@@ -1107,53 +1128,6 @@ async def _safe_stop(client) -> None:
             raise
 
 
-_AUTH_STEPS_LONG = frozenset(
-    {
-        "connecting",
-        "waiting_sms",
-        "waiting_cloud_password",
-        "verifying_sms",
-        "verifying_password",
-    }
-)
-
-
-async def _wait_login_done(
-    profile_id: int,
-    done: asyncio.Event,
-    connect_timeout: float,
-    auth_timeout: float,
-    *,
-    login_mode: bool = False,
-) -> None:
-    """Пока ждём SMS/пароль — длинный таймаут, иначе короткий."""
-    t0 = time.monotonic()
-    while not done.is_set():
-        step = _auth_sessions.get(_auth_session_key(profile_id), {}).get("step", "connecting")
-        if login_mode or step in _AUTH_STEPS_LONG:
-            limit = auth_timeout
-        else:
-            limit = connect_timeout
-        left = limit - (time.monotonic() - t0)
-        if left <= 0:
-            if login_mode:
-                _set_auth_step(profile_id, "error")
-            raise TimeoutError(
-                "Таймаут входа. Нажмите «Войти заново», дождитесь SMS → код → OK. "
-                "Облачный пароль — только если MAX запросит (☁)."
-            )
-        try:
-            await asyncio.wait_for(done.wait(), timeout=min(left, 3))
-            return
-        except TimeoutError:
-            continue
-
-
-def _is_benign_disconnect(err: BaseException) -> bool:
-    msg = str(err).lower()
-    return "close_notify" in msg or "application data after" in msg
-
-
 async def _with_client(
     profile_id: int,
     phone: str,
@@ -1178,38 +1152,28 @@ async def _with_client(
         )
 
 
-def _preferred_max_app_versions() -> tuple[tuple[str, int], ...] | None:
-    try:
-        from pymax.config import PREFERRED_VERSION
+def _build_pymax_client(**kwargs: Any):
+    from app.services.pymax_runtime import build_pymax_client
 
-        return tuple(PREFERRED_VERSION)
-    except Exception:
-        return None
+    return build_pymax_client(**kwargs)
 
 
-def _prefer_current_max_user_agent(extra: Any) -> None:
-    """Pin a current MAX app_version.
+async def _ensure_session_identity(work_dir: Path, session_name: str):
+    from app.services.pymax_runtime import ensure_session_identity
 
-    ponytail: PyMax 2.4.0 still rolls ~10% LEGACY_VERSIONS; MAX rejects those
-    with client.unsupported-version. Drop this once PyMax samples only current builds.
-    """
-    if getattr(extra, "user_agent", None) is not None:
-        return
-    generate = getattr(extra, "generate_user_agent", None)
-    if not callable(generate):
-        return
-    ua = generate()
-    preferred = _preferred_max_app_versions()
-    if preferred:
-        try:
-            app_version, build_number = preferred[0]
-            extra.user_agent = ua.model_copy(
-                update={"app_version": app_version, "build_number": build_number}
-            )
-            return
-        except Exception:
-            pass
-    extra.user_agent = ua
+    return await ensure_session_identity(work_dir, session_name)
+
+
+async def _load_session_identity(work_dir: Path, session_name: str):
+    from app.services.pymax_runtime import load_session_identity
+
+    return await load_session_identity(work_dir, session_name)
+
+
+def _inspect_pymax_runtime():
+    from app.services.pymax_runtime import inspect_pymax_runtime
+
+    return inspect_pymax_runtime()
 
 
 def _clear_stale_connecting_step(profile_id: int) -> None:
@@ -1258,107 +1222,81 @@ async def _with_decrypted_client(
     group_id: int | None = None,
     proxy: str | None = None,
 ):
-    from pymax import Client, ExtraConfig
-
     sess = _ensure_auth_session(profile_id)
     if login_mode:
         _set_auth_step(profile_id, "connecting")
     else:
         _clear_stale_connecting_step(profile_id)
-    if not login_mode and not _session_db_has_token(profile_id):
+    session_dir = _session_dir(profile_id)
+    has_existing_session = _session_db_has_token(profile_id)
+    if not login_mode and not has_existing_session:
         raise RuntimeError(
             "Сессия MAX отсутствует — нажмите «Войти» у профиля. "
             "Рассылка не запрашивает SMS."
         )
+    identity = (
+        await _ensure_session_identity(session_dir, "session.db")
+        if has_existing_session
+        else None
+    )
     if proxy is None and group_id is not None:
         proxy = _group_proxy(group_id, profile_id)
-    extra_kwargs: dict[str, Any] = {"reconnect": False, "log_level": "WARNING"}
-    device_id, mt_instance_id = _session_device_fields(profile_id)
-    if device_id:
-        extra_kwargs["device_id"] = device_id
-    if mt_instance_id:
-        extra_kwargs["mt_instance_id"] = mt_instance_id
     if proxy:
-        extra_kwargs["proxy"] = proxy
         host = proxy.split("@")[-1]
         append_log(
             f"Прокси группа#{group_id or '—'} / профиль#{profile_id}: {host}"
         )
-    try:
-        extra = ExtraConfig(**extra_kwargs)
-    except TypeError:
-        if proxy:
-            raise RuntimeError(
-                "клиент MAX не поддерживает прокси в этой конфигурации"
-            ) from None
-        extra_kwargs.pop("device_id", None)
-        extra_kwargs.pop("mt_instance_id", None)
-        extra = ExtraConfig(**extra_kwargs)
-    _prefer_current_max_user_agent(extra)
-    client_kwargs: dict[str, Any] = {
-        "phone": phone,
-        "work_dir": str(_session_dir(profile_id)),
-        "session_name": "session.db",
-        "extra_config": extra,
-    }
     if login_mode:
         sms = _QueueSmsProvider(sess["sms_q"], profile_id)
         pwd = _QueuePasswordProvider(sess["pwd_q"], profile_id)
-        client = Client(
-            auth_flow=_AppSmsAuthFlow(sms, pwd, profile_id),
-            **client_kwargs,
-        )
+        auth_flow = _AppSmsAuthFlow(sms, pwd, profile_id)
     else:
-        client = Client(
-            auth_flow=_SessionOnlyAuthFlow(),
-            **client_kwargs,
-        )
-    box: dict[str, Any] = {"err": None, "result": None}
-    done = asyncio.Event()
-
-    @client.on_start()
-    async def on_start(c: Client) -> None:
-        try:
-            box["result"] = await fn(c)
-        except asyncio.CancelledError as e:
-            box["err"] = e
-            raise
-        except Exception as e:
-            box["err"] = e
-        finally:
-            done.set()
-
-    async def _run() -> None:
-        try:
-            await client.start()
-            if box["result"] is None and not client._app.started:
-                box["err"] = RuntimeError("Сессия недействительна")
-        except Exception as e:
-            if box["result"] is None and not _is_benign_disconnect(e):
-                box["err"] = box["err"] or e
-        finally:
-            done.set()
-
-    task = asyncio.create_task(_run())
+        auth_flow = _SessionOnlyAuthFlow()
+    client = _build_pymax_client(
+        phone=phone,
+        work_dir=str(session_dir),
+        session_name="session.db",
+        auth_flow=auth_flow,
+        proxy=proxy,
+        identity=identity,
+    )
+    gateway = _max_gateway(client)
+    timeout = auth_timeout if login_mode else connect_timeout
     try:
-        await _wait_login_done(
-            profile_id, done, connect_timeout, auth_timeout, login_mode=login_mode
-        )
-    except TimeoutError as e:
-        box["err"] = e
+        async with asyncio.timeout(timeout):
+            await gateway.connect()
+            result = await fn(client)
+            if login_mode:
+                await _load_session_identity(session_dir, "session.db")
+        return result
     finally:
         try:
             await _safe_stop(client)
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
             if not login_mode:
                 _clear_stale_connecting_step(profile_id)
 
-    if box.get("err") and box.get("result") is None:
-        raise box["err"]
-    return box.get("result")
+
+def _platform_authorization_record():
+    from app.config import platform_authorization_file
+    from app.platform_policy import load_authorization_record
+
+    path = platform_authorization_file()
+    if path is None:
+        from app.platform_policy import PlatformAuthorizationHold
+
+        raise PlatformAuthorizationHold("record_missing")
+    return load_authorization_record(path, now=datetime.now(timezone.utc))
+
+
+def _max_gateway(client):
+    from app.services.max_gateway import GuardedMaxGateway
+
+    return GuardedMaxGateway(
+        adapter=client,
+        record=_platform_authorization_record(),
+        clock=lambda: datetime.now(timezone.utc),
+    )
 
 
 async def _login_max(
@@ -1394,21 +1332,34 @@ async def _login_max(
     return me_id
 
 
-async def resolve_chat_id(client, group: sqlite3.Row) -> str | None:
-    if group["max_chat_id"]:
-        return group["max_chat_id"]
-    link = (group["invite_link"] or "").strip()
+class DestinationAuthorizationError(RuntimeError):
+    """Raised when a destination is not already authorized and resolvable."""
+
+
+async def resolve_chat_id(
+    gateway: Any,
+    group: Mapping[str, object],
+) -> str:
+    """Resolve a previously authorized destination without joining it."""
+    cached = str(group["max_chat_id"] or "").strip()
+    if cached:
+        return cached
+    link = str(group["invite_link"] or "").strip()
     if not link:
-        return None
-    chat = await client.resolve_group_by_link(link)
+        raise DestinationAuthorizationError("destination_link_missing")
+    chat = await gateway.resolve_destination(link)
     if chat is None:
-        joined = await client.join_group(link)
-        chat = joined
-    if chat is None:
-        return None
-    cid = str(chat.id)
-    with _conn() as c:
-        c.execute("UPDATE groups SET max_chat_id=? WHERE id=?", (cid, group["id"]))
+        raise DestinationAuthorizationError("membership_or_destination_not_verified")
+    cid = str(getattr(chat, "id", "") or "").strip()
+    if not cid:
+        raise DestinationAuthorizationError("destination_id_missing")
+    try:
+        group_id = group["id"]
+    except (KeyError, IndexError):
+        group_id = None
+    if group_id is not None:
+        with _conn() as c:
+            c.execute("UPDATE groups SET max_chat_id=? WHERE id=?", (cid, group_id))
     return cid
 
 
@@ -1719,6 +1670,30 @@ def _set_cooldown(profile_id: int, hours: float, reason: str = "") -> None:
     )
 
 
+def _persist_server_retry_after(
+    profile_id: int, seconds: float, reason: str = "server retry-after"
+) -> None:
+    """Persist the full provider deadline without applying a local cap."""
+    if seconds <= 0:
+        return
+    candidate = datetime.now(timezone.utc) + timedelta(seconds=float(seconds))
+    with _conn() as c:
+        row = c.execute(
+            "SELECT cooldown_until FROM profiles WHERE id=?", (profile_id,)
+        ).fetchone()
+        existing = _parse_cooldown_until(row["cooldown_until"] if row else None)
+        if existing is not None and existing >= candidate:
+            return
+        c.execute(
+            "UPDATE profiles SET cooldown_until=? WHERE id=?",
+            (candidate.isoformat(), profile_id),
+        )
+    append_log(
+        f"Пауза #{profile_id}: до {candidate.strftime('%Y-%m-%d %H:%M')} UTC"
+        f" ({reason}, {int(seconds)}с)"
+    )
+
+
 def _clear_cooldown(profile_id: int) -> None:
     with _conn() as c:
         c.execute(
@@ -1810,14 +1785,30 @@ def _reserved_hits_daily_limit(profile: sqlite3.Row) -> bool:
     """True if today's sends plus in-flight reservations meet the daily cap."""
     pid = int(profile["id"])
     reserved = int(RUNTIME.profile_reserved.get(pid, 0))
-    if reserved <= 0:
-        return False
     limit = _ensure_daily_limit(pid, log=False)
     if limit <= 0:
         return True
     today = _local_today().isoformat()
     sent = int(profile["messages_sent_today"] or 0) if profile["sent_day"] == today else 0
-    return sent + reserved >= limit
+    durable_reserved = 0
+    try:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT COUNT(*) AS n FROM operations o "
+                "WHERE o.profile_id=? AND o.budget_date=? AND ("
+                "o.status IN ('reserved', 'claimed', 'in_flight', 'unknown') OR "
+                "(o.status='accepted' AND NOT EXISTS ("
+                "SELECT 1 FROM send_log sl WHERE sl.operation_id=o.operation_id "
+                "AND sl.status='sent'"
+                ")))",
+                (pid, today),
+            ).fetchone()
+            durable_reserved = int(row["n"] if row else 0)
+    except sqlite3.Error:
+        # Legacy/minimal fixtures may not have the ledger yet; keep the old
+        # in-memory reservation behavior rather than inventing a new block.
+        durable_reserved = 0
+    return sent + reserved + durable_reserved >= limit
 
 
 def _has_enabled_active_profiles() -> bool:
@@ -1960,116 +1951,9 @@ def _prepare_outgoing_text(
     return fallback
 
 
-def _human_presence_enabled() -> bool:
-    return _setting_truthy("human_presence_enabled", "1")
-
-
-def _presence_reaction_pool() -> list[str]:
-    raw = get_setting("presence_reactions") or DEFAULTS.get(
-        "presence_reactions", "👍,❤️,🔥,😂"
-    )
-    parts = [p.strip() for p in str(raw).replace(";", ",").split(",")]
-    return [p for p in parts if p] or ["👍"]
-
-
-async def _human_presence_before_send(client: Any, chat_id: int) -> None:
-    """Открыть историю / иногда прочитать / иногда реакцию. Ошибки не валят send."""
-    if not _human_presence_enabled():
-        return
-    msgs: list[Any] | None = None
-    hist_ch = max(0.0, min(100.0, _setting_float("presence_history_chance", 70.0)))
-    if hist_ch > 0 and random.random() * 100.0 < hist_ch:
-        try:
-            n = random.randint(5, 15)
-            msgs = await client.fetch_history(chat_id=chat_id, backward=n)
-            # «читает» + «печатает» — реалистичные 3–23 с вместо bot-паузы
-            read_time = random.uniform(2.0, 8.0)
-            typing_time = max(1.0, min(15.0, random.gauss(4.0, 2.0)))
-            await asyncio.sleep(read_time + typing_time)
-        except Exception as e:
-            append_log(f"Присутствие (история): {e}")
-            msgs = None
-    if not msgs:
-        # без истории всё равно имитируем набор текста перед send
-        typing_time = max(1.0, min(12.0, random.gauss(3.5, 1.5)))
-        await asyncio.sleep(typing_time)
-        return
-    read_ch = max(0.0, min(100.0, _setting_float("presence_read_chance", 40.0)))
-    if read_ch > 0 and random.random() * 100.0 < read_ch:
-        try:
-            target = msgs[-1] if msgs else None
-            if target is not None and getattr(target, "id", None) is not None:
-                await client.read_message(int(target.id), chat_id)
-        except Exception as e:
-            append_log(f"Присутствие (прочтение): {e}")
-    react_ch = max(0.0, min(100.0, _setting_float("presence_react_chance", 12.0)))
-    if react_ch > 0 and random.random() * 100.0 < react_ch:
-        try:
-            candidates = [
-                m
-                for m in msgs
-                if getattr(m, "id", None) is not None
-                and (getattr(m, "text", None) or getattr(m, "attaches", None))
-            ]
-            if candidates:
-                m = random.choice(candidates[:12])
-                emoji = random.choice(_presence_reaction_pool())
-                await client.add_reaction(chat_id, str(m.id), emoji)
-        except Exception as e:
-            append_log(f"Присутствие (реакция): {e}")
-
-
 async def _maybe_idle_presence() -> None:
-    """Редкий «онлайн» без отправки: открыть чат и историю."""
-    if not _human_presence_enabled():
-        return
-    chance = max(0.0, min(100.0, _setting_float("presence_idle_chance", 5.0)))
-    if chance <= 0 or random.random() * 100.0 >= chance:
-        return
-    if not _in_send_window():
-        return
-    groups = _active_groups()
-    if not groups:
-        return
-    random.shuffle(groups)
-    for group in groups[:3]:
-        profiles = _active_profiles_for_group(int(group["id"]))
-        if not profiles:
-            continue
-        profile = random.choice(profiles)
-        if (
-            _is_circuit_open(int(profile["id"]))
-            or _is_in_human_break(int(profile["id"]))
-            or _is_in_cooldown(profile)
-        ):
-            continue
-
-        async def _do(c, g=group):
-            cid = await resolve_chat_id(c, g)
-            if not cid:
-                return None
-            chat_id = int(cid)
-            await c.get_chat(chat_id)
-            try:
-                await c.fetch_history(chat_id=chat_id, backward=random.randint(3, 10))
-            except Exception:
-                pass
-            await asyncio.sleep(random.uniform(0.3, 1.2))
-            return cid
-
-        try:
-            await _with_client(
-                int(profile["id"]),
-                str(profile["phone"]),
-                _do,
-                group_id=int(group["id"]),
-            )
-            append_log(
-                f"Простой онлайн #{profile['id']} → «{group['name']}» (без отправки)"
-            )
-        except Exception as e:
-            append_log(f"Пропуск простоя: {e}")
-        return
+    """Compatibility hook; artificial idle presence has been removed."""
+    return
 
 
 def _group_proxy(group_id: int, profile_id: int | None = None) -> str | None:
@@ -2128,6 +2012,10 @@ def _validate_proxy_for_group(
         urls = [u for u in [_group_proxy(gid, profile_id)] if u]
     else:
         urls = antiban_core.parse_proxy_list(raw)
+    try:
+        runtime = _inspect_pymax_runtime()
+    except Exception as exc:
+        return False, f"PyMax runtime unavailable: {exc}"
     tenant_id = None
     if _is_server_mode():
         from app.tenant import get_tenant_id
@@ -2143,7 +2031,11 @@ def _validate_proxy_for_group(
         if bad and now < bad[0]:
             errors.append(f"{label}: {bad[1]}")
             continue
-        ok, err = antiban_core.check_proxy(proxy_url)
+        ok, err = antiban_core.check_proxy(
+            proxy_url,
+            target_host=runtime.tcp_host,
+            target_port=runtime.tcp_port,
+        )
         if ok:
             _proxy_bad_until.pop(key, None)
             continue
@@ -2413,15 +2305,18 @@ from app.campaign_worker import (
 
 def backup_database() -> Path | None:
     """Снимок SQLite в data/backups/. Возвращает путь или None."""
+    dest: Path | None = None
     try:
         backups = _backups_dir()
         backups.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         dest = backups / f"app-{ts}.db"
-        # checkpoint WAL перед копированием
-        with _conn() as c:
-            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        shutil.copy2(_db_path(), dest)
+        # SQLite Backup API takes a consistent online snapshot, including WAL.
+        with _conn() as source, sqlite3.connect(dest) as target:
+            source.backup(target)
+            integrity = target.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != "ok":
+                raise RuntimeError("backup_integrity_failed")
         files = sorted(backups.glob("app-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
         for old in files[BACKUP_KEEP:]:
             old.unlink(missing_ok=True)
@@ -2429,6 +2324,8 @@ def backup_database() -> Path | None:
         _metric_inc("backups_total")
         return dest
     except Exception as e:
+        if dest is not None:
+            dest.unlink(missing_ok=True)
         append_log(f"Ошибка резервной копии: {e}")
         return None
 
@@ -2455,14 +2352,15 @@ def _sqlite_reset_running_campaigns(db_path: Path) -> None:
 def _tenant_sqlite_paths() -> list[Path]:
     paths: list[Path] = []
     if _is_server_mode():
-        tenants_root = ROOT / "data" / "tenants"
+        data_root = _resolve_data_root()
+        tenants_root = data_root / "tenants"
         if tenants_root.is_dir():
             for entry in tenants_root.iterdir():
                 if entry.is_dir():
                     db = entry / "app.db"
                     if db.is_file():
                         paths.append(db)
-        for extra in (ROOT / "data" / "global" / "app.db", ROOT / "data" / "app.db"):
+        for extra in (data_root / "global" / "app.db", data_root / "app.db"):
             if extra.is_file():
                 paths.append(extra)
     else:
@@ -2632,6 +2530,9 @@ async def _send_with_retry(
     mi_next: int,
     *,
     advance_queue: bool = True,
+    daily_plan_id: str | None = None,
+    slot_id: str | None = None,
+    tracker=None,
 ) -> bool:
     from app.campaign_send import send_with_retry
 
@@ -2644,6 +2545,9 @@ async def _send_with_retry(
         gi_next,
         mi_next,
         advance_queue=advance_queue,
+        daily_plan_id=daily_plan_id,
+        slot_id=slot_id,
+        tracker=tracker,
     )
 
 
@@ -2878,7 +2782,8 @@ def _encrypt_all_sessions() -> None:
 
     from app.tenant import tenant_scope
 
-    tenants_root = ROOT / "data" / "tenants"
+    data_root = _resolve_data_root()
+    tenants_root = data_root / "tenants"
     if tenants_root.exists():
         for td in tenants_root.iterdir():
             if not td.is_dir() or not td.name.isdigit():
@@ -2888,7 +2793,7 @@ def _encrypt_all_sessions() -> None:
                     _encrypt_sessions_for_data_dir(_resolve_data_dir())
             except Exception:
                 pass
-    global_dir = ROOT / "data" / "global"
+    global_dir = data_root / "global"
     if global_dir.exists():
         try:
             with tenant_scope(use_global_data=True, role="admin"):
@@ -2896,7 +2801,7 @@ def _encrypt_all_sessions() -> None:
         except Exception:
             pass
     # Legacy shared data/ (no tenant context) — only if present
-    shared = ROOT / "data"
+    shared = data_root
     if shared.is_dir() and (shared / "sessions").exists():
         try:
             _encrypt_sessions_for_data_dir(shared)
@@ -2908,12 +2813,9 @@ app = FastAPI(title="MAX Sender", lifespan=lifespan)
 app.add_middleware(ApiPinMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
-try:
-    from app.register import register_server
+from app.register import register_server
 
-    register_server(app)
-except ImportError:
-    pass
+register_server(app)
 
 
 if __name__ == "__main__":
