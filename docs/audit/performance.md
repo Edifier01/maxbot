@@ -1,9 +1,15 @@
 # T30 regression and performance evidence
 
-Status: `PASS` for the required full regression gate on source candidate
-`c5f52980dd7297d97ad440efe8a0fdf94997fb1b` in an isolated writable Python
-3.12 CI container; the separate reference performance workload gate remains
-`NOT RUN`.
+Status: `PASS` for the previously recorded writable-CI regression evidence;
+the current runtime/test continuation is `266022fe39a05c978b738565633e714047bc740e`.
+The separate reference performance workload gate remains `NOT RUN`, and the
+historical rows below retain the SHAs on which those checks actually ran.
+
+The fresh host rerun on 2026-09-22 collected `518` tests and then timed out at
+`test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails`
+after 10 passes because the restricted filesystem/`asyncio.to_thread()`
+boundary did not return. The current host result is `BLOCKED`; historical
+writable-CI PASS rows remain bound to their original SHAs.
 
 ## Current regression execution
 

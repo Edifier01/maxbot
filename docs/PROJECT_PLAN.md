@@ -54,7 +54,7 @@ Multi-tenant SaaS для controlled массовой рассылки в мес�
 - Telegram notifications
 - [ ] Billing / payments (out of scope — manual subscriptions)
 
-### Milestone 5 — Production Readiness ✅
+### Milestone 5 — Local production-readiness candidate (`FIX / PARTIAL`)
 
 - [x] Register rollback on register
 - [x] Redis auth rate limit (multi-replica)
@@ -64,15 +64,22 @@ Multi-tenant SaaS для controlled массовой рассылки в мес�
 - [x] Reduce `main.py` monolith (worker extraction phase 1–2 — ADR 003). Further split **PARTIAL** (~2845 lines remain; P3-3)
 - ~~Core sync with desktop~~ — out of scope this epic
 
+The local source candidate has focused safety, integration, static and browser
+evidence, but this milestone is not a production `GO`: normative Master
+acceptance, independent platform authorization, image CVE review,
+secret-history ownership and VPS/live verification remain open. See
+`docs/audit/final-review.md` and `docs/audit/release-gate.md` for the
+commit-bound handoff.
+
 ## Release Gates
 
 Before production deploy:
 
-1. CI green: `server-smoke`, `compose-config`, `server-e2e`
-2. `.env` без placeholder secrets
-3. `bash scripts/backup-volumes.sh`
-4. `bash scripts/deploy.sh` + `verify_deploy.sh`
-5. Verifier PASSED on changed domains
+1. CI green: `server-smoke`, `compose-config`, `server-e2e` — must be rerun for the final SHA
+2. `.env` без placeholder secrets — operator-only, not present in Git
+3. `bash scripts/backup-volumes.sh` — operator-only before deploy
+4. `bash scripts/deploy.sh` + `verify_deploy.sh` — production gate, not run locally here
+5. Verifier PASSED on changed domains — focused local evidence exists; Master/production evidence remains open
 
 ## Risks
 

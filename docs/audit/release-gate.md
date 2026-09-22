@@ -1,7 +1,15 @@
 # MAXBOT release gate
 
-Candidate: local source commit
-`24b75c3fd87385ff1af7e2284d581a9a0b558215`.
+Candidate runtime/test commit:
+`266022fe39a05c978b738565633e714047bc740e`.
+
+Historical evidence rows retain the SHAs on which those checks actually ran;
+the documentation/configuration reconciliation is a local continuation.
+
+Fresh 2026-09-22 focused integration/policy checks passed (`150`),
+while the restricted host full suite and local Chromium launch are `BLOCKED`
+by environment boundaries. This does not replace writable CI or production
+verification.
 
 Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
 

@@ -1,8 +1,13 @@
 # T29 security, dependency, and secret review
 
-Status: `PARTIAL`; this is a commit-bound local review for source candidate
-`24b75c3fd87385ff1af7e2284d581a9a0b558215`, not a production release gate.
-Candidate SHA is recorded above; the review is not a production approval.
+Status: `PARTIAL`; this is a commit-bound local review for runtime/test
+candidate `266022fe39a05c978b738565633e714047bc740e`, not a production release
+gate. Historical evidence rows retain the SHAs on which those checks actually
+ran; this review is not a production approval.
+
+The current restricted environment cannot reach the Docker daemon, so image
+build/CVE checks are not rerun here. This is recorded as `BLOCKED`, not as a
+clean image-security result.
 
 ## Dependency and source checks
 

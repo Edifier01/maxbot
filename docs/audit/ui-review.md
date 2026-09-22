@@ -2,6 +2,15 @@
 
 Status: `LOCAL PASS / HOSTED CI PASS`
 
+Current runtime/test continuation: `266022fe39a05c978b738565633e714047bc740e`.
+The browser results below are historical commit-bound evidence and do not
+replace a fresh browser run for the final continuation.
+
+The fresh 2026-09-22 loopback attempt was `BLOCKED`: all 21 scheduled tests
+were unable to launch Chromium because the restricted sandbox rejected
+`sandbox_host_linux.cc` with `Operation not permitted`. No current local UI
+PASS is claimed from that attempt.
+
 The approved local rendered-browser gate was implemented and executed on
 2026-09-21 from source candidate
 `e4837a1fe997d63704536f01685e56b9a97caf99`. The Browser plugin was

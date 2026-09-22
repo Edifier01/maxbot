@@ -1,5 +1,14 @@
 # MAXBOT supplemental baseline
 
+## Current continuation (2026-09-22)
+
+The historical baseline below was captured from `0154884cf94d6aeccf65f5390a0f845d783c3c0e`.
+The current runtime/test continuation is
+`266022fe39a05c978b738565633e714047bc740e`; its focused integration and UI
+changes are described in `docs/audit/final-review.md` and
+`docs/audit/verification.md`. Historical rows are not silently relabeled as
+evidence for the newer SHA.
+
 Дата baseline: 2026-09-20. Это dirty-worktree evidence; commit-bound и
 production verdict не заявляются.
 

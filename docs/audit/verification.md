@@ -4,7 +4,11 @@ Schema for each evidence row:
 
 `case_id | candidate_sha | command | environment | started_at | exit_code | result | evidence_ref | limitation`
 
-The candidate is the dirty working tree at `0154884cf94d6aeccf65f5390a0f845d783c3c0e`; rows are not commit-bound.
+The original rows below are historical dirty-working-tree evidence. The
+current runtime/test continuation is
+`266022fe39a05c978b738565633e714047bc740e`; new rows must bind their command,
+environment, timestamp and result to that exact SHA or clearly identify a
+later documentation-only continuation.
 
 ## Task graph linkage
 
@@ -172,3 +176,19 @@ The source candidate is technically green for the recorded local gates, but
 the release verdict remains `FIX` until independent platform authorization,
 Master acceptance, image CVE review, secret-history owner review and
 production verification are separately closed.
+
+## Current local continuation rerun (2026-09-22)
+
+These rows are bound to runtime/test candidate
+`266022fe39a05c978b738565633e714047bc740e`. The documentation/configuration
+reconciliation was present as a working-tree continuation during the relevant
+checks; no runtime or test source changed after this SHA.
+
+CURRENT-FINAL-FOCUSED | 266022fe39a05c978b738565633e714047bc740e | combined platform, gateway, recovery, campaign, daily-plan, UI, security and policy contract matrix | local Python 3.12.3 SQLite/fake-gateway environment | 2026-09-22T19:06:09Z | 0 | PASS | final focused matrix | 150 passed; no live MAX/provider action.
+CURRENT-FOCUSED-INTEGRATION | 266022fe39a05c978b738565633e714047bc740e | `python -m pytest -q tests/test_daily_plan_integration_v2.py tests/test_campaign_operation_integration_v2.py tests/test_operation_ledger_v2.py tests/test_campaign_commands_v2.py tests/test_campaign_auto_run.py tests/test_error_taxonomy_v2.py tests/test_ui_review_contract.py tests/test_ui_assets_contract.py tests/test_browser_ci_contract.py` | local Python 3.12.3 SQLite/fake-gateway environment | 2026-09-22T18:20:00Z | 0 | PASS | focused integration/UI matrix | 71 passed; no live MAX/provider action.
+CURRENT-POLICY-CONTRACT | 266022fe39a05c978b738565633e714047bc740e | `python -m pytest -q tests/test_final_review_contract.py tests/test_security_regressions_v2.py tests/test_ui_review_contract.py tests/test_ui_assets_contract.py tests/test_saas_ux_static.py tests/test_no_artificial_presence.py tests/test_admin_tenant_settings.py tests/test_role_plan_percent.py tests/test_global_pacing_settings.py` | local Python 3.12.3 policy/docs fixture | 2026-09-22T18:30:00Z | 0 | PASS | policy/runtime documentation contracts | 50 passed; fixed worker/timezone/role/presence contract remains local-only.
+CURRENT-SOURCE-STATIC | 266022fe39a05c978b738565633e714047bc740e | compileall, Node syntax, shell syntax, JSON validation, `pip check`, `git diff --check` | local Python 3.12.3/Node/Docker Compose CLI | 2026-09-22T18:45:00Z | 0 | PASS | source/static/config gates | Static commands and `docker compose config -q` passed; Docker daemon was not contacted by Compose config validation.
+CURRENT-COLLECT | 266022fe39a05c978b738565633e714047bc740e | `pytest tests/ --collect-only -q` | local Python 3.12.3 sandbox | 2026-09-22T18:45:00Z | 0 | PASS | current test tree | 518 tests collected; collection is not full execution evidence.
+CURRENT-FULL-SANDBOX | 266022fe39a05c978b738565633e714047bc740e | `timeout 90s env MAX_TEST=1 MAX_SERVER_MODE=1 JWT_SECRET=... pytest tests/ -q --tb=short --maxfail=1` | restricted sandbox Python 3.12.3 | 2026-09-22T18:47:00Z | 124 | BLOCKED | `tests/test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails` | The first 10 tests passed, then filesystem mutation inside `asyncio.to_thread()` did not return; Docker daemon access was also denied. No test was skipped silently.
+CURRENT-BROWSER-SANDBOX | 266022fe39a05c978b738565633e714047bc740e | `npm run browser:e2e -- --reporter=line` against loopback fixture | Chromium in restricted sandbox | 2026-09-22T18:52:00Z | 1 | BLOCKED | `tests/browser/`, Playwright error context | 21 tests could not launch Chromium because `sandbox_host_linux.cc` returned `Operation not permitted`; no UI assertion was converted to PASS.
+CURRENT-DOCKER-DAEMON | 266022fe39a05c978b738565633e714047bc740e | `docker info --format '{{.ServerVersion}}'` | local Docker socket | 2026-09-22T18:55:00Z | 1 | BLOCKED | Docker daemon boundary | Permission denied on `/var/run/docker.sock`; image build, DR smoke and image-CVE scan were not rerun here.

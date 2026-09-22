@@ -1,8 +1,17 @@
 # T32 / S05 final review
 
 Verdict: `FIX` for the release gate; overall remediation handoff is
-`PARTIAL`. The local evidence is bound to source candidate
-`24b75c3fd87385ff1af7e2284d581a9a0b558215`; it is not a production approval.
+`PARTIAL`. The source candidate/runtime-test continuation for this review is
+`266022fe39a05c978b738565633e714047bc740e`; it is not a production approval.
+The older candidate SHAs in the historical evidence below are retained as
+provenance. Documentation/configuration reconciliation is a separate local
+continuation and does not promote any external gate to PASS.
+
+The 2026-09-22 local rerun passed the combined focused integration/policy
+matrix (`150` tests) and all static/config checks. The restricted host suite
+remained `BLOCKED` at the filesystem/`asyncio.to_thread()` quarantine test and
+the local Chromium matrix remained `BLOCKED` by the sandbox launcher; these
+limitations are recorded in `docs/audit/verification.md`.
 
 ## Closed locally with evidence
 
