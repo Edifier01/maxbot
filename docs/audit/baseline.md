@@ -4,7 +4,7 @@
 
 The historical baseline below was captured from `0154884cf94d6aeccf65f5390a0f845d783c3c0e`.
 The current runtime/test continuation is
-`266022fe39a05c978b738565633e714047bc740e`; its focused integration and UI
+`473eb404f374400323e9a397acb20e2818ed7637`; its focused integration and UI
 changes are described in `docs/audit/final-review.md` and
 `docs/audit/verification.md`. Historical rows are not silently relabeled as
 evidence for the newer SHA.
@@ -70,9 +70,10 @@ production verdict не заявляются.
   container: the full SQLite suite and the separate PostgreSQL/E2E processes
   completed successfully. The host limitation is retained as a local-harness
   note, not promoted to a CI failure.
-- Production/VPS, live platform authorization review, browser evidence, full
-  Master acceptance, image CVE scanning, and production verification remain
-  `NOT RUN` or `BLOCKED` as stated in `verification.md`.
+- Production/VPS, live platform authorization review, full Master acceptance,
+  image CVE scanning, and production verification remain `NOT RUN` or
+  `BLOCKED` as stated in `verification.md`; the current automated browser
+  matrix is now separately evidenced as `PASS`.
 
 ## Current source revalidation
 

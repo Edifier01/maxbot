@@ -6,7 +6,7 @@ Schema for each evidence row:
 
 The original rows below are historical dirty-working-tree evidence. The
 current runtime/test continuation is
-`266022fe39a05c978b738565633e714047bc740e`; new rows must bind their command,
+`473eb404f374400323e9a397acb20e2818ed7637`; new rows must bind their command,
 environment, timestamp and result to that exact SHA or clearly identify a
 later documentation-only continuation.
 
@@ -192,3 +192,21 @@ CURRENT-COLLECT | 266022fe39a05c978b738565633e714047bc740e | `pytest tests/ --co
 CURRENT-FULL-SANDBOX | 266022fe39a05c978b738565633e714047bc740e | `timeout 90s env MAX_TEST=1 MAX_SERVER_MODE=1 JWT_SECRET=... pytest tests/ -q --tb=short --maxfail=1` | restricted sandbox Python 3.12.3 | 2026-09-22T18:47:00Z | 124 | BLOCKED | `tests/test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails` | The first 10 tests passed, then filesystem mutation inside `asyncio.to_thread()` did not return; Docker daemon access was also denied. No test was skipped silently.
 CURRENT-BROWSER-SANDBOX | 266022fe39a05c978b738565633e714047bc740e | `npm run browser:e2e -- --reporter=line` against loopback fixture | Chromium in restricted sandbox | 2026-09-22T18:52:00Z | 1 | BLOCKED | `tests/browser/`, Playwright error context | 21 tests could not launch Chromium because `sandbox_host_linux.cc` returned `Operation not permitted`; no UI assertion was converted to PASS.
 CURRENT-DOCKER-DAEMON | 266022fe39a05c978b738565633e714047bc740e | `docker info --format '{{.ServerVersion}}'` | local Docker socket | 2026-09-22T18:55:00Z | 1 | BLOCKED | Docker daemon boundary | Permission denied on `/var/run/docker.sock`; image build, DR smoke and image-CVE scan were not rerun here.
+
+## Current extended local rerun (2026-09-22)
+
+The restricted rows immediately above are retained as environment-specific
+evidence. The following rows were executed in an extended writable local
+runner against the runtime/test tree at
+`473eb404f374400323e9a397acb20e2818ed7637`; the subsequent documentation-only
+reconciliation does not alter runtime or test source.
+
+CURRENT-EXTENDED-FULL | 473eb404f374400323e9a397acb20e2818ed7637 | `timeout 120s env MAX_TEST=1 MAX_SERVER_MODE=1 JWT_SECRET=... python -m pytest tests/ -q --tb=short --maxfail=1` | extended writable local Python 3.12.3 runner | 2026-09-22 | 0 | PASS | `tests/` | 499 passed, 19 skipped in 19.23s; PostgreSQL skips are the planned SQLite-suite skips; no live MAX/provider action.
+CURRENT-EXTENDED-BROWSER | 473eb404f374400323e9a397acb20e2818ed7637 | `BASE_URL=http://127.0.0.1:18765 npm run browser:e2e -- --reporter=line` against bounded loopback fixture | extended local Chromium runner, temporary MAX_TEST fixture | 2026-09-22 | 0 | PASS | `tests/browser/`, `playwright.config.js` | 21 passed in 5.3s across 390x844, 768x1024 and 1440x1000; no external MAX/provider traffic.
+CURRENT-EXTENDED-SOURCE | 473eb404f374400323e9a397acb20e2818ed7637 | compileall, Node syntax, shell syntax, JSON validation, `pip check`, `git diff --check`, fixture `docker compose config -q` | extended local Python 3.12.3/Node/Docker Compose CLI | 2026-09-22 | 0 | PASS | source/static/config gates | All commands exited 0; Compose config validation did not contact the Docker daemon.
+
+The release verdict remains `FIX/PARTIAL`: automated local regression and UI
+evidence are now green, while normative Master acceptance, platform
+authorization, image-CVE transfer review, secret-history owner review,
+production/VPS verification and real MAX/provider delivery remain
+`NOT RUN` or `BLOCKED`.

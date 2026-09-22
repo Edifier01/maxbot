@@ -41,8 +41,8 @@
 
 - [x] Final combined focused integration/policy checks passed: 150 tests.
 - [x] Static/source/config checks passed; 518 tests collected.
-- [x] Full host suite classified `BLOCKED` at the known filesystem/`asyncio.to_thread()` boundary.
-- [x] Browser matrix classified `BLOCKED` by Chromium sandbox launch permissions; Docker daemon classified `BLOCKED` by socket permissions.
+- [x] Extended local full suite passed: `499 passed, 19 skipped`; the restricted-host timeout remains recorded as a harness limitation.
+- [x] Extended loopback browser matrix passed `21`; the restricted Chromium launch remains recorded as a harness limitation. Docker daemon remains `BLOCKED` by socket permissions.
 
 ## Task 5
 

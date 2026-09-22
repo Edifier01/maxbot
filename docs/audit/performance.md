@@ -1,15 +1,18 @@
 # T30 regression and performance evidence
 
 Status: `PASS` for the previously recorded writable-CI regression evidence;
-the current runtime/test continuation is `266022fe39a05c978b738565633e714047bc740e`.
+the current runtime/test continuation is
+`473eb404f374400323e9a397acb20e2818ed7637`.
 The separate reference performance workload gate remains `NOT RUN`, and the
 historical rows below retain the SHAs on which those checks actually ran.
 
-The fresh host rerun on 2026-09-22 collected `518` tests and then timed out at
+The restricted host rerun on 2026-09-22 collected `518` tests and timed out at
 `test_admin_delete_user_quarantine.py::test_delete_user_restores_tenant_dir_if_pg_fails`
 after 10 passes because the restricted filesystem/`asyncio.to_thread()`
-boundary did not return. The current host result is `BLOCKED`; historical
-writable-CI PASS rows remain bound to their original SHAs.
+boundary did not return. An extended local runner then completed the final
+candidate with `499 passed, 19 skipped`; the restricted result remains a
+harness limitation and historical writable-CI PASS rows retain their own
+SHAs.
 
 ## Current regression execution
 

@@ -105,7 +105,7 @@
 - [x] **Step 1: Run the focused safety, campaign, recovery, UI, and browser-contract tests.**
 - [x] **Step 2: Run the complete `tests/` suite with a bounded timeout and record the environment-only hang separately.**
 - [x] **Step 3: Run Python/JS/shell/JSON checks, `git diff --check`, and `docker compose config -q`.**
-- [x] **Step 4: Use the pinned Playwright package against a bounded local server; the browser gate is `BLOCKED` by the Chromium sandbox and Docker/production gates remain separately unrun.**
+- [x] **Step 4: Use the pinned Playwright package against a bounded local server; the extended runner passed the browser matrix, while the restricted sandbox attempt and Docker/production gates remain separately recorded.**
 - [x] **Step 5: Bind current evidence to the runtime/test SHA and perform the final diff/status review.**
 
 ### Task 5: Commit the verified local candidate and prepare integration

@@ -2,14 +2,15 @@
 
 Status: `LOCAL PASS / HOSTED CI PASS`
 
-Current runtime/test continuation: `266022fe39a05c978b738565633e714047bc740e`.
-The browser results below are historical commit-bound evidence and do not
-replace a fresh browser run for the final continuation.
+Current runtime/test continuation: `473eb404f374400323e9a397acb20e2818ed7637`.
+The browser results below retain historical commit-bound evidence and the
+restricted-sandbox attempt for provenance.
 
-The fresh 2026-09-22 loopback attempt was `BLOCKED`: all 21 scheduled tests
-were unable to launch Chromium because the restricted sandbox rejected
-`sandbox_host_linux.cc` with `Operation not permitted`. No current local UI
-PASS is claimed from that attempt.
+An extended 2026-09-22 loopback run against the final local candidate passed
+all `21` scheduled tests across 390/768/1440. The earlier restricted attempt
+was `BLOCKED` before Chromium launch because `sandbox_host_linux.cc` returned
+`Operation not permitted`; that environment result is not an application
+failure.
 
 The approved local rendered-browser gate was implemented and executed on
 2026-09-21 from source candidate
@@ -126,10 +127,10 @@ rendered state.
 
 ## Remaining limits
 
-The local full Python suite is not authoritative in the restricted sandbox:
-separate runs block in TestClient/thread filesystem lifecycle tests. The
-writable Python 3.12 container run for this exact candidate passed `499` tests
-with `19` planned PostgreSQL skips.
+The restricted sandbox still blocks separate TestClient/thread filesystem
+lifecycle runs, but the extended writable local runner for this final
+candidate passed `499` tests with `19` planned PostgreSQL skips. The restricted
+failure is retained as a harness limitation, not a source failure.
 
 The current automated gate does not replace a true browser 200% zoom session,
 full rendered color-contrast review, or the complete

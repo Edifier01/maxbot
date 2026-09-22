@@ -1,15 +1,15 @@
 # MAXBOT release gate
 
 Candidate runtime/test commit:
-`266022fe39a05c978b738565633e714047bc740e`.
+`473eb404f374400323e9a397acb20e2818ed7637`.
 
 Historical evidence rows retain the SHAs on which those checks actually ran;
-the documentation/configuration reconciliation is a local continuation.
+the final documentation/configuration reconciliation is a local continuation.
 
-Fresh 2026-09-22 focused integration/policy checks passed (`150`),
-while the restricted host full suite and local Chromium launch are `BLOCKED`
-by environment boundaries. This does not replace writable CI or production
-verification.
+Fresh 2026-09-22 extended local checks passed: focused integration/policy
+(`150`), full Python (`499 passed, 19 skipped`) and loopback Chromium (`21`).
+Restricted-sandbox failures remain recorded as environment-specific evidence;
+this does not replace normative, production or live-provider verification.
 
 Verdict: `FIX` for release; overall implementation handoff: `PARTIAL`.
 

@@ -1,17 +1,17 @@
 # T32 / S05 final review
 
 Verdict: `FIX` for the release gate; overall remediation handoff is
-`PARTIAL`. The source candidate/runtime-test continuation for this review is
-`266022fe39a05c978b738565633e714047bc740e`; it is not a production approval.
+`PARTIAL`. The final local source candidate is
+`473eb404f374400323e9a397acb20e2818ed7637`; it is not a production approval.
 The older candidate SHAs in the historical evidence below are retained as
-provenance. Documentation/configuration reconciliation is a separate local
-continuation and does not promote any external gate to PASS.
+provenance. The final commit is a local documentation/configuration
+continuation on top of the reviewed runtime/test tree.
 
-The 2026-09-22 local rerun passed the combined focused integration/policy
-matrix (`150` tests) and all static/config checks. The restricted host suite
-remained `BLOCKED` at the filesystem/`asyncio.to_thread()` quarantine test and
-the local Chromium matrix remained `BLOCKED` by the sandbox launcher; these
-limitations are recorded in `docs/audit/verification.md`.
+The 2026-09-22 extended local rerun passed the combined focused integration/
+policy matrix (`150` tests), the full Python suite (`499 passed, 19 skipped`)
+and the loopback Chromium matrix (`21 passed`). The earlier restricted-host
+and restricted-Chromium attempts remain recorded as environment-specific
+`BLOCKED` evidence; they do not represent application failures.
 
 ## Closed locally with evidence
 
@@ -55,6 +55,9 @@ limitations are recorded in `docs/audit/verification.md`.
   loopback-only Chromium matrix passed `21` tests across 390/768/1440,
   including semantic-token WCAG AA checks and a 195x422
   200%-equivalent reflow check for auth/dashboard surfaces.
+- The extended local runner reran the final tree: `499` Python tests passed,
+  `19` planned PostgreSQL tests were skipped, and all `21` browser tests passed
+  across 390/768/1440 without external MAX/provider traffic.
 
 ## Release blockers
 
