@@ -57,10 +57,12 @@ class GuardedMaxGateway:
         record: AuthorizationRecord,
         *,
         clock: Callable[[], datetime],
+        restriction_handler: Callable[[MaxAction, BaseException], Any] | None = None,
     ) -> None:
         self._adapter = adapter
         self._record = record
         self._clock = clock
+        self._restriction_handler = restriction_handler
 
     def _require(self, action: MaxAction) -> None:
         recovery_hold.require_external_actions_released()
@@ -73,10 +75,17 @@ class GuardedMaxGateway:
 
     async def _call(self, action: MaxAction, method: str, *args: Any, **kwargs: Any) -> Any:
         self._require(action)
-        result = getattr(self._adapter, method)(*args, **kwargs)
-        if isawaitable(result):
-            return await result
-        return result
+        try:
+            result = getattr(self._adapter, method)(*args, **kwargs)
+            if isawaitable(result):
+                return await result
+            return result
+        except Exception as exc:
+            if self._restriction_handler is not None:
+                handled = self._restriction_handler(action, exc)
+                if isawaitable(handled):
+                    await handled
+            raise
 
     async def connect(self) -> Any:
         return await self._call(MaxAction.CONNECT, "connect")

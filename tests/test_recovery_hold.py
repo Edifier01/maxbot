@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 from datetime import UTC, datetime, timedelta
 import os
@@ -56,6 +57,85 @@ def test_restore_hold_fences_auto_resume(tmp_path, monkeypatch) -> None:
         start.assert_not_awaited()
 
     asyncio.run(run())
+
+
+def test_restore_hold_skips_auto_run_database_read_before_server_tenant_scope(
+    tmp_path, monkeypatch
+) -> None:
+    hold = write_hold(tmp_path)
+    monkeypatch.setenv("MAX_RECOVERY_HOLD_FILE", str(hold))
+    import main as m
+
+    monkeypatch.setattr(m, "_is_server_mode", lambda: True)
+    monkeypatch.setattr(
+        m,
+        "_auto_run_enabled",
+        lambda: (_ for _ in ()).throw(AssertionError("must not read tenant settings")),
+    )
+    assert asyncio.run(m._try_auto_resume()) is False
+
+
+def test_restore_hold_survives_restart_without_resuming_or_resetting_budget(
+    tmp_path, monkeypatch
+) -> None:
+    hold = write_hold(tmp_path, revision="restore-budget-fixture")
+    monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("MAX_SERVER_MODE", "0")
+    monkeypatch.setenv("JWT_SECRET", "fixture-jwt-secret-at-least-32-characters")
+    monkeypatch.setenv("MAX_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("MAX_RECOVERY_HOLD_FILE", str(hold))
+
+    import app.config as cfg
+
+    importlib.reload(cfg)
+    import main as m
+
+    importlib.reload(m)
+    m.reset_test_runtime()
+    m._refresh_data_paths()
+    m.init_db()
+    today = m._local_today().isoformat()
+    with m._conn() as connection:
+        connection.execute(
+            "INSERT INTO profiles (phone, status, messages_sent_today, sent_day) "
+            "VALUES (?, ?, ?, ?)",
+            ("+79990018888", m.ProfileStatus.ACTIVE, 4, today),
+        )
+    m.set_setting("auto_run", "1")
+    first_start = AsyncMock()
+    monkeypatch.setattr(m, "_start_worker", first_start)
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["fixture"])
+    monkeypatch.setattr(m, "_prepare_auto_resume_pool", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+
+    assert asyncio.run(m._try_auto_resume()) is False
+    first_start.assert_not_awaited()
+    with m._conn() as connection:
+        assert connection.execute(
+            "SELECT messages_sent_today, sent_day FROM profiles WHERE phone=?",
+            ("+79990018888",),
+        ).fetchone()["messages_sent_today"] == 4
+
+    importlib.reload(cfg)
+    importlib.reload(m)
+    m.reset_test_runtime()
+    m._refresh_data_paths()
+    second_start = AsyncMock()
+    monkeypatch.setattr(m, "_start_worker", second_start)
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["fixture"])
+    monkeypatch.setattr(m, "_prepare_auto_resume_pool", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+
+    assert asyncio.run(m._try_auto_resume()) is False
+    second_start.assert_not_awaited()
+    assert recovery_hold.external_actions_status() == ("held", True)
+    with m._conn() as connection:
+        assert connection.execute(
+            "SELECT messages_sent_today, sent_day FROM profiles WHERE phone=?",
+            ("+79990018888",),
+        ).fetchone()["messages_sent_today"] == 4
 
 
 @pytest.mark.parametrize(

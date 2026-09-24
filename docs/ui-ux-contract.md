@@ -23,7 +23,7 @@ rendered as `UNCLASSIFIED`. A mutating outcome of `unknown`, `in_flight`, or
 | DESTINATION_REVIEW_REQUIRED | REVIEW_DESTINATION |
 | MEMBERSHIP_REVIEW_REQUIRED | REVIEW_MEMBERSHIP |
 | CONSENT_REVOKED | STOP_OPERATION |
-| ACCOUNT_AUTOMATION_CONFLICT | WAIT_OPERATION |
+| ACCOUNT_AUTOMATION_CONFLICT | REVIEW_CONFLICT |
 | ROUTE_MISSING | CONFIGURE_ROUTE |
 | ROUTE_CONFLICT | REVIEW_ROUTE |
 | ROUTE_DISABLED | ENABLE_ROUTE |
@@ -79,6 +79,15 @@ rendered as `UNCLASSIFIED`. A mutating outcome of `unknown`, `in_flight`, or
 | UNCLASSIFIED | REVIEW_OPERATION |
 
 T03 unit evidence covers source precedence, proxy-vs-MAX sanction separation,
-unknown mutation handling, and secret-free envelopes. Browser/role evidence is
-owned by the later T27/T30 integration gates and remains pending until those
-tasks are executed.
+unknown mutation handling, and secret-free envelopes. Current dirty-worktree
+T27/T30 browser evidence now covers visible cabinet, admin and impersonation
+role surfaces for all catalogue codes and normalized actions; it remains
+uncommitted local evidence, while auxiliary consumers and manual acceptance
+remain pending.
+
+For every catalogue row the cabinet and admin renderer expose the normalized
+action token as an explicit keyboard-focusable control. The control only opens
+the relevant local review surface, reads a local journal/settings/list endpoint,
+or opens authentication; it never retries an unknown mutation, submits OTP or
+password material, or invokes MAX/provider traffic automatically. `STOP_*`
+actions focus the explicit Stop control and require a separate user click.

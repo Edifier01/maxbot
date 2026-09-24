@@ -13,6 +13,7 @@ import antiban_core
 
 from app.campaign_facade import main
 from app.repositories.operations import OperationRepository
+from app.services.errors import classify_exception
 from app.services.operations import OperationLedger
 
 SEND_NOT_STARTED = "not_started"
@@ -39,6 +40,15 @@ _UNSAFE_NETWORK_MARKERS = (
     "winerror 10053",
     "winerror 10060",
 )
+
+
+class DailyReservationUnavailable(RuntimeError):
+    """No unallocated configured daily budget remains for this operation."""
+
+    code = "DAILY_RESERVATION_UNAVAILABLE"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
 
 
 @dataclass
@@ -89,11 +99,14 @@ def classify_send_exception(exc: BaseException, outcome: str) -> str:
         if outcome == SEND_ACCEPTED:
             return UNSAFE_TO_RETRY
         return RETRY_UNKNOWN
+    # A flood/wait marker does not prove that a request which already crossed
+    # the provider boundary had no effect.  Preserve the unknown outcome and
+    # let the caller persist the provider deadline instead of replaying it.
+    if outcome in (SEND_IN_FLIGHT, SEND_ACCEPTED, SEND_UNKNOWN):
+        return RETRY_UNKNOWN
     err = str(exc)
     if antiban_core.flood_wait_seconds(err) is not None:
         return SAFE_TO_RETRY
-    if outcome in (SEND_IN_FLIGHT, SEND_ACCEPTED, SEND_UNKNOWN):
-        return RETRY_UNKNOWN
     return SAFE_TO_RETRY
 
 
@@ -331,6 +344,66 @@ def _start_send_operation(
             tracker.operation_ledger = ledger
             return
     budget_date = main._local_today().isoformat()
+    reservation_guard = None
+    if slot_id is None:
+        with main._conn() as connection:
+            profile_columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(profiles)"
+                ).fetchall()
+            }
+        has_daily_budget_schema = {
+            "daily_limit",
+            "daily_limit_day",
+            "messages_sent_today",
+            "sent_day",
+        }.issubset(profile_columns)
+    else:
+        has_daily_budget_schema = False
+    if slot_id is None and has_daily_budget_schema:
+        configured_limit = main._ensure_daily_limit(int(profile["id"]), log=False)
+
+        def _budget_guard(connection: sqlite3.Connection) -> None:
+            current = connection.execute(
+                "SELECT messages_sent_today, sent_day FROM profiles WHERE id=?",
+                (int(profile["id"]),),
+            ).fetchone()
+            if current is None:
+                raise DailyReservationUnavailable()
+            sent = (
+                int(current["messages_sent_today"] or 0)
+                if str(current["sent_day"] or "") == budget_date
+                else 0
+            )
+            columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(send_log)"
+                ).fetchall()
+            }
+            if "operation_id" in columns:
+                occupied = connection.execute(
+                    "SELECT COUNT(*) AS n FROM operations o "
+                    "WHERE o.profile_id=? AND o.budget_date=? AND ("
+                    "o.status IN ('reserved', 'claimed', 'in_flight', 'unknown') OR "
+                    "(o.status='accepted' AND NOT EXISTS ("
+                    "SELECT 1 FROM send_log sl WHERE sl.operation_id=o.operation_id "
+                    "AND sl.status='sent')))",
+                    (int(profile["id"]), budget_date),
+                ).fetchone()
+            else:
+                occupied = connection.execute(
+                    "SELECT COUNT(*) AS n FROM operations o "
+                    "WHERE o.profile_id=? AND o.budget_date=? "
+                    "AND o.status IN ('reserved', 'claimed', 'in_flight', 'unknown')",
+                    (int(profile["id"]), budget_date),
+                ).fetchone()
+            if sent + int(occupied["n"] if occupied else 0) >= int(configured_limit):
+                raise DailyReservationUnavailable()
+
+        reservation_guard = _budget_guard
+
     operation = ledger.create_operation(
         scope=_operation_scope(),
         profile_id=int(profile["id"]),
@@ -341,6 +414,7 @@ def _start_send_operation(
         slot_id=slot_id,
         route_snapshot={},
         max_pre_effect_retries=max(0, int(main.MAX_RETRY) - 1),
+        reservation_guard=reservation_guard,
     )
     claimed = ledger.claim(operation.operation_id, profile_id=int(profile["id"]))
     tracker.operation_id = claimed.operation_id
@@ -405,6 +479,9 @@ async def send_with_retry(
     """
     state = tracker if tracker is not None else SendTracker()
     last_err = ""
+    if main._profile_deletion_in_progress(int(profile["id"])):
+        state.mark_failed_unsent("PROFILE_RUNTIME_CLEANUP_IN_PROGRESS")
+        return False
     try:
         final_text = (
             text
@@ -447,16 +524,30 @@ async def send_with_retry(
 
             async def _do(c, g=group, t=final_text, tr=state):
                 gateway = main._max_gateway(c)
-                cid = await main.resolve_chat_id(gateway, g)
+                approved_destination = main._require_send_destination(
+                    int(profile["id"]), g
+                )
+                if approved_destination is None:
+                    cid = await main.resolve_chat_id(gateway, g)
+                    destination_revision = None
+                else:
+                    cid = str(approved_destination["chat_id"])
+                    destination_revision = approved_destination[
+                        "destination_revision"
+                    ]
                 chat_id = int(cid)
                 await gateway.check_destination(chat_id=chat_id)
                 if tr.operation_ledger is not None:
+                    route_snapshot = {
+                        "group_id": int(g["id"]),
+                        "chat_id": str(cid),
+                    }
+                    if destination_revision is not None:
+                        route_snapshot["destination_revision"] = int(
+                            destination_revision
+                        )
                     tr.operation_ledger.mark_in_flight(
-                        tr.operation_id,
-                        route_snapshot={
-                            "group_id": int(g["id"]),
-                            "chat_id": str(cid),
-                        },
+                        tr.operation_id, route_snapshot=route_snapshot
                     )
                 tr.mark_in_flight()
                 ack = await gateway.send_message(chat_id=chat_id, text=t)
@@ -473,6 +564,7 @@ async def send_with_retry(
                 profile["phone"],
                 _do,
                 group_id=int(group["id"]),
+                outcome_getter=lambda tr=state: tr.outcome,
             )
             if state.outcome == SEND_IN_FLIGHT:
                 state.mark_unknown("client returned without send acknowledgement")
@@ -530,23 +622,60 @@ async def send_with_retry(
             raise
         except Exception as e:
             last_err = str(e)
+            explicit_code = str(getattr(e, "code", "") or "")
+            if explicit_code in {
+                "DESTINATION_REVIEW_REQUIRED",
+                "MEMBERSHIP_REVIEW_REQUIRED",
+            }:
+                state.mark_failed_unsent(explicit_code)
+                _mark_operation_failed_unsent(state, explicit_code)
+                try:
+                    _persist_send_outcome(status="failed", error=explicit_code, **persist_kw)
+                except Exception:
+                    pass
+                main.append_log(
+                    f"Внешняя отправка остановлена #{profile['id']}: {explicit_code}"
+                )
+                return False
             policy = classify_send_exception(e, state.outcome)
             if policy != SAFE_TO_RETRY:
-                state.mark_unknown(last_err)
-                _mark_operation_unknown(state, last_err)
+                parsed = antiban_core.flood_wait_seconds(last_err)
+                if parsed is not None:
+                    try:
+                        main._persist_server_retry_after(
+                            profile["id"], parsed, reason="MAX send"
+                        )
+                    except Exception:
+                        # Unknown external outcome must remain authoritative
+                        # even if the secondary cooldown write is unavailable.
+                        pass
+                safe_error = classify_exception(
+                    e,
+                    source="max",
+                    stage="send",
+                    outcome="unknown",
+                ).safe_message
+                state.mark_unknown(safe_error)
+                _mark_operation_unknown(state, safe_error)
                 try:
                     _persist_send_outcome(
-                        status="unknown", error=last_err, **persist_kw
+                        status="unknown", error=safe_error, **persist_kw
                     )
                 except Exception:
                     pass
                 main.append_log(
-                    f"Исход отправки неизвестен #{profile['id']}: {last_err}"
+                    f"Исход отправки неизвестен #{profile['id']}: {safe_error}"
                 )
                 return False
             state.outcome = SEND_NOT_STARTED
             state.may_requeue = True
-            _mark_operation_failed_unsent(state, last_err)
+            safe_error = classify_exception(
+                e,
+                source="max",
+                stage="send",
+                outcome="rejected",
+            ).safe_message
+            _mark_operation_failed_unsent(state, safe_error)
             parsed = antiban_core.flood_wait_seconds(last_err)
             if parsed is not None:
                 main._persist_server_retry_after(profile["id"], parsed)
@@ -566,23 +695,25 @@ async def send_with_retry(
                     )
                 ban = main._mark_profile_failed(profile["id"], last_err, is_auth_err)
                 if ban:
-                    await main._handle_profile_banned(profile["id"], last_err)
+                    await main._handle_profile_banned(profile["id"], safe_error)
                 if parsed is not None:
                     main._persist_server_retry_after(profile["id"], parsed)
-                state.mark_failed_unsent(last_err)
+                state.mark_failed_unsent(safe_error)
                 try:
-                    _persist_send_outcome(status="failed", error=last_err, **persist_kw)
+                    _persist_send_outcome(
+                        status="failed", error=safe_error, **persist_kw
+                    )
                 except Exception:
                     pass
                 main._metric_inc("messages_failed_total")
-                main.append_log(f"Ошибка #{profile['id']}: {last_err}")
+                main.append_log(f"Ошибка #{profile['id']}: {safe_error}")
                 return False
             delay = main.RETRY_DELAYS[attempt]
             if parsed is not None:
                 delay = max(delay, parsed)
             main.append_log(
                 f"Попытка {attempt + 1}/{main.MAX_RETRY} для #{profile['id']}, "
-                f"повтор через {delay}с: {last_err}"
+                f"повтор через {delay}с: {safe_error}"
             )
             remaining = float(delay)
             while remaining > 0:

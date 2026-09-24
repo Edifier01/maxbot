@@ -53,6 +53,20 @@ def test_confirmed_max_ban_stops_tenant() -> None:
     assert info.retryable is False
 
 
+def test_safe_error_classifier_preserves_restricted_account_ban_category() -> None:
+    from app.services.errors import classify_exception
+
+    info = classify_exception(
+        RuntimeError("access restricted; token=fixture-private-value"),
+        source="max",
+        stage="send",
+        outcome="rejected",
+    )
+
+    assert info.code == "MAX_ACCOUNT_BANNED"
+    assert "fixture-private-value" not in info.safe_message
+
+
 def test_unknown_mutating_outcome_is_never_automatically_retryable() -> None:
     from app.services.errors import classify_exception
 
@@ -84,6 +98,21 @@ def test_safe_error_contains_no_password_otp_or_token() -> None:
     for sentinel in sentinel_values:
         assert sentinel not in rendered
     assert public["safe_message"]
+
+
+def test_sensitive_diagnostic_shapes_are_hidden_as_a_whole() -> None:
+    from app.services.errors import sanitize_log_line
+
+    secret_lines = (
+        "login failed: Authorization: Bearer fixture-token-value",
+        "proxy failed: socks5://fixture-user:fixture-pass@proxy.example:1080",
+        "vault failed: -----BEGIN PRIVATE KEY----- fixture-key",
+        "request failed: eyJabcdefghijk.eyJabcdefghijk.eyJabcdefghijk",
+    )
+    for line in secret_lines:
+        sanitized = sanitize_log_line(line)
+        assert sanitized == "Подробности диагностической записи скрыты."
+        assert line not in sanitized
 
 
 def test_explicit_source_wins_over_untrusted_exception_text() -> None:

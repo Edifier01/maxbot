@@ -52,6 +52,26 @@ def test_mutation_rate_limit_blocks_spam(auth_mw):
     asyncio.run(run())
 
 
+def test_mutation_rate_limit_short_circuits_profile_login_before_handler(auth_mw):
+    payload = {"sub": "42", "role": "user", "tenant_id": 1, "jti": "m3", "tv": 0}
+
+    async def run():
+        call_next = AsyncMock(return_value="ok")
+        request = _patch_request(path="/api/profiles/7/login")
+        with patch("app.middleware.decode_token", return_value=payload), patch(
+            "app.middleware.cached_validate_token_session", return_value=None
+        ), patch("app.middleware.db_pg.subscription_active", return_value=True):
+            for _ in range(60):
+                assert await auth_mw.dispatch(request, call_next) == "ok"
+            response = await auth_mw.dispatch(request, call_next)
+
+        assert response.status_code == 429
+        # The account-login route never observes a website API rate limit.
+        assert call_next.await_count == 60
+
+    asyncio.run(run())
+
+
 def test_mutation_rate_limit_skips_get(auth_mw):
     payload = {"sub": "42", "role": "user", "tenant_id": 1, "jti": "m2", "tv": 0}
 

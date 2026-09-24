@@ -61,29 +61,41 @@ class MessageSetRepository:
         else:
             self.connection.commit()
 
-    def publish(self, scope: str, items: tuple[str, ...]):
+    def publish(
+        self,
+        scope: str,
+        items: tuple[str, ...],
+        *,
+        in_transaction: bool = False,
+    ):
+        if in_transaction:
+            return self._publish_uncommitted(scope, items)
+        with self._transaction():
+            return self._publish_uncommitted(scope, items)
+
+    def _publish_uncommitted(self, scope: str, items: tuple[str, ...]):
         version_id = f"version-{uuid.uuid4().hex}"
         checksum = hashlib.sha256("\n".join(items).encode("utf-8")).hexdigest()
         now = _now()
-        with self._transaction() as connection:
-            connection.execute(
-                "UPDATE message_set_versions SET is_current=0 WHERE scope=?",
-                (scope,),
-            )
-            connection.execute(
-                "INSERT INTO message_set_versions "
-                "(scope, version_id, checksum, item_count, is_current, created_at) "
-                "VALUES (?, ?, ?, ?, 1, ?)",
-                (scope, version_id, checksum, len(items), now),
-            )
-            connection.executemany(
-                "INSERT INTO message_set_items "
-                "(scope, version_id, item_id, ordinal, text) VALUES (?, ?, ?, ?, ?)",
-                [
-                    (scope, version_id, f"item-{uuid.uuid4().hex}", index, text)
-                    for index, text in enumerate(items)
-                ],
-            )
+        connection = self.connection
+        connection.execute(
+            "UPDATE message_set_versions SET is_current=0 WHERE scope=?",
+            (scope,),
+        )
+        connection.execute(
+            "INSERT INTO message_set_versions "
+            "(scope, version_id, checksum, item_count, is_current, created_at) "
+            "VALUES (?, ?, ?, ?, 1, ?)",
+            (scope, version_id, checksum, len(items), now),
+        )
+        connection.executemany(
+            "INSERT INTO message_set_items "
+            "(scope, version_id, item_id, ordinal, text) VALUES (?, ?, ?, ?, ?)",
+            [
+                (scope, version_id, f"item-{uuid.uuid4().hex}", index, text)
+                for index, text in enumerate(items)
+            ],
+        )
         return version_id, checksum
 
     def current(self, scope: str):

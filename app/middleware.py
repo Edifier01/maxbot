@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import asdict
 import os
 import time
 import json
 import logging
 import uuid
+from urllib.parse import urlsplit
 
 import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -23,6 +26,125 @@ from app.tenant import clear_context, set_context
 access_logger = logging.getLogger("maxsender.access")
 
 
+async def _send_ingress_error(send, status: int, detail: str) -> None:
+    body = json.dumps({"detail": detail}, ensure_ascii=False).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"application/json; charset=utf-8"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+class IngressLimitsMiddleware:
+    """Bound HTTP bodies and slow request uploads before route parsing."""
+
+    def __init__(self, app, max_bytes: int | None = None, timeout: float | None = None):
+        self.app = app
+        self.max_bytes = max_bytes or app_main.MAX_HTTP_BODY_BYTES
+        self.timeout = timeout or app_main.MAX_HTTP_BODY_TIMEOUT_SEC
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {
+            key.lower(): value for key, value in scope.get("headers", [])
+        }
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                declared_length = int(raw_length)
+            except (TypeError, ValueError):
+                await _send_ingress_error(send, 400, "Некорректный Content-Length")
+                return
+            if declared_length < 0:
+                await _send_ingress_error(send, 400, "Некорректный Content-Length")
+                return
+            if declared_length > self.max_bytes:
+                await _send_ingress_error(send, 413, "Запрос слишком большой")
+                return
+
+        messages = []
+        received = 0
+        try:
+            async with asyncio.timeout(self.timeout):
+                while True:
+                    message = await receive()
+                    messages.append(message)
+                    if message.get("type") == "http.disconnect":
+                        break
+                    if message.get("type") != "http.request":
+                        break
+                    received += len(message.get("body", b""))
+                    if received > self.max_bytes:
+                        await _send_ingress_error(send, 413, "Запрос слишком большой")
+                        return
+                    if not message.get("more_body", False):
+                        break
+        except (TimeoutError, asyncio.TimeoutError):
+            await _send_ingress_error(send, 408, "Загрузка запроса превысила лимит времени")
+            return
+
+        async def replay_receive():
+            if messages:
+                return messages.pop(0)
+            return {"type": "http.disconnect"}
+
+        await self.app(scope, replay_receive, send)
+
+
+def _same_origin_request(request: Request) -> bool:
+    origin = request.headers.get("Origin", "").strip()
+    if not origin:
+        return True
+    host = request.headers.get("Host", "").strip()
+    if not host:
+        return False
+    try:
+        parsed = urlsplit(origin)
+        origin_host = parsed.hostname
+        origin_port = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme not in {"http", "https"}
+        or origin_host is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+    try:
+        host_parts = urlsplit(f"//{host}")
+        request_host = host_parts.hostname
+        request_port = host_parts.port
+    except ValueError:
+        return False
+    if (
+        request_host is None
+        or host_parts.username is not None
+        or host_parts.password is not None
+        or host_parts.path
+        or host_parts.query
+        or host_parts.fragment
+    ):
+        return False
+    default_port = 443 if parsed.scheme == "https" else 80
+    return (
+        origin_host.casefold() == request_host.casefold()
+        and (origin_port or default_port) == (request_port or default_port)
+    )
+
+
 class RequestLogMiddleware(BaseHTTPMiddleware):
     """Emit a small, secret-free access record for every server request."""
 
@@ -31,18 +153,31 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         started = time.perf_counter()
         try:
             response = await call_next(request)
-        except Exception:
-            access_logger.exception(
+        except Exception as exc:
+            from app.services.errors import classify_exception
+
+            error = classify_exception(
+                exc,
+                source="unknown",
+                stage="request",
+                request_id=request_id,
+            )
+            access_logger.error(
                 json.dumps(
                     {
                         "event": "request_error",
                         "method": request.method,
                         "path": request.url.path,
                         "request_id": request_id,
+                        "error_code": error.code,
                     }
                 )
             )
-            raise
+            return JSONResponse(
+                status_code=500,
+                content=asdict(error),
+                headers={"X-Request-ID": request_id},
+            )
         response.headers["X-Request-ID"] = request_id
         access_logger.info(
             json.dumps(
@@ -77,7 +212,10 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         limit, window = auth_rate_limit.auth_rate_limit_config()
         ip = auth_rate_limit.client_ip(request)
         key = f"auth_rl:{ip}:{request.url.path}"
-        if not auth_rate_limit.check_auth_rate_limit(key, limit, window):
+        allowed = await asyncio.to_thread(
+            auth_rate_limit.check_auth_rate_limit, key, limit, window
+        )
+        if not allowed:
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Слишком много попыток входа. Попробуйте позже."},
@@ -150,6 +288,14 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Требуется service token"},
             )
 
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _same_origin_request(
+            request
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Недопустимый Origin"},
+            )
+
         if path in self.PUBLIC_EXACT or any(
             path.startswith(p) for p in self.PUBLIC_PREFIXES
         ):
@@ -168,14 +314,14 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
                         content={"detail": "X-Tenant-Id обязателен для service token"},
                     )
                 tenant_id = int(raw_tid)
-                if not db_pg.get_tenant(tenant_id):
+                if not await asyncio.to_thread(db_pg.get_tenant, tenant_id):
                     return JSONResponse(
                         status_code=404,
                         content={"detail": "Учреждение не найдено"},
                     )
                 if (
                     path in self.SUBSCRIPTION_POST_PATHS
-                    and not db_pg.subscription_active(tenant_id)
+                    and not await asyncio.to_thread(db_pg.subscription_active, tenant_id)
                 ):
                     return JSONResponse(
                         status_code=402,
@@ -199,7 +345,7 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         except jwt.PyJWTError:
             return JSONResponse(status_code=401, content={"detail": "Сессия истекла"})
 
-        session_err = cached_validate_token_session(payload)
+        session_err = await asyncio.to_thread(cached_validate_token_session, payload)
         if session_err:
             return JSONResponse(status_code=401, content={"detail": session_err})
 
@@ -209,8 +355,11 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         impersonating = bool(payload.get("imp"))
 
         if request.method in ("POST", "PUT", "DELETE", "PATCH"):
-            user_key = f"user_rl:{user_id}:{int(time.monotonic() // 60)}"
-            if not auth_rate_limit.check_auth_rate_limit(user_key, 60, 60.0):
+            user_key = auth_rate_limit.user_rate_limit_key(user_id, tenant_id)
+            allowed = await asyncio.to_thread(
+                auth_rate_limit.check_auth_rate_limit, user_key, 60, 60.0
+            )
+            if not allowed:
                 return JSONResponse(
                     status_code=429,
                     content={"detail": "Слишком много запросов"},
@@ -289,7 +438,7 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
                 and request.method == "POST"
                 and role == "user"
                 and tenant_id
-                and not db_pg.subscription_active(tenant_id)
+                and not await asyncio.to_thread(db_pg.subscription_active, tenant_id)
             ):
                 return JSONResponse(
                     status_code=403,

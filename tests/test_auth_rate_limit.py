@@ -12,6 +12,7 @@ import pytest
 def auth_mw(monkeypatch):
     monkeypatch.setenv("AUTH_RATE_LIMIT", "3")
     monkeypatch.setenv("AUTH_RATE_WINDOW_SEC", "60")
+    monkeypatch.setenv("TRUSTED_PROXY_CIDRS", "203.0.113.0/24")
     monkeypatch.setattr("app.middleware.is_server_mode", lambda: True)
     from app.middleware import AuthRateLimitMiddleware
 
@@ -103,5 +104,16 @@ def test_auth_rate_limit_no_xff_uses_client_host(auth_mw):
         resp = await auth_mw.dispatch(_request(ip="198.51.100.7"), call_next)
         assert resp.status_code == 429
         assert await auth_mw.dispatch(_request(ip="198.51.100.8"), call_next) == "ok"
+
+    asyncio.run(run())
+
+
+def test_auth_rate_limit_ignores_forwarded_for_from_untrusted_peer(auth_mw):
+    async def run():
+        call_next = AsyncMock(return_value="ok")
+        first = _request(ip="198.51.100.7", forwarded="8.8.8.8")
+        second = _request(ip="198.51.100.8", forwarded="8.8.8.8")
+        assert await auth_mw.dispatch(first, call_next) == "ok"
+        assert await auth_mw.dispatch(second, call_next) == "ok"
 
     asyncio.run(run())

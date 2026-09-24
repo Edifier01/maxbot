@@ -11,6 +11,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -150,6 +151,7 @@ class OperationRepository:
         slot_id: str | None,
         route_snapshot: dict[str, object] | None,
         max_pre_effect_retries: int,
+        reservation_guard: Callable[[sqlite3.Connection], None] | None = None,
     ) -> OperationRecord:
         if request_id is not None and command is None:
             raise ValueError("command is required with request_id")
@@ -175,6 +177,8 @@ class OperationRepository:
                 raise ValueError("text is required")
             if int(max_pre_effect_retries) < 0:
                 raise ValueError("max_pre_effect_retries must not be negative")
+            if reservation_guard is not None:
+                reservation_guard(connection)
             try:
                 connection.execute(
                     """

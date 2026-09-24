@@ -43,6 +43,40 @@ def test_selection_uses_distinct_items_before_starting_personal_pass() -> None:
     assert selections[2].item_id != selections[3].item_id
 
 
+def test_library_items_are_reused_for_each_account_pass_without_mutation() -> None:
+    from app.repositories.message_sets import MessageSetRepository
+
+    connection, service = _service()
+    try:
+        repository = MessageSetRepository(connection)
+        version_id, checksum = repository.publish("tenant:1", ("text-a", "text-b"))
+        items = tuple(
+            LibraryItem(str(row["item_id"]), str(row["text"]), version_id)
+            for row in repository.items("tenant:1", version_id)
+        )
+        first = service.materialize_day(
+            "tenant:1", 7, "2026-09-20", sampled_limit=5, role="active", quiet_limit=1,
+            work_group_id=3, library_items=items, rng=random.Random(7),
+        )
+        second = service.materialize_day(
+            "tenant:1", 8, "2026-09-20", sampled_limit=5, role="active", quiet_limit=1,
+            work_group_id=4, library_items=items, rng=random.Random(8),
+        )
+
+        assert checksum
+        assert first.target == second.target == 5
+        assert [slot.pass_index for slot in first.slots] == [0, 0, 1, 1, 2]
+        assert [slot.pass_index for slot in second.slots] == [0, 0, 1, 1, 2]
+        assert {slot.version_id for slot in first.slots + second.slots} == {version_id}
+        assert [row["text"] for row in repository.items("tenant:1", version_id)] == [
+            "text-a",
+            "text-b",
+        ]
+        assert repository.current("tenant:1")["version_id"] == version_id
+    finally:
+        connection.close()
+
+
 def test_empty_pool_waits_without_creating_slots() -> None:
     with pytest.raises(PoolEmptyError):
         select_daily_items((), 5, "random_norepeat", random.Random(1))

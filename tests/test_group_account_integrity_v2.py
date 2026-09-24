@@ -44,6 +44,42 @@ def test_multiple_legacy_groups_require_explicit_selection() -> None:
     assert repo.legacy_group_ids(7) == [10, 20]
 
 
+def test_single_legacy_group_migrates_without_touching_session_material(tmp_path) -> None:
+    _conn, repo = _repo()
+    _conn.execute("DELETE FROM group_profiles WHERE group_id=20")
+    _conn.execute("DELETE FROM groups WHERE id=20")
+    _conn.commit()
+    session_material = tmp_path / "session.db.enc"
+    session_material.write_bytes(b"encrypted-session-fixture")
+
+    assert repo.migrate_unambiguous_legacy_scopes() == 1
+    scope = repo.scope_for(7)
+    assert int(scope["automation_group_id"]) == 10
+    assert scope["consent_state"] == "active"
+    assert repo.legacy_group_ids(7) == [10]
+    assert session_material.read_bytes() == b"encrypted-session-fixture"
+
+
+def test_work_group_selection_rejects_unlinked_group() -> None:
+    from app.repositories.automation_scope import AutomationScopeError
+
+    _conn, repo = _repo()
+    with pytest.raises(AutomationScopeError) as caught:
+        repo.select_work_group(7, 99)
+    assert caught.value.code == "WORK_GROUP_SELECTION_REQUIRED"
+
+
+def test_unselected_scope_row_requires_selection_before_external_action() -> None:
+    from app.repositories.automation_scope import AutomationScopeError
+
+    _conn, repo = _repo()
+    scope = repo.scope_for(7)
+    assert scope["automation_group_id"] is None
+    with pytest.raises(AutomationScopeError) as caught:
+        repo.require_external_action(7, 10, 0)
+    assert caught.value.code == "WORK_GROUP_SELECTION_REQUIRED"
+
+
 def test_destination_revision_and_consent_gate_external_action() -> None:
     from app.repositories.automation_scope import AutomationScopeError
 

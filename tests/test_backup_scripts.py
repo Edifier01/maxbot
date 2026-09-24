@@ -2,9 +2,91 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
+import pytest
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _run_verify_deploy_with_stubbed_health(tmp_path: Path, *, success_on: int | None):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    state = tmp_path / "docker-call-count"
+    state.write_text("0", encoding="ascii")
+    docker = bin_dir / "docker"
+    docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"exec"* && "$*" == *" app "* ]]; then
+  count=$(<"${VERIFY_STUB_STATE}")
+  count=$((count + 1))
+  printf '%s' "$count" >"${VERIFY_STUB_STATE}"
+  if [[ "${VERIFY_STUB_SUCCESS_ON:-}" == "$count" ]]; then
+    printf '%s\\n' '{"db_ok":true}'
+    exit 0
+  fi
+  printf '%s\\n' '{"db_ok":false}'
+  exit 1
+fi
+if [[ "$*" == *"logs"* ]]; then
+  printf '%s\\n' 'fixture logs'
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    sleep = bin_dir / "sleep"
+    sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    sleep.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "VERIFY_STUB_STATE": str(state),
+            "DOMAIN": "example.com",
+            "CHECK_HTTPS": "0",
+            "USE_CELERY": "0",
+        }
+    )
+    if success_on is not None:
+        env["VERIFY_STUB_SUCCESS_ON"] = str(success_on)
+    else:
+        env.pop("VERIFY_STUB_SUCCESS_ON", None)
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "verify_deploy.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    return result, int(state.read_text(encoding="ascii"))
+
+
+@pytest.mark.skipif((ROOT / ".env").exists(), reason="refuse to source a workspace .env")
+def test_verify_deploy_requires_actual_health_success_not_nonempty_json(tmp_path: Path):
+    failed, failed_attempts = _run_verify_deploy_with_stubbed_health(
+        tmp_path / "failed", success_on=None
+    )
+    assert failed.returncode != 0
+    assert failed_attempts == 30
+    assert "FAIL: readiness check did not succeed" in failed.stdout
+    assert "verify OK" not in failed.stdout
+
+    passed, passed_attempts = _run_verify_deploy_with_stubbed_health(
+        tmp_path / "last-success", success_on=30
+    )
+    assert passed.returncode == 0
+    assert passed_attempts == 30
+    assert '"db_ok":true' in passed.stdout
+    assert "verify OK" in passed.stdout
 
 
 def test_backup_restore_do_not_compose_run_alpine():
@@ -79,7 +161,13 @@ def test_deploy_ssh_timeout_covers_image_build():
     assert "workflow_run" not in deploy
     assert "workflow_dispatch:" in deploy
     assert "github.sha" in deploy
-    assert 'ref: ${{ github.sha }}' in deploy
+    assert "inputs.sha || github.sha" in deploy
+    assert 'ref: ${{ inputs.sha || github.sha }}' in deploy
+    assert 'test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"' in deploy
+    assert "PostgreSQL module and server E2E gates" in deploy
+    assert "Dependency audit gate" in deploy
+    assert "Backup and restore gate" in deploy
+    assert "Rendered browser gate" in deploy
     assert "checkout --force" in deploy
     assert "--profile celery" in deploy
     assert "up -d postgres" in deploy
@@ -122,3 +210,13 @@ def test_compose_has_runtime_resource_limits():
     assert compose.count("mem_limit:") >= 5
     assert compose.count("cpus:") >= 5
     assert compose.count("pids_limit:") >= 5
+
+
+def test_server_compose_selects_postgresql_for_app_and_celery_worker():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    assert services["app"]["environment"]["MAX_SERVER_MODE"] == "1"
+    assert services["app"]["environment"]["MAX_USE_DATABASE_URL"] == "1"
+    assert services["celery-worker"]["environment"]["MAX_SERVER_MODE"] == "1"
+    assert services["celery-worker"]["environment"]["MAX_USE_DATABASE_URL"] == "1"

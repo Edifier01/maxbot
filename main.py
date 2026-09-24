@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+from contextvars import ContextVar
 import json
 import os
 import random
@@ -17,7 +18,7 @@ import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import date, datetime, time as dt_time, timedelta, timezone
@@ -39,6 +40,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import antiban_core
 
 from app.campaign_runtime import REGISTRY, RUNTIME
+from app.platform_policy import MaxAction
 
 HOST = os.environ.get("MAX_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MAX_PORT", "8765"))
@@ -68,6 +70,35 @@ DATABASE_URL = _resolve_database_url()
 REDIS_URL = os.environ.get("REDIS_URL", "").strip()
 USE_CELERY = os.environ.get("USE_CELERY", "").strip() in ("1", "true", "yes")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)) or str(default))
+    except ValueError:
+        value = default
+    return min(maximum, max(minimum, value))
+
+
+def _bounded_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)) or str(default))
+    except ValueError:
+        value = default
+    return min(maximum, max(minimum, value))
+
+
+MAX_HTTP_BODY_BYTES = _bounded_int_env(
+    "MAX_HTTP_BODY_BYTES", 8 * 1024 * 1024, 64 * 1024, 32 * 1024 * 1024
+)
+MAX_HTTP_BODY_TIMEOUT_SEC = _bounded_float_env(
+    "MAX_HTTP_BODY_TIMEOUT_SEC", 10.0, 1.0, 60.0
+)
+MAX_WS_MESSAGE_BYTES = _bounded_int_env(
+    "MAX_WS_MESSAGE_BYTES", 64 * 1024, 1024, 1024 * 1024
+)
+MAX_WS_CONNECTIONS = _bounded_int_env("MAX_WS_CONNECTIONS", 100, 2, 1000)
+MAX_WS_QUEUE = _bounded_int_env("MAX_WS_QUEUE", 16, 1, 128)
 MAX_RETRY = 3
 RETRY_DELAYS = [5, 15, 60]
 RATE_LIMIT = 180
@@ -82,6 +113,10 @@ DB_BACKEND = (
     "postgres"
     if DATABASE_URL.startswith(("postgres://", "postgresql://"))
     else "sqlite"
+)
+
+_gateway_profile_id: ContextVar[int | None] = ContextVar(
+    "gateway_profile_id", default=None
 )
 
 
@@ -261,9 +296,12 @@ _metrics: dict[str, float] = {
 }
 _log: list[str] = []
 _log_lock = threading.Lock()
+_backup_lock = threading.Lock()
 _auth_sessions: dict[Any, dict[str, Any]] = {}
 _login_tasks: dict[Any, asyncio.Task] = {}
 _profile_client_locks: dict[Any, asyncio.Lock] = {}
+_client_manager: Any | None = None
+_auth_attempt_store: Any | None = None
 _settings_cache: dict = {}
 _settings_cache_lock = threading.Lock()
 _rate_counters: dict[str, list[float]] = defaultdict(list)
@@ -283,6 +321,9 @@ def reset_test_runtime() -> None:
     _auth_sessions.clear()
     _login_tasks.clear()
     _profile_client_locks.clear()
+    global _auth_attempt_store, _client_manager
+    _auth_attempt_store = None
+    _client_manager = None
     _rate_counters.clear()
     _metrics.update(
         {
@@ -459,6 +500,10 @@ def set_setting(key: str, value: str) -> None:
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (key, value),
     )
+    # Settings are durable command state.  Do not leave an implicit SQLite
+    # transaction open when the value is already equal and no audit write will
+    # subsequently commit this connection.
+    conn.commit()
     scope = _settings_cache_scope()
     cache_key = (scope[0], scope[1], key)
     with _settings_cache_lock:
@@ -499,7 +544,9 @@ def _pin_is_set() -> bool:
 
 
 def append_log(msg: str) -> None:
-    line = f"[{date.today()}] {msg}"
+    from app.services.errors import sanitize_log_line
+
+    line = sanitize_log_line(f"[{date.today()}] {msg}")
     if _is_server_mode():
         print(line, flush=True)
     with _log_lock:
@@ -550,12 +597,15 @@ def _messages_file() -> Path:
     return MESSAGES_FILE
 
 def parse_messages_text(raw: str) -> list[str]:
-    lines = []
-    for line in raw.splitlines():
-        s = line.strip()
-        if s and not s.startswith("#"):
-            lines.append(s)
-    return lines
+    # The documented message format is UTF-8 TXT: one non-empty line is one
+    # item. Commas, tabs, quotes, Unicode and literal JSON are content, not
+    # implicit separators or a second rendering language.
+    from app.services.messages import MessageLibrary, MessageValidationError
+
+    try:
+        return list(MessageLibrary().preview_draft(raw).items)
+    except MessageValidationError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def load_message_pool() -> list[str]:
@@ -574,6 +624,17 @@ def load_message_pool() -> list[str]:
         # Global/tenant DB missing message_pool (empty file before migrate).
         return []
     return [r["text"] for r in rows]
+
+
+def _has_current_message_library() -> bool:
+    """Return whether the immutable library has a published current version."""
+    try:
+        from app.repositories.message_sets import MessageSetRepository
+
+        connection, scope = _message_library_source_storage()
+        return MessageSetRepository(connection).current(scope) is not None
+    except sqlite3.Error:
+        return False
 
 
 def _message_library_storage() -> tuple[sqlite3.Connection, str]:
@@ -604,7 +665,15 @@ def _publish_message_library_version(messages: list[str]) -> None:
     from app.repositories.message_sets import MessageSetRepository
 
     connection, scope = _message_library_source_storage()
-    MessageSetRepository(connection).publish(scope, tuple(messages))
+    repository = MessageSetRepository(connection)
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        repository.publish(scope, tuple(messages), in_transaction=True)
+    except BaseException:
+        connection.rollback()
+        raise
+    else:
+        connection.commit()
 
 
 def _reset_current_queue_for_new_pool(n: int) -> None:
@@ -616,14 +685,56 @@ def _reset_current_queue_for_new_pool(n: int) -> None:
     _rebuild_message_bag(n)
 
 
-def _reset_all_tenants_queue_for_new_pool(n: int) -> list[int]:
-    """After global TXT replace, every tenant must restart pool indices."""
+def _queue_state_snapshot() -> dict[str, object]:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
+    if row is None:
+        return {}
+    keys = set(row.keys())
+    return {
+        key: row[key]
+        for key in ("profile_idx", "message_idx", "group_idx", "message_bag")
+        if key in keys
+    }
+
+
+def _restore_queue_state_snapshot(snapshot: dict[str, object]) -> None:
+    if not snapshot:
+        return
+    assignments = ", ".join(f"{key}=?" for key in snapshot)
+    with _conn() as c:
+        c.execute(
+            f"UPDATE queue_state SET {assignments} WHERE id=1",
+            tuple(snapshot.values()),
+        )
+
+
+def _reset_all_tenants_queue_for_new_pool(
+    n: int,
+    *,
+    after_reset: Callable[[], object] | None = None,
+) -> list[int]:
+    """Reset every tenant, rolling back if reset/publication cannot finish."""
     from app.tenant import tenant_scope
 
     tenants_root = _resolve_data_root() / "tenants"
     if not tenants_root.is_dir():
+        if after_reset is not None:
+            after_reset()
         return []
     failed: list[int] = []
+    snapshots: list[tuple[int, dict[str, object]]] = []
+
+    def rollback() -> list[int]:
+        rollback_failed: list[int] = []
+        for rollback_tid, snapshot in reversed(snapshots):
+            try:
+                with tenant_scope(tenant_id=rollback_tid, role="user"):
+                    _restore_queue_state_snapshot(snapshot)
+            except Exception:
+                rollback_failed.append(rollback_tid)
+        return rollback_failed
+
     for entry in sorted(tenants_root.iterdir()):
         if not entry.is_dir() or not (entry / "app.db").is_file():
             continue
@@ -633,39 +744,93 @@ def _reset_all_tenants_queue_for_new_pool(n: int) -> list[int]:
             continue
         with tenant_scope(tenant_id=tid, role="user"):
             try:
+                snapshots.append((tid, _queue_state_snapshot()))
                 _reset_current_queue_for_new_pool(n)
             except Exception:
                 failed.append(tid)
+                break
+    if failed:
+        rollback_failed = rollback()
+        failed.extend(tid for tid in rollback_failed if tid not in failed)
+        return failed
+    if after_reset is not None:
+        try:
+            after_reset()
+        except BaseException:
+            rollback_failed = rollback()
+            if rollback_failed:
+                raise RuntimeError(
+                    "message publication failed and tenant queue rollback failed"
+                ) from None
+            raise
     return failed
 
 
 def save_messages_file(content: bytes) -> int:
-    text = content.decode("utf-8-sig")
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("draft must be UTF-8") from exc
     messages = parse_messages_text(text)
     if not messages:
         raise ValueError("Файл пуст или не содержит сообщений")
     if _is_server_mode():
-        with _global_conn() as conn:
-            conn.execute("DELETE FROM message_pool")
-            conn.executemany(
-                "INSERT INTO message_pool (text, order_index) VALUES (?, ?)",
-                [(m, i) for i, m in enumerate(messages)],
-            )
-        failed = _reset_all_tenants_queue_for_new_pool(len(messages))
+        def publish_global_pool() -> None:
+            connection = _global_conn()
+            from app.repositories.message_sets import MessageSetRepository
+
+            repository = MessageSetRepository(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute("DELETE FROM message_pool")
+                connection.executemany(
+                    "INSERT INTO message_pool (text, order_index) VALUES (?, ?)",
+                    [(m, i) for i, m in enumerate(messages)],
+                )
+                repository.publish("global", tuple(messages), in_transaction=True)
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+
+        failed = _reset_all_tenants_queue_for_new_pool(
+            len(messages), after_reset=publish_global_pool
+        )
         if failed:
             ids = ", ".join(str(tid) for tid in failed)
             raise ValueError(f"Не удалось сбросить очередь учреждений: {ids}")
     else:
+        snapshot = _queue_state_snapshot()
+        try:
+            _reset_current_queue_for_new_pool(len(messages))
+            connection = _conn()
+            from app.repositories.message_sets import MessageSetRepository
+
+            repository = MessageSetRepository(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute("DELETE FROM message_pool")
+                connection.executemany(
+                    "INSERT INTO message_pool (text, order_index) VALUES (?, ?)",
+                    [(m, i) for i, m in enumerate(messages)],
+                )
+                repository.publish("local", tuple(messages), in_transaction=True)
+            except BaseException:
+                connection.rollback()
+                raise
+            else:
+                connection.commit()
+        except BaseException:
+            try:
+                _restore_queue_state_snapshot(snapshot)
+            except Exception:
+                raise RuntimeError(
+                    "message publication failed and queue rollback failed"
+                ) from None
+            raise
         MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
         MESSAGES_FILE.write_bytes(content)
-        with _conn() as c:
-            c.execute("DELETE FROM message_pool")
-            c.executemany(
-                "INSERT INTO message_pool (text, order_index) VALUES (?, ?)",
-                [(m, i) for i, m in enumerate(messages)],
-            )
-        _reset_current_queue_for_new_pool(len(messages))
-    _publish_message_library_version(messages)
     return len(messages)
 
 
@@ -845,14 +1010,14 @@ def _prepare_auto_resume_pool() -> bool:
 async def _try_auto_resume(*, log_prefix: str = "Автовозобновление") -> bool:
     if REGISTRY.app.shutting_down:
         return False
-    if not _auto_run_enabled():
-        return False
     from app import recovery_hold
 
     try:
         recovery_hold.require_external_actions_released()
     except recovery_hold.RecoveryHoldActive as exc:
         append_log(f"{log_prefix}: recovery hold активен — пропуск ({exc})")
+        return False
+    if not _auto_run_enabled():
         return False
     if _is_server_mode():
         from app.tenant import get_tenant_id
@@ -871,9 +1036,24 @@ async def _try_auto_resume(*, log_prefix: str = "Автовозобновлен�
         return False
     if not _vault_ready_for_send():
         return False
-    if not load_message_pool():
+    # The immutable V2 library is authoritative for daily plans and may be
+    # published without populating the legacy message_pool compatibility table.
+    if not load_message_pool() and not _has_current_message_library():
         return False
     if not _prepare_auto_resume_pool():
+        return False
+    from app.campaign_worker import legacy_budget_migration_report
+
+    migration_review = [
+        finding
+        for finding in legacy_budget_migration_report()
+        if finding.get("status") == "MIGRATION_REVIEW_REQUIRED"
+    ]
+    if migration_review:
+        append_log(
+            f"{log_prefix}: миграция дневного бюджета требует проверки "
+            f"профилей {[finding.get('profile_id') for finding in migration_review]}"
+        )
         return False
     if not _has_sendable_profile():
         return False
@@ -908,6 +1088,50 @@ def _clear_session(profile_id: int) -> None:
             p.unlink()
 
 
+_SESSION_FILES = ("session.db", "session.db.enc", "session.db-wal", "session.db-shm")
+_REAUTH_BACKUP_SUFFIX = ".reauth-previous"
+
+
+def _stage_session_for_reauth(profile_id: int) -> list[tuple[Path, Path]]:
+    """Move the old session aside before an explicit fresh login.
+
+    The new login gets an empty session file, while a failed/cancelled fresh
+    attempt can restore the previous encrypted session byte-for-byte.
+    """
+    directory = _session_dir(profile_id)
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for name in _SESSION_FILES:
+            current = directory / name
+            backup = directory / f"{name}{_REAUTH_BACKUP_SUFFIX}"
+            if backup.exists():
+                raise RuntimeError("fresh_reauth_recovery_pending")
+            if current.exists():
+                os.replace(current, backup)
+                moved.append((current, backup))
+    except BaseException:
+        for current, backup in reversed(moved):
+            if backup.exists():
+                os.replace(backup, current)
+        raise
+    return moved
+
+
+def _restore_staged_session(moved: list[tuple[Path, Path]]) -> None:
+    """Restore the old session after an unsuccessful explicit reauth."""
+    for current, _backup in moved:
+        current.unlink(missing_ok=True)
+    for current, backup in reversed(moved):
+        if backup.exists():
+            os.replace(backup, current)
+
+
+def _discard_staged_session(moved: list[tuple[Path, Path]]) -> None:
+    """Remove the retained old session only after new auth succeeds."""
+    for _current, backup in moved:
+        backup.unlink(missing_ok=True)
+
+
 def _session_db_has_token(profile_id: int) -> bool:
     from app import vault as vault_mod
 
@@ -921,6 +1145,112 @@ def _profile_client_lock(profile_id: int) -> asyncio.Lock:
         lock = asyncio.Lock()
         _profile_client_locks[key] = lock
     return lock
+
+
+def _client_scope() -> str:
+    """Return the tenant-bound scope used by the runtime client lease."""
+    if not _is_server_mode():
+        return "local"
+    from app.tenant import get_tenant_id
+
+    tenant_id = get_tenant_id()
+    return f"tenant:{int(tenant_id)}" if tenant_id is not None else "global"
+
+
+def _profile_deletion_in_progress(profile_id: int) -> bool:
+    manager = _client_manager
+    return bool(
+        manager is not None
+        and manager.deletion_in_progress(_client_scope(), int(profile_id))
+    )
+
+
+def _require_profile_runtime_available(profile_id: int) -> None:
+    if _profile_deletion_in_progress(profile_id):
+        raise HTTPException(409, "PROFILE_RUNTIME_CLEANUP_IN_PROGRESS")
+
+
+def _client_manager_instance():
+    global _client_manager
+    if _client_manager is None:
+        from app.services.client_manager import ClientManager
+
+        _client_manager = ClientManager()
+    return _client_manager
+
+
+async def _cancel_login_task(profile_id: int) -> None:
+    """Cancel and await one profile login before runtime deletion/reset."""
+    key = _auth_session_key(profile_id)
+    task = _login_tasks.pop(key, None)
+    if task is None or task.done():
+        return
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+async def _cancel_all_login_tasks() -> None:
+    """Bounded caller-owned drain for login tasks during process shutdown."""
+    current = asyncio.current_task()
+    tasks: list[asyncio.Task] = []
+    for key, task in list(_login_tasks.items()):
+        _login_tasks.pop(key, None)
+        if task is current:
+            continue
+        if not task.done():
+            task.cancel()
+        tasks.append(task)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _release_client_lease(manager: Any, lease: Any) -> None:
+    """Finish client close even when the owning operation is cancelled."""
+    from app.services.client_manager import ClientCleanupError
+
+    release_task = asyncio.create_task(manager.release(lease))
+    try:
+        await asyncio.shield(release_task)
+    except ClientCleanupError as cleanup_error:
+        cause = cleanup_error.__cause__
+        if cause is not None:
+            raise cause
+        raise
+    except asyncio.CancelledError as cancelled:
+        cleanup_error: BaseException | None = None
+        try:
+            await asyncio.shield(release_task)
+        except BaseException as exc:
+            cleanup_error = exc
+        if cleanup_error is not None:
+            append_log(f"Ошибка закрытия клиента при отмене: {cleanup_error}")
+        raise cancelled
+
+
+async def _delete_profile_runtime(profile_id: int) -> None:
+    """Drain profile operations before removing its session runtime directory."""
+    manager = _client_manager_instance()
+
+    async def _cancel_and_wait() -> None:
+        _cancel_auth_attempt(profile_id)
+        await _cancel_login_task(profile_id)
+
+    async def _remove_runtime() -> None:
+        session_dir = _session_dir(profile_id)
+        try:
+            shutil.rmtree(session_dir)
+        except FileNotFoundError:
+            pass
+        _auth_sessions.pop(_auth_session_key(profile_id), None)
+        _profile_client_locks.pop(_auth_session_key(profile_id), None)
+
+    await manager.delete_profile_runtime(
+        _client_scope(),
+        profile_id,
+        cancel_and_wait=_cancel_and_wait,
+        remove_runtime=_remove_runtime,
+    )
 
 
 def _normalize_phone(phone: str) -> str:
@@ -938,6 +1268,23 @@ def _normalize_phone(phone: str) -> str:
 def _require_worker_idle() -> None:
     if REGISTRY.worker().worker_busy():
         raise HTTPException(409, "Сначала остановите рассылку")
+    try:
+        with _conn() as connection:
+            control = connection.execute(
+                "SELECT state, auto_run, stop_requested FROM campaign_control "
+                "WHERE scope=?",
+                (_client_scope(),),
+            ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table: campaign_control" in str(exc).lower():
+            return
+        raise HTTPException(503, "Не удалось проверить состояние кампании") from exc
+    if control is not None and (
+        str(control["state"]) not in {"stopped", "paused"}
+        or int(control["auto_run"]) != 0
+        or int(control["stop_requested"]) != 0
+    ):
+        raise HTTPException(409, "Сначала дождитесь завершения команды кампании")
 
 
 def _auth_session_key(profile_id: int) -> Any:
@@ -948,6 +1295,232 @@ def _auth_session_key(profile_id: int) -> Any:
     return profile_id
 
 
+def _auth_attempt_scope() -> str:
+    if _is_server_mode():
+        from app.tenant import get_tenant_id
+
+        return f"tenant:{int(get_tenant_id())}"
+    return "local"
+
+
+def _auth_attempts():
+    global _auth_attempt_store
+    if _auth_attempt_store is None:
+        from app.services.auth_attempts import AuthAttemptStore
+
+        _auth_attempt_store = AuthAttemptStore()
+    return _auth_attempt_store
+
+
+def _persist_auth_attempt(view: Any) -> None:
+    """Persist only attempt metadata; challenge values stay in asyncio queues."""
+    from app.repositories.profile_auth import AuthAttemptRepository
+
+    with _conn() as connection:
+        AuthAttemptRepository(connection).save(view.metadata())
+
+
+def _persisted_auth_attempt_public(
+    profile_id: int, attempt_id: str
+) -> dict[str, object] | None:
+    """Read a safe interrupted/terminal attempt after a process restart."""
+    from app.repositories.profile_auth import AuthAttemptRepository
+
+    with _conn() as connection:
+        row = AuthAttemptRepository(connection).get(
+            _auth_attempt_scope(), profile_id, attempt_id
+        )
+    if row is None:
+        return None
+    return {
+        "attempt_id": str(row["attempt_id"]),
+        "revision": int(row["revision"]),
+        "auth_step": str(row["auth_step"]),
+        "auth_stage": str(row["stage"]),
+        "auth_hint": "",
+        "auth_stage_deadline_at": row["stage_deadline_at"],
+        "auth_attempt_deadline_at": row["attempt_deadline_at"],
+        "auth_error_code": row["error_code"],
+    }
+
+
+def _sync_auth_attempt_view(view: Any) -> Any:
+    public = view.public()
+    sess = _ensure_auth_session(view.profile_id)
+    sess["attempt_id"] = public["attempt_id"]
+    sess["revision"] = public["revision"]
+    sess["step"] = public["auth_step"]
+    sess["hint"] = public["auth_hint"]
+    sess["stage_deadline_at"] = public["auth_stage_deadline_at"]
+    sess["attempt_deadline_at"] = public["auth_attempt_deadline_at"]
+    return view
+
+
+def _start_auth_attempt(
+    profile_id: int,
+    *,
+    group_id: int | None,
+    fresh: bool,
+    request_id: str | None,
+) -> tuple[Any, bool]:
+    view, created = _auth_attempts().start(
+        _auth_attempt_scope(),
+        profile_id,
+        group_id=group_id,
+        mode="fresh" if fresh else "saved",
+        request_id=request_id,
+    )
+    if created:
+        _persist_auth_attempt(view)
+    return _sync_auth_attempt_view(view), created
+
+
+def _current_auth_attempt(profile_id: int) -> Any | None:
+    return _auth_attempts().current(_auth_attempt_scope(), profile_id)
+
+
+def _mark_auth_waiting_code(profile_id: int) -> Any | None:
+    sess = _ensure_auth_session(profile_id)
+    attempt_id = sess.get("attempt_id")
+    if not attempt_id:
+        return None
+    view = _auth_attempts().waiting_code(
+        _auth_attempt_scope(), profile_id, attempt_id=str(attempt_id)
+    )
+    _persist_auth_attempt(view)
+    return _sync_auth_attempt_view(view)
+
+
+def _mark_auth_waiting_password(profile_id: int, hint: str | None) -> Any | None:
+    sess = _ensure_auth_session(profile_id)
+    attempt_id = sess.get("attempt_id")
+    if not attempt_id:
+        return None
+    view = _auth_attempts().waiting_password(
+        _auth_attempt_scope(),
+        profile_id,
+        attempt_id=str(attempt_id),
+        hint=hint,
+    )
+    _persist_auth_attempt(view)
+    return _sync_auth_attempt_view(view)
+
+
+def _submit_auth_code(
+    profile_id: int,
+    *,
+    attempt_id: str,
+    revision: int,
+    request_id: str | None,
+) -> Any:
+    view, _created = _submit_auth_code_once(
+        profile_id,
+        attempt_id=attempt_id,
+        revision=revision,
+        request_id=request_id,
+    )
+    return view
+
+
+def _submit_auth_code_once(
+    profile_id: int,
+    *,
+    attempt_id: str,
+    revision: int,
+    request_id: str | None,
+) -> tuple[Any, bool]:
+    view, created = _auth_attempts().submit_code_once(
+        _auth_attempt_scope(),
+        profile_id,
+        attempt_id=attempt_id,
+        revision=revision,
+        request_id=request_id,
+    )
+    if created:
+        _persist_auth_attempt(view)
+    return _sync_auth_attempt_view(view), created
+
+
+def _submit_auth_password(
+    profile_id: int,
+    *,
+    attempt_id: str,
+    revision: int,
+    request_id: str | None,
+) -> Any:
+    view, _created = _submit_auth_password_once(
+        profile_id,
+        attempt_id=attempt_id,
+        revision=revision,
+        request_id=request_id,
+    )
+    return view
+
+
+def _submit_auth_password_once(
+    profile_id: int,
+    *,
+    attempt_id: str,
+    revision: int,
+    request_id: str | None,
+) -> tuple[Any, bool]:
+    view, created = _auth_attempts().submit_password_once(
+        _auth_attempt_scope(),
+        profile_id,
+        attempt_id=attempt_id,
+        revision=revision,
+        request_id=request_id,
+    )
+    if created:
+        _persist_auth_attempt(view)
+    return _sync_auth_attempt_view(view), created
+
+
+def _finish_auth_attempt(
+    profile_id: int,
+    *,
+    success: bool,
+    error_code: str | None = None,
+) -> Any | None:
+    sess = _ensure_auth_session(profile_id)
+    attempt_id = sess.get("attempt_id")
+    if not attempt_id:
+        return None
+    if success:
+        view = _auth_attempts().succeed(
+            _auth_attempt_scope(), profile_id, attempt_id=str(attempt_id)
+        )
+    else:
+        view = _auth_attempts().fail(
+            _auth_attempt_scope(),
+            profile_id,
+            attempt_id=str(attempt_id),
+            error_code=error_code or "LOGIN_INVALID",
+        )
+    _persist_auth_attempt(view)
+    return _sync_auth_attempt_view(view)
+
+
+def _cancel_auth_attempt(profile_id: int) -> Any | None:
+    return _cancel_auth_attempt_for_id(profile_id, attempt_id=None)
+
+
+def _cancel_auth_attempt_for_id(
+    profile_id: int, *, attempt_id: str | None
+) -> Any | None:
+    sess = _ensure_auth_session(profile_id)
+    target_id = attempt_id or sess.get("attempt_id")
+    if not target_id:
+        return None
+    view = _auth_attempts().cancel(
+        _auth_attempt_scope(), profile_id, attempt_id=str(target_id)
+    )
+    _persist_auth_attempt(view)
+    if sess.get("attempt_id") == view.attempt_id:
+        return _sync_auth_attempt_view(view)
+    return view
+
+
 def _ensure_auth_session(profile_id: int) -> dict[str, Any]:
     key = _auth_session_key(profile_id)
     if key not in _auth_sessions:
@@ -956,6 +1529,10 @@ def _ensure_auth_session(profile_id: int) -> dict[str, Any]:
             "pwd_q": asyncio.Queue(),
             "step": "idle",
             "hint": "",
+            "attempt_id": None,
+            "revision": 0,
+            "stage_deadline_at": None,
+            "attempt_deadline_at": None,
         }
     return _auth_sessions[key]
 
@@ -974,13 +1551,36 @@ def _drain_queue(q: asyncio.Queue) -> None:
             break
 
 
+def _sanitize_profile_error_view(d: dict[str, Any]) -> dict[str, Any]:
+    raw_error = str(d.get("last_error") or "")
+    if raw_error:
+        from app.services.errors import classify_persisted_error
+
+        info = classify_persisted_error(
+            raw_error, source="max", stage="profile", outcome="rejected"
+        )
+        d["last_error"] = info.safe_message
+        d["last_error_code"] = info.code
+        d["last_error_source"] = info.source
+        d["last_error_stage"] = info.stage
+        d["last_error_action"] = info.recommended_action
+    return d
+
+
 def _profile_auth_view(p: sqlite3.Row | dict) -> dict:
     from app.tenant import redact_cabinet_row
 
-    d = dict(p)
+    d = _sanitize_profile_error_view(dict(p))
     sess = _auth_sessions.get(_auth_session_key(int(d["id"])), {})
     d["auth_step"] = sess.get("step", "idle")
     d["auth_hint"] = sess.get("hint", "")
+    d["attempt_id"] = sess.get("attempt_id")
+    d["revision"] = int(sess.get("revision", 0) or 0)
+    d["auth_stage_deadline_at"] = sess.get("stage_deadline_at")
+    d["auth_attempt_deadline_at"] = sess.get("attempt_deadline_at")
+    current_attempt = _current_auth_attempt(int(d["id"]))
+    if current_attempt is not None:
+        d.update(current_attempt.public())
     d["in_cooldown"] = _is_in_cooldown(d)
     d["circuit_open"] = _is_circuit_open(int(d["id"]))
     try:
@@ -1002,7 +1602,8 @@ class _QueueSmsProvider:
         self._profile_id = profile_id
 
     async def get_code(self, phone: str) -> str:
-        _set_auth_step(self._profile_id, "waiting_sms")
+        if _mark_auth_waiting_code(self._profile_id) is None:
+            _set_auth_step(self._profile_id, "waiting_sms")
         append_log(f"Профиль #{self._profile_id}: введите SMS-код для {phone}")
         try:
             return await asyncio.wait_for(self._q.get(), timeout=300)
@@ -1016,7 +1617,8 @@ class _QueuePasswordProvider:
         self._profile_id = profile_id
 
     async def get_password(self, hint: str | None = None) -> str:
-        _set_auth_step(self._profile_id, "waiting_cloud_password", hint or "")
+        if _mark_auth_waiting_password(self._profile_id, hint) is None:
+            _set_auth_step(self._profile_id, "waiting_cloud_password", hint or "")
         msg = f"Профиль #{self._profile_id}: нужен облачный пароль"
         if hint:
             msg += f" (подсказка: {hint})"
@@ -1118,14 +1720,20 @@ class _AppSmsAuthFlow:
             try:
                 response = await app.api.auth.check_password(track_id, password)
             except ApiError:
-                _set_auth_step(self._profile_id, "waiting_cloud_password", hint or "")
+                if _mark_auth_waiting_password(self._profile_id, hint) is None:
+                    _set_auth_step(
+                        self._profile_id, "waiting_cloud_password", hint or ""
+                    )
                 append_log(
                     f"Профиль #{self._profile_id}: неверный пароль "
                     f"({attempts}/{max_attempts})"
                 )
                 continue
             if response.error:
-                _set_auth_step(self._profile_id, "waiting_cloud_password", hint or "")
+                if _mark_auth_waiting_password(self._profile_id, hint) is None:
+                    _set_auth_step(
+                        self._profile_id, "waiting_cloud_password", hint or ""
+                    )
                 append_log(
                     f"Профиль #{self._profile_id}: неверный пароль "
                     f"({attempts}/{max_attempts})"
@@ -1161,7 +1769,10 @@ async def _with_client(
     login_mode: bool = False,
     group_id: int | None = None,
     proxy: str | None = None,
+    outcome_getter=None,
 ):
+    # The client lease serializes the live adapter. This lock additionally
+    # keeps decrypt/use/reseal as one vault transaction for the profile.
     async with _profile_client_lock(profile_id):
         return await _with_client_unlocked(
             profile_id,
@@ -1172,6 +1783,7 @@ async def _with_client(
             login_mode=login_mode,
             group_id=group_id,
             proxy=proxy,
+            outcome_getter=outcome_getter,
         )
 
 
@@ -1217,6 +1829,7 @@ async def _with_client_unlocked(
     login_mode: bool = False,
     group_id: int | None = None,
     proxy: str | None = None,
+    outcome_getter=None,
 ):
     _decrypt_session(profile_id)
     try:
@@ -1229,6 +1842,7 @@ async def _with_client_unlocked(
             login_mode=login_mode,
             group_id=group_id,
             proxy=proxy,
+            outcome_getter=outcome_getter,
         )
     finally:
         _encrypt_session(profile_id)
@@ -1244,6 +1858,7 @@ async def _with_decrypted_client(
     login_mode: bool = False,
     group_id: int | None = None,
     proxy: str | None = None,
+    outcome_getter=None,
 ):
     sess = _ensure_auth_session(profile_id)
     if login_mode:
@@ -1275,17 +1890,37 @@ async def _with_decrypted_client(
         auth_flow = _AppSmsAuthFlow(sms, pwd, profile_id)
     else:
         auth_flow = _SessionOnlyAuthFlow()
-    client = _build_pymax_client(
-        phone=phone,
-        work_dir=str(session_dir),
-        session_name="session.db",
-        auth_flow=auth_flow,
-        proxy=proxy,
-        identity=identity,
+    manager = _client_manager_instance()
+    route_snapshot = {
+        "group_id": group_id,
+        "proxy_configured": bool(proxy),
+        "identity_present": identity is not None,
+    }
+
+    def _build_client():
+        return _build_pymax_client(
+            phone=phone,
+            work_dir=str(session_dir),
+            session_name="session.db",
+            auth_flow=auth_flow,
+            proxy=proxy,
+            identity=identity,
+        )
+
+    lease = await manager.acquire(
+        _client_scope(),
+        profile_id,
+        route_snapshot,
+        "login" if login_mode else "send",
+        _build_client,
+        close_callback=_safe_stop,
+        outcome_getter=outcome_getter,
     )
-    gateway = _max_gateway(client)
-    timeout = auth_timeout if login_mode else connect_timeout
+    client = lease.client
+    gateway_profile_token = _gateway_profile_id.set(int(profile_id))
     try:
+        gateway = _max_gateway(client)
+        timeout = auth_timeout if login_mode else connect_timeout
         async with asyncio.timeout(timeout):
             await gateway.connect()
             result = await fn(client)
@@ -1293,8 +1928,9 @@ async def _with_decrypted_client(
                 await _load_session_identity(session_dir, "session.db")
         return result
     finally:
+        _gateway_profile_id.reset(gateway_profile_token)
         try:
-            await _safe_stop(client)
+            await _release_client_lease(manager, lease)
         finally:
             if not login_mode:
                 _clear_stale_connecting_step(profile_id)
@@ -1312,13 +1948,46 @@ def _platform_authorization_record():
     return load_authorization_record(path, now=datetime.now(timezone.utc))
 
 
+async def _handle_auxiliary_provider_error(
+    profile_id: int,
+    action: MaxAction,
+    error: BaseException,
+) -> None:
+    """Persist confirmed auxiliary restrictions before returning the error."""
+    if action not in {
+        MaxAction.FETCH_HISTORY,
+        MaxAction.MARK_READ,
+        MaxAction.ADD_REACTION,
+    }:
+        return
+    message = str(error)
+    if antiban_core.is_ban_error(message):
+        if _mark_profile_failed(int(profile_id), message, is_auth_err=False):
+            await _handle_profile_banned(int(profile_id), message)
+        return
+    wait_seconds = antiban_core.flood_wait_seconds(message)
+    if wait_seconds is not None:
+        _persist_server_retry_after(
+            int(profile_id),
+            wait_seconds,
+            reason=f"MAX auxiliary {action}",
+        )
+
+
 def _max_gateway(client):
     from app.services.max_gateway import GuardedMaxGateway
 
+    profile_id = _gateway_profile_id.get()
+    restriction_handler = None
+    if profile_id is not None:
+        restriction_handler = lambda action, error: _handle_auxiliary_provider_error(
+            profile_id, action, error
+        )
     return GuardedMaxGateway(
         adapter=client,
         record=_platform_authorization_record(),
         clock=lambda: datetime.now(timezone.utc),
+        restriction_handler=restriction_handler,
     )
 
 
@@ -1334,22 +2003,33 @@ async def _login_max(
             raise RuntimeError("Вход не завершён — нет данных профиля")
         return c.me.contact.id
 
+    staged_session: list[tuple[Path, Path]] = []
     if fresh:
-        _clear_session(profile_id)
+        staged_session = _stage_session_for_reauth(profile_id)
         sess = _ensure_auth_session(profile_id)
         _drain_queue(sess["sms_q"])
         _drain_queue(sess["pwd_q"])
         append_log(f"Профиль #{profile_id}: новый вход по SMS")
 
-    me_id = await _with_client(
-        profile_id,
-        phone,
-        _check,
-        connect_timeout=90,
-        auth_timeout=600,
-        login_mode=True,
-        group_id=group_id,
-    )
+    try:
+        me_id = await _with_client(
+            profile_id,
+            phone,
+            _check,
+            connect_timeout=90,
+            auth_timeout=600,
+            login_mode=True,
+            group_id=group_id,
+        )
+    except BaseException:
+        if staged_session:
+            _restore_staged_session(staged_session)
+        raise
+    if staged_session:
+        try:
+            _discard_staged_session(staged_session)
+        except OSError as exc:
+            append_log(f"Профиль #{profile_id}: старую сессию не удалось удалить после reauth: {exc}")
     if me_id is None:
         raise RuntimeError("MAX не вернул профиль после входа")
     return me_id
@@ -1357,6 +2037,48 @@ async def _login_max(
 
 class DestinationAuthorizationError(RuntimeError):
     """Raised when a destination is not already authorized and resolvable."""
+
+    def __init__(self, code: str) -> None:
+        self.code = str(code)
+        super().__init__(self.code)
+
+
+def _require_send_destination(
+    profile_id: int,
+    group: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Return the current approved destination before any send-side SDK call.
+
+    Current application databases carry an explicit destination revision and
+    verification bit.  A send must use that exact approved revision; a link
+    change therefore cannot be silently resolved and sent in the same worker
+    pass.  Small legacy/synthetic fixtures without these columns retain the
+    resolve-only compatibility path used by the local boundary tests.
+    """
+    keys = set(group.keys())
+    if not {"id", "destination_revision", "destination_verified"}.issubset(keys):
+        return None
+    group_id = int(group["id"])
+    revision = int(group["destination_revision"] or 0)
+    try:
+        if not _automation_scope_allows_external_action(int(profile_id), group_id):
+            raise DestinationAuthorizationError("WORK_GROUP_SELECTION_REQUIRED")
+        from app.repositories.automation_scope import (
+            AutomationScopeError,
+            AutomationScopeRepository,
+        )
+
+        with _conn() as connection:
+            try:
+                return AutomationScopeRepository(connection).require_external_action(
+                    int(profile_id), group_id, revision
+                )
+            except AutomationScopeError as exc:
+                raise DestinationAuthorizationError(exc.code) from exc
+    except DestinationAuthorizationError:
+        raise
+    except (sqlite3.Error, KeyError, TypeError, ValueError) as exc:
+        raise DestinationAuthorizationError("DESTINATION_REVIEW_REQUIRED") from exc
 
 
 async def resolve_chat_id(
@@ -1369,13 +2091,13 @@ async def resolve_chat_id(
         return cached
     link = str(group["invite_link"] or "").strip()
     if not link:
-        raise DestinationAuthorizationError("destination_link_missing")
+        raise DestinationAuthorizationError("DESTINATION_REVIEW_REQUIRED")
     chat = await gateway.resolve_destination(link)
     if chat is None:
-        raise DestinationAuthorizationError("membership_or_destination_not_verified")
+        raise DestinationAuthorizationError("MEMBERSHIP_REVIEW_REQUIRED")
     cid = str(getattr(chat, "id", "") or "").strip()
     if not cid:
-        raise DestinationAuthorizationError("destination_id_missing")
+        raise DestinationAuthorizationError("DESTINATION_REVIEW_REQUIRED")
     try:
         group_id = group["id"]
     except (KeyError, IndexError):
@@ -1409,7 +2131,8 @@ def _human_rhythm_enabled() -> bool:
 
 
 def _role_plan_enabled() -> bool:
-    return _human_rhythm_enabled()
+    """Three-day roles stay enabled independently from send-window pacing."""
+    return True
 
 
 def _ensure_role_cycle_anchor() -> None:
@@ -1851,12 +2574,34 @@ def _has_enabled_active_profiles() -> bool:
 
 
 _SPINTAX_RE = re.compile(r"\{([^{}]+)\}")
+_ESCAPED_OPEN_BRACE = "\x00MAXBOT_OPEN_BRACE\x00"
+_ESCAPED_CLOSE_BRACE = "\x00MAXBOT_CLOSE_BRACE\x00"
+
+
+def _protect_literal_braces(text: str) -> str:
+    return text.replace("\\{", _ESCAPED_OPEN_BRACE).replace(
+        "\\}", _ESCAPED_CLOSE_BRACE
+    )
+
+
+def _restore_literal_braces(text: str) -> str:
+    return text.replace(_ESCAPED_OPEN_BRACE, "{").replace(
+        _ESCAPED_CLOSE_BRACE, "}"
+    )
 
 
 def _expand_spintax(text: str) -> str:
-    """Раскрыть {вариант1|вариант2} (вложенность до 10 проходов)."""
+    """Expand explicit ``{a|b}``; ``\\{...\\}`` remains literal."""
+    text = _protect_literal_braces(text)
     for _ in range(10):
         def repl(m: re.Match[str]) -> str:
+            token = m.group(0)
+            try:
+                # A JSON object is content, even when a string contains '|'.
+                json.loads(token)
+                return token
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
             parts = [p for p in m.group(1).split("|") if p != ""]
             return random.choice(parts) if parts else ""
 
@@ -1864,7 +2609,7 @@ def _expand_spintax(text: str) -> str:
         if new == text:
             break
         text = new
-    return text
+    return _restore_literal_braces(text)
 
 
 def _render_message(
@@ -1892,7 +2637,9 @@ def _render_message(
         "date": _local_today().isoformat(),
         "group": group_name,
     }
-    out = text
+    # Protect escaped braces before placeholder replacement as well, so
+    # ``\\{{label\\}}`` is an explicitly literal placeholder.
+    out = _protect_literal_braces(text)
     for key, val in mapping.items():
         out = out.replace("{{" + key + "}}", val)
     return _expand_spintax(out)
@@ -2149,7 +2896,92 @@ def _quiet_limit() -> int:
         return 1
 
 
+def _automation_scope_allows_external_action(profile_id: int, group_id: int) -> bool:
+    """Honor the persisted consent/work-group fence, failing closed on ambiguity.
+
+    A database that has not yet created the scope table is still a legacy
+    fixture/import and retains its read-compatible behavior. Once the table is
+    present, a missing row is migrated only when exactly one enabled legacy
+    membership exists; multiple memberships require an explicit selection.
+    """
+    from app.repositories.automation_scope import (
+        AutomationScopeError,
+        AutomationScopeRepository,
+    )
+
+    try:
+        with _conn() as c:
+            table = c.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='profile_automation_scope'"
+            ).fetchone()
+            if table is None:
+                return True
+            scope = c.execute(
+                "SELECT automation_group_id, consent_state "
+                "FROM profile_automation_scope WHERE profile_id=?",
+                (int(profile_id),),
+            ).fetchone()
+            if scope is None:
+                repository = AutomationScopeRepository(c)
+                manifest = repository.migration_manifest(profile_id)
+                if manifest.status != "READY" or manifest.group_id is None:
+                    return False
+                repository.migrate_legacy_scope(profile_id)
+                scope = c.execute(
+                    "SELECT automation_group_id, consent_state "
+                    "FROM profile_automation_scope WHERE profile_id=?",
+                    (int(profile_id),),
+                ).fetchone()
+    except (sqlite3.Error, AutomationScopeError):
+        return False
+    if scope is None:
+        return False
+    if str(scope["consent_state"] or "") != "active":
+        return False
+    selected_group = scope["automation_group_id"]
+    return selected_group is not None and int(selected_group) == int(group_id)
+
+
+def _claim_automation_identity(profile_id: int, max_identity: object) -> None:
+    """Claim a MAX identity globally in server mode before activation."""
+    if not _is_server_mode():
+        return
+    from app.tenant import get_tenant_id
+
+    tenant_id = get_tenant_id()
+    if tenant_id is None:
+        return
+    from app.repositories.automation_identity import AutomationIdentityRepository
+
+    with _global_conn() as connection:
+        AutomationIdentityRepository(connection).claim(
+            tenant_id=int(tenant_id),
+            profile_id=int(profile_id),
+            max_identity=max_identity,
+        )
+
+
+def _release_automation_identity(profile_id: int) -> None:
+    """Release a claim only after the profile session is explicitly deleted."""
+    if not _is_server_mode():
+        return
+    from app.tenant import get_tenant_id
+
+    tenant_id = get_tenant_id()
+    if tenant_id is None:
+        return
+    from app.repositories.automation_identity import AutomationIdentityRepository
+
+    with _global_conn() as connection:
+        AutomationIdentityRepository(connection).release(
+            tenant_id=int(tenant_id), profile_id=int(profile_id)
+        )
+
+
 def _can_send_in_group(profile: sqlite3.Row, group_id: int) -> bool:
+    if not _automation_scope_allows_external_action(int(profile["id"]), int(group_id)):
+        return False
     if _is_in_human_break(int(profile["id"])):
         return False
     if not _can_send(profile):
@@ -2206,6 +3038,10 @@ def _has_sendable_profile(*, ignore_human_break: bool = False) -> bool:
     for group in _active_groups():
         for profile in _active_profiles_for_group(group["id"]):
             if _is_circuit_open(profile["id"]):
+                continue
+            if not _automation_scope_allows_external_action(
+                int(profile["id"]), int(group["id"])
+            ):
                 continue
             if ignore_human_break:
                 if _is_in_cooldown(profile):
@@ -2327,15 +3163,25 @@ from app.campaign_worker import (
 
 
 def backup_database() -> Path | None:
+    """Serialize in-process snapshots so async callers cannot collide on a filename."""
+    with _backup_lock:
+        return _backup_database_locked()
+
+
+def _backup_database_locked() -> Path | None:
     """Снимок SQLite в data/backups/. Возвращает путь или None."""
     dest: Path | None = None
     try:
+        if DB_BACKEND == "postgres":
+            raise RuntimeError(
+                "SQLite backup is unavailable when DATABASE_URL selects PostgreSQL"
+            )
         backups = _backups_dir()
         backups.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         dest = backups / f"app-{ts}.db"
         # SQLite Backup API takes a consistent online snapshot, including WAL.
-        with _conn() as source, sqlite3.connect(dest) as target:
+        with sqlite3.connect(_db_path()) as source, sqlite3.connect(dest) as target:
             source.backup(target)
             integrity = target.execute("PRAGMA integrity_check").fetchone()[0]
             if integrity != "ok":
@@ -2394,8 +3240,21 @@ def _tenant_sqlite_paths() -> list[Path]:
 def _reset_auth_on_startup() -> None:
     _auth_sessions.clear()
     _login_tasks.clear()
+    global _auth_attempt_store
+    _auth_attempt_store = None
+    from app.repositories.profile_auth import AuthAttemptRepository
+
     for db_path in _tenant_sqlite_paths():
         _sqlite_reset_running_campaigns(db_path)
+        try:
+            with sqlite3.connect(db_path) as connection:
+                interrupted = AuthAttemptRepository(connection).mark_active_interrupted()
+            if interrupted:
+                append_log(
+                    f"Прервано попыток входа после перезапуска: {interrupted}"
+                )
+        except sqlite3.Error as exc:
+            append_log(f"Не удалось пометить попытки входа как прерванные: {exc}")
     append_log(
         "Сервер запущен. Если вход был прерван — нажмите «Войти» снова."
     )
@@ -2472,6 +3331,11 @@ def _is_circuit_open_for(profile_id: int, rt) -> bool:
 
 def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> bool:
     """Mark profile after send failure. Returns True if ban-class error detected."""
+    from app.services.errors import classify_exception
+
+    safe_error = classify_exception(
+        RuntimeError(err), source="max", stage="send", outcome="rejected"
+    ).safe_message
     if antiban_core.is_ban_error(err):
         with _conn() as c:
             row = c.execute(
@@ -2480,9 +3344,9 @@ def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> bool:
             fail_count = int((row["fail_count"] if row else None) or 0) + 1
             c.execute(
                 "UPDATE profiles SET last_error=?, status=?, fail_count=? WHERE id=?",
-                (err, ProfileStatus.BANNED, fail_count, profile_id),
+                (safe_error, ProfileStatus.BANNED, fail_count, profile_id),
             )
-        append_log(f"Профиль #{profile_id} забанен: {err}")
+        append_log(f"Профиль #{profile_id} забанен: {safe_error}")
         return True
     with _conn() as c:
         row = c.execute(
@@ -2493,12 +3357,12 @@ def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> bool:
         if is_auth_err:
             c.execute(
                 "UPDATE profiles SET last_error=?, status=?, fail_count=? WHERE id=?",
-                (err, ProfileStatus.NEEDS_REAUTH, fail_count, profile_id),
+                (safe_error, ProfileStatus.NEEDS_REAUTH, fail_count, profile_id),
             )
         elif disable_after > 0 and fail_count >= disable_after:
             c.execute(
                 "UPDATE profiles SET last_error=?, status=?, fail_count=? WHERE id=?",
-                (err, ProfileStatus.DISABLED, fail_count, profile_id),
+                (safe_error, ProfileStatus.DISABLED, fail_count, profile_id),
             )
             append_log(
                 f"Профиль #{profile_id} отключён после {fail_count} ошибок подряд"
@@ -2508,7 +3372,7 @@ def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> bool:
         else:
             c.execute(
                 "UPDATE profiles SET last_error=?, fail_count=? WHERE id=?",
-                (err, fail_count, profile_id),
+                (safe_error, fail_count, profile_id),
             )
     _on_error(profile_id)
     try:
@@ -2529,9 +3393,13 @@ def _mark_profile_failed(profile_id: int, err: str, is_auth_err: bool) -> bool:
 
 async def _handle_profile_banned(profile_id: int, err: str) -> None:
     """Stop tenant worker and disable auto_run after ban detection (ADR-004)."""
+    from app.services.errors import classify_exception
     from app.tenant import get_tenant_id
 
-    reason = f"Аккаунт забанен: {err}"
+    safe_error = classify_exception(
+        RuntimeError(err), source="max", stage="send", outcome="rejected"
+    ).safe_message
+    reason = f"Аккаунт забанен: {safe_error}"
     append_log(
         f"Профиль #{profile_id} — {reason}. Остановка рассылки для tenant."
     )
@@ -2581,13 +3449,15 @@ def _run_scheduled_backups() -> None:
         return
     from app.tenant import tenant_scope
 
+    data_root = _resolve_data_root()
+    tenant_root = data_root / "tenants"
+    global_dir = data_root / "global"
     for db_path in _tenant_sqlite_paths():
         parent = db_path.parent
-        grand = parent.parent
-        if parent.name.isdigit() and grand.name == "tenants":
+        if parent.parent == tenant_root and parent.name.isdigit():
             with tenant_scope(tenant_id=int(parent.name), role="user"):
                 backup_database()
-        elif parent.name == "global" and grand.name == "data":
+        elif parent == global_dir:
             with tenant_scope(use_global_data=True, role="admin"):
                 backup_database()
 
@@ -2618,11 +3488,11 @@ async def _backup_loop() -> None:
             continue
         now = time.monotonic()
         if last_backup == 0.0:
-            _run_scheduled_backups()
+            await asyncio.to_thread(_run_scheduled_backups)
             last_backup = now
             continue
         if now - last_backup >= hours * 3600:
-            _run_scheduled_backups()
+            await asyncio.to_thread(_run_scheduled_backups)
             last_backup = now
 
 
@@ -2643,6 +3513,9 @@ def _build_status_payload() -> dict[str, Any]:
             status_log = list(reversed([r["msg"] for r in log_rows]))
         else:
             status_log = _log[-80:]
+        from app.services.errors import sanitize_log_line
+
+        status_log = [sanitize_log_line(line) for line in status_log]
         running = bool(qs and qs["running"])
         activity = fetch_activity(
             c,
@@ -2743,11 +3616,21 @@ class ApiPinMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global _app_started_at
-    init_db()
-    _load_log_from_db()
-    _load_antiban_state()
-    _try_legacy_unlock()
-    _reset_auth_on_startup()
+    if _is_server_mode():
+        from app.tenant import tenant_scope
+
+        with tenant_scope(use_global_data=True, role="admin"):
+            init_db()
+            _load_log_from_db()
+            _load_antiban_state()
+            _try_legacy_unlock()
+            _reset_auth_on_startup()
+    else:
+        init_db()
+        _load_log_from_db()
+        _load_antiban_state()
+        _try_legacy_unlock()
+        _reset_auth_on_startup()
     _app_started_at = time.time()
     if not _is_test_mode():
         from app.tenant import get_tenant_id
@@ -2875,4 +3758,11 @@ if __name__ == "__main__":
 
         threading.Thread(target=_open_browser_when_ready, daemon=True).start()
 
-    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    uvicorn.run(
+        app,
+        host=HOST,
+        port=PORT,
+        log_level="info",
+        ws_max_size=MAX_WS_MESSAGE_BYTES,
+        ws_max_queue=MAX_WS_QUEUE,
+    )

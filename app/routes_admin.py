@@ -148,16 +148,20 @@ async def list_users():
 async def create_user(body: CreateUserIn):
     _require_admin()
     try:
-        info = auth.register_user(body.institution_name, body.login, body.password)
+        info = await asyncio.to_thread(
+            auth.register_user, body.institution_name, body.login, body.password
+        )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
     from app.tenant_init import init_tenant_db, rollback_tenant_registration
 
     try:
-        init_tenant_db(app_main, info["tenant_id"])
+        await asyncio.to_thread(init_tenant_db, app_main, info["tenant_id"])
     except Exception:
-        rollback_tenant_registration(info["tenant_id"], app_main.ROOT)
+        await asyncio.to_thread(
+            rollback_tenant_registration, info["tenant_id"], app_main.ROOT
+        )
         raise HTTPException(500, "Не удалось создать кабинет. Попробуйте позже.") from None
     return {"ok": True, "tenant_id": info["tenant_id"], "user_id": info["user_id"]}
 
@@ -242,17 +246,19 @@ def _restore_tenant_sqlite(live: Path, quarantine: Path | None) -> None:
 
 def _purge_quarantine(quarantine: Path | None) -> None:
     if quarantine is not None and quarantine.exists():
-        shutil.rmtree(quarantine, ignore_errors=True)
+        shutil.rmtree(quarantine)
 
 
 @router.delete("/users/{tenant_id}")
 async def delete_user(tenant_id: int):
     _require_admin()
-    tenant = db_pg.get_tenant(tenant_id)
+    tenant = await asyncio.to_thread(db_pg.get_tenant, tenant_id)
     if not tenant:
         raise HTTPException(404, "Учреждение не найдено")
-    if not db_pg.get_tenant_user(tenant_id):
+    tenant_user = await asyncio.to_thread(db_pg.get_tenant_user, tenant_id)
+    if not tenant_user:
         raise HTTPException(404, "Пользователь учреждения не найден")
+    tenant_user_id = int(tenant_user["id"]) if tenant_user else None
 
     from app.campaign_worker import stop_worker
     from app.tenant import tenant_scope
@@ -266,14 +272,25 @@ async def delete_user(tenant_id: int):
             tenant_id=tenant_id,
         )
 
-    db_pg.bump_tenant_token_version(tenant_id)
+    await asyncio.to_thread(db_pg.bump_tenant_token_version, tenant_id)
     auth.clear_session_cache()
 
-    quarantine = await asyncio.to_thread(_quarantine_tenant_sqlite, tenant_id)
     try:
-        deleted = db_pg.delete_tenant(tenant_id)
+        quarantine = await asyncio.to_thread(_quarantine_tenant_sqlite, tenant_id)
+    except OSError:
+        logger.error(
+            "delete_user: tenant files remain at the live path because quarantine failed tenant_id=%s",
+            tenant_id,
+        )
+        raise HTTPException(
+            409,
+            "Удаление не завершено: файлы учреждения заблокированы и остались "
+            "на прежнем месте.",
+        ) from None
+    try:
+        deleted = await asyncio.to_thread(db_pg.delete_tenant, tenant_id)
     except Exception as exc:
-        logger.exception(
+        logger.error(
             "delete_user: PG delete failed, restoring tenant files tenant_id=%s path=%s",
             tenant_id,
             live,
@@ -281,7 +298,7 @@ async def delete_user(tenant_id: int):
         try:
             await asyncio.to_thread(_restore_tenant_sqlite, live, quarantine)
         except Exception:
-            logger.exception(
+            logger.error(
                 "delete_user: restore after PG failure failed tenant_id=%s quarantine=%s",
                 tenant_id,
                 quarantine,
@@ -293,10 +310,28 @@ async def delete_user(tenant_id: int):
     if not deleted:
         await asyncio.to_thread(_restore_tenant_sqlite, live, quarantine)
         raise HTTPException(404, "Учреждение не найдено")
-    await asyncio.to_thread(_purge_quarantine, quarantine)
+    from app import auth_rate_limit
+
+    await asyncio.to_thread(
+        auth_rate_limit.clear_tenant_rate_limit_keys,
+        tenant_id,
+        tenant_user_id,
+    )
     from app.campaign_runtime import REGISTRY
 
     REGISTRY.drop_worker(tenant_id)
+    try:
+        await asyncio.to_thread(_purge_quarantine, quarantine)
+    except OSError:
+        logger.error(
+            "delete_user: tenant row deleted but files remain quarantined tenant_id=%s",
+            tenant_id,
+        )
+        raise HTTPException(
+            409,
+            "Учреждение удалено из базы данных, но очистка файлов не завершена. "
+            "Остаток данных сохранён в карантине; проверьте файловую блокировку.",
+        ) from None
     return {"ok": True}
 
 

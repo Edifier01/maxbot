@@ -96,6 +96,38 @@ def test_formatted_duplicate_phone_is_one_profile(tmp_path, monkeypatch):
         assert c.execute("SELECT COUNT(*) n FROM profiles").fetchone()["n"] == 1
 
 
+def test_orphan_profile_is_retained_when_runtime_cleanup_fails(tmp_path, monkeypatch):
+    m = _setup_local(tmp_path, monkeypatch)
+    from app import routes_groups
+
+    with m._conn() as c:
+        c.execute(
+            "INSERT INTO groups (id, name, invite_link, is_active) VALUES (?, ?, ?, 1)",
+            (41, "cleanup-fixture", "https://max.example/cleanup"),
+        )
+        c.execute(
+            "INSERT INTO profiles (id, phone, status) VALUES (?, ?, ?)",
+            (41, "+79990000041", m.ProfileStatus.PENDING),
+        )
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, order_index) VALUES (?, ?, ?)",
+            (41, 41, 0),
+        )
+
+    async def fail_cleanup(_profile_id: int) -> None:
+        raise HTTPException(409, "PROFILE_RUNTIME_CLEANUP_FAILED")
+
+    monkeypatch.setattr(routes_groups, "_cleanup_profile_runtime", fail_cleanup)
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(routes_groups.remove_group_profile(41, 41))
+    assert caught.value.status_code == 409
+    with m._conn() as c:
+        assert c.execute("SELECT 1 FROM profiles WHERE id=41").fetchone() is not None
+        assert c.execute(
+            "SELECT 1 FROM group_profiles WHERE group_id=41 AND profile_id=41"
+        ).fetchone() is None
+
+
 def test_admin_proxy_mutation_uses_tenant_busy_guard(monkeypatch):
     from app import routes_admin
 

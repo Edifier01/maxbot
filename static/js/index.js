@@ -109,6 +109,13 @@ let openGroupId = null;
     let _subscriptionExpiresAt = null;
     let _adminImpersonating = false;
     let _lastStatus = null;
+    let _dashboardLoadSequence = 0;
+    let _readinessRevision = null;
+    const CAMPAIGN_COMMAND_STORAGE_KEY = 'maxbot.pendingCampaignCommand.v1';
+    const CAMPAIGN_COMMAND_PENDING_STATES = new Set(['preflight', 'testing', 'stopping', 'unknown']);
+    const CAMPAIGN_COMMAND_LABELS = Object.freeze({
+      start: 'Старт', stop: 'Стоп', pause: 'Пауза', test: 'Тест',
+    });
 
     function isUserRole() {
       return _serverMode && _userRole === 'user';
@@ -256,7 +263,11 @@ let openGroupId = null;
       panel.classList.add('active');
       panel.hidden = false;
       if (!skipHash) syncTabHash(tabId);
-      if (tabId === 'campaign') loadDashboard();
+      if (tabId === 'campaign') {
+        loadDashboard().catch(error => {
+          if (!(error instanceof PanelApiError)) toast('Не удалось обновить сводку.', 'error');
+        });
+      }
     }
 
     function getApiPin() {
@@ -286,6 +297,7 @@ let openGroupId = null;
       PROXY_AUTH_FAILED: 'Проверьте учётные данные прокси.',
       PROXY_CONNECT_FAILED: 'Не удалось подключиться через прокси.',
       MAX_ACCOUNT_BANNED: 'Аккаунт MAX заблокирован. Отправка остановлена.',
+      ACCOUNT_AUTOMATION_CONFLICT: 'Аккаунт MAX уже используется в другой области автоматизации.',
       MAX_SESSION_REVOKED: 'Сессия MAX отозвана. Требуется повторный вход.',
       MAX_RATE_LIMIT: 'MAX временно ограничил частоту действий. Дождитесь разрешённого времени.',
       SEND_OUTCOME_UNKNOWN: 'Результат действия неизвестен. Сначала выполните сверку.',
@@ -294,14 +306,89 @@ let openGroupId = null;
       RESTORE_HOLD: 'Внешние действия остановлены до проверки восстановления.',
       UNCLASSIFIED: 'Операция не выполнена. Требуется проверка.',
     });
+    const KNOWN_ERROR_CODES = new Set([
+      'AUTH_REQUIRED', 'AUTH_SESSION_EXPIRED', 'AUTH_SESSION_REVOKED', 'LOGIN_INVALID',
+      'PERMISSION_DENIED', 'SUBSCRIPTION_INACTIVE', 'PROFILE_NOT_FOUND', 'OBJECT_NOT_FOUND',
+      'WORK_GROUP_SELECTION_REQUIRED', 'DESTINATION_REVIEW_REQUIRED', 'MEMBERSHIP_REVIEW_REQUIRED',
+      'CONSENT_REVOKED', 'ACCOUNT_AUTOMATION_CONFLICT', 'ROUTE_MISSING', 'ROUTE_CONFLICT',
+      'ROUTE_DISABLED', 'ROUTE_REVISION_CONFLICT', 'PROXY_URL_INVALID',
+      'PROXY_UNSUPPORTED_SCHEME', 'PROXY_AUTH_FAILED', 'PROXY_CONNECT_FAILED',
+      'PROXY_RESPONSE_INVALID', 'TLS_ERROR', 'MAX_CONNECT_FAILED', 'SDK_INCOMPATIBLE',
+      'MAX_SESSION_REVOKED', 'MAX_RATE_LIMIT', 'MAX_ACCOUNT_BANNED', 'MAX_ACTION_FORBIDDEN',
+      'CONNECTION_TIMEOUT', 'CODE_REQUEST_TIMEOUT', 'CODE_INPUT_TIMEOUT',
+      'PASSWORD_INPUT_TIMEOUT', 'OTP_FORMAT_INVALID', 'OTP_INVALID', 'OTP_EXPIRED',
+      'PASSWORD_INVALID', 'ATTEMPT_STATE_CONFLICT', 'ATTEMPT_EXPIRED', 'ATTEMPT_INTERRUPTED',
+      'REGISTRATION_REQUIRED', 'SEND_OUTCOME_UNKNOWN', 'ACK_PERSIST_PENDING', 'CLEANUP_FAILED',
+      'DAILY_BUDGET_ALLOCATED', 'CAMPAIGN_BUSY', 'PREVIEW_STALE', 'COMMAND_STATE_UNKNOWN',
+      'STOP_PENDING', 'RESTORE_HOLD', 'MIGRATION_REVIEW_REQUIRED', 'VAULT_KEY_REQUIRED',
+      'VAULT_INTEGRITY_FAILED', 'STORAGE_ERROR', 'POLICY_APPLY_PARTIAL', 'VERSION_CONFLICT',
+      'POOL_EMPTY', 'IMPORT_INVALID', 'INPUT_TOO_LARGE', 'SETTINGS_NOT_LOADED',
+      'API_RATE_LIMIT', 'NETWORK_UNAVAILABLE', 'SERVER_UNAVAILABLE', 'LOGOUT_NOT_CONFIRMED',
+      'IMPERSONATION_EXIT_FAILED', 'UNCLASSIFIED',
+    ]);
+
+    const ERROR_ACTION_LABELS = Object.freeze({
+      AUTHENTICATE: 'Открыть вход',
+      REAUTHENTICATE: 'Войти заново',
+      REVIEW_INPUT: 'Проверить ввод',
+      REVIEW_ACCESS: 'Проверить доступ',
+      REVIEW_SUBSCRIPTION: 'Проверить подписку',
+      REVIEW_PROFILE: 'Открыть профили',
+      REVIEW_OBJECT: 'Проверить объект',
+      SELECT_GROUP: 'Выбрать группу',
+      REVIEW_DESTINATION: 'Проверить назначение',
+      REVIEW_MEMBERSHIP: 'Проверить участие',
+      STOP_OPERATION: 'Открыть остановку',
+      REVIEW_CONFLICT: 'Проверить конфликт',
+      CONFIGURE_ROUTE: 'Настроить маршрут',
+      REVIEW_ROUTE: 'Проверить маршрут',
+      ENABLE_ROUTE: 'Открыть маршруты',
+      RELOAD_ROUTE: 'Перезагрузить маршруты',
+      REVIEW_PROXY: 'Проверить прокси',
+      REVIEW_NETWORK: 'Проверить сеть',
+      REVIEW_RUNTIME: 'Проверить среду',
+      WAIT_RETRY: 'Показать состояние',
+      STOP_TENANT: 'Открыть остановку',
+      REVIEW_ACTION: 'Проверить операцию',
+      RETRY_LOGIN: 'Открыть профили',
+      RESTART_LOGIN: 'Открыть профили',
+      REQUEST_NEW_CODE: 'Открыть профили',
+      RELOAD_OPERATION: 'Перезагрузить операцию',
+      RESTART_OPERATION: 'Открыть операцию',
+      REVIEW_OPERATION: 'Открыть операцию',
+      REVIEW_REGISTRATION: 'Открыть профили',
+      RECONCILE_BEFORE_RETRY: 'Открыть журнал',
+      PERSIST_ACK: 'Открыть журнал',
+      REVIEW_CLEANUP: 'Открыть группы',
+      REVIEW_BUDGET: 'Открыть операцию',
+      WAIT_OPERATION: 'Показать состояние',
+      RELOAD_PREVIEW: 'Перезагрузить операцию',
+      REVIEW_RESTORE: 'Открыть операцию',
+      REVIEW_MIGRATION: 'Открыть группы',
+      UNLOCK_VAULT: 'Открыть настройки',
+      REVIEW_VAULT: 'Открыть настройки',
+      REVIEW_STORAGE: 'Открыть настройки',
+      REVIEW_POLICY: 'Открыть настройки',
+      RELOAD_DATA: 'Перезагрузить данные',
+      REVIEW_LIBRARY: 'Открыть сообщения',
+      REVIEW_IMPORT: 'Открыть сообщения',
+      RELOAD_SETTINGS: 'Перезагрузить настройки',
+      REVIEW_SESSION: 'Открыть вход',
+    });
+
+    function normalizedErrorAction(action) {
+      return Object.prototype.hasOwnProperty.call(ERROR_ACTION_LABELS, action)
+        ? action
+        : 'REVIEW_OPERATION';
+    }
 
     function formatStructuredApiError(detail, status) {
       if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+        const code = typeof detail.code === 'string' ? detail.code : '';
         const safeMessage = typeof detail.safe_message === 'string'
           ? detail.safe_message.trim().slice(0, 300)
           : '';
-        if (safeMessage) return safeMessage;
-        const code = typeof detail.code === 'string' ? detail.code : '';
+        if (KNOWN_ERROR_CODES.has(code) && safeMessage) return safeMessage;
         if (SAFE_ERROR_MESSAGES[code]) return SAFE_ERROR_MESSAGES[code];
       }
       if (typeof detail === 'string') return detail.slice(0, 300);
@@ -311,13 +398,30 @@ let openGroupId = null;
       return status >= 500 ? 'Сервис временно недоступен.' : 'Операция не выполнена.';
     }
 
+    function safeErrorMetadata(value) {
+      return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(value)
+        ? value
+        : '';
+    }
+
     class PanelApiError extends Error {
-      constructor(message, status, code, retryAfter) {
+      constructor(message, status, code, retryAfter, detail) {
         super(message);
         this.name = 'PanelApiError';
         this.status = status;
-        this.code = code;
+        this.code = KNOWN_ERROR_CODES.has(code) ? code : 'UNCLASSIFIED';
         this.retryAfter = retryAfter;
+        const structured = detail && typeof detail === 'object' && !Array.isArray(detail)
+          ? detail
+          : {};
+        this.source = safeErrorMetadata(structured.source);
+        this.stage = safeErrorMetadata(structured.stage);
+        this.recommendedAction = normalizedErrorAction(
+          safeErrorMetadata(structured.recommended_action),
+        );
+        this.sessionPreserved = typeof structured.session_preserved === 'boolean'
+          ? structured.session_preserved
+          : null;
       }
     }
 
@@ -340,11 +444,139 @@ let openGroupId = null;
             r.status,
             code || ('HTTP_' + r.status),
             retryAfter,
+            detail,
           );
         }
         return j;
+      }).catch(error => {
+        if (error instanceof PanelApiError) throw error;
+        throw new PanelApiError(
+          SAFE_ERROR_MESSAGES.NETWORK_UNAVAILABLE,
+          0,
+          'NETWORK_UNAVAILABLE',
+          null,
+          { code: 'NETWORK_UNAVAILABLE' },
+        );
       });
     };
+
+    function setDashboardErrorMetadata(element, error) {
+      [
+        'data-error-code',
+        'data-error-source',
+        'data-error-stage',
+        'data-error-action',
+        'data-error-session-preserved',
+      ].forEach(name => element.removeAttribute(name));
+      if (!(error instanceof PanelApiError)) return;
+      const values = {
+        'data-error-code': safeErrorMetadata(error.code),
+        'data-error-source': error.source,
+        'data-error-stage': error.stage,
+        'data-error-action': error.recommendedAction,
+        'data-error-session-preserved': error.sessionPreserved === null
+          ? ''
+          : String(error.sessionPreserved),
+      };
+      Object.entries(values).forEach(([name, value]) => {
+        if (value) element.setAttribute(name, value);
+      });
+    }
+
+    function renderDashboardError(element, error) {
+      if (!element) return;
+      const message = error instanceof PanelApiError
+        ? error.message
+        : 'Сервис временно недоступен.';
+      element.textContent = 'Не удалось загрузить сводку: ' + message;
+      setDashboardErrorMetadata(element, error);
+      element.removeAttribute('data-error-action-invoked');
+      const action = error instanceof PanelApiError
+        ? error.recommendedAction
+        : 'REVIEW_OPERATION';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'small';
+      button.dataset.action = 'error-action';
+      button.dataset.errorAction = normalizedErrorAction(action);
+      button.textContent = ERROR_ACTION_LABELS[button.dataset.errorAction];
+      button.setAttribute('aria-label', 'Действие: ' + button.textContent);
+      element.append(document.createTextNode(' '), button);
+    }
+
+    async function runPanelErrorAction(action, button) {
+      const normalized = normalizedErrorAction(action);
+      const container = button && (button.closest('[data-error-code]') || button.parentElement);
+      const markInvoked = () => {
+        if (button) button.dataset.errorActionInvoked = normalized;
+        if (container) container.setAttribute('data-error-action-invoked', normalized);
+        document.body.setAttribute('data-last-error-action', normalized);
+      };
+      markInvoked();
+
+      if (normalized === 'AUTHENTICATE'
+          || normalized === 'REAUTHENTICATE'
+          || normalized === 'REVIEW_SESSION') {
+        markInvoked();
+        location.href = '/auth.html';
+        return;
+      }
+
+      try {
+        const groupActions = new Set([
+          'REVIEW_PROFILE', 'REVIEW_OBJECT', 'SELECT_GROUP', 'REVIEW_DESTINATION',
+          'REVIEW_MEMBERSHIP', 'REVIEW_CONFLICT', 'CONFIGURE_ROUTE', 'REVIEW_ROUTE',
+          'ENABLE_ROUTE', 'RELOAD_ROUTE', 'REVIEW_PROXY', 'REVIEW_NETWORK',
+          'REVIEW_RUNTIME', 'RETRY_LOGIN', 'RESTART_LOGIN', 'REQUEST_NEW_CODE',
+          'REVIEW_REGISTRATION', 'REVIEW_CLEANUP', 'REVIEW_MIGRATION',
+        ]);
+        if (groupActions.has(normalized)) {
+          switchTab('groups');
+          await loadGroups(true);
+          markInvoked();
+          return;
+        }
+        const messageActions = new Set(['REVIEW_LIBRARY', 'REVIEW_IMPORT']);
+        if (messageActions.has(normalized)) {
+          switchTab('messages');
+          await loadMessages();
+          markInvoked();
+          return;
+        }
+        const settingActions = new Set([
+          'UNLOCK_VAULT', 'REVIEW_VAULT', 'REVIEW_STORAGE', 'REVIEW_POLICY',
+          'RELOAD_SETTINGS',
+        ]);
+        if (settingActions.has(normalized)) {
+          switchTab('settings');
+          await loadSettings();
+          markInvoked();
+          return;
+        }
+        if (normalized === 'RECONCILE_BEFORE_RETRY' || normalized === 'PERSIST_ACK') {
+          switchTab('campaign');
+          await loadSendLog(0);
+          markInvoked();
+          return;
+        }
+        switchTab('campaign');
+        if (normalized === 'STOP_OPERATION' || normalized === 'STOP_TENANT') {
+          const stop = document.getElementById('btnStop');
+          if (stop) stop.focus();
+          toast('Проверьте состояние и нажмите «Стоп» явно.', 'info');
+        } else if (normalized === 'WAIT_RETRY' || normalized === 'WAIT_OPERATION') {
+          toast('Автоматический повтор не выполняется. Проверьте состояние операции.', 'info');
+        } else {
+          toast('Проверьте состояние операции перед продолжением.', 'info');
+        }
+        markInvoked();
+      } catch (actionError) {
+        markInvoked();
+        toast(actionError instanceof PanelApiError
+          ? actionError.message
+          : 'Не удалось открыть рекомендуемый раздел.', 'error');
+      }
+    }
 
     function markUiReady() {
       document.body.classList.add('ui-ready');
@@ -354,11 +586,21 @@ let openGroupId = null;
       const userContent = document.getElementById('userSummaryContent');
       const adminSlot = document.getElementById('adminSummarySlot');
       const dashStats = document.getElementById('dashStats');
+      const dashError = document.getElementById('dashSummaryError');
       const dashCardsPanel = document.getElementById('dashCardsPanel');
       // User summary: stats tiles only. Profile cards stay admin-only.
       if (dashStats && userContent && adminSlot) {
         const statsTarget = simpleCampaign ? userContent : adminSlot;
         if (dashStats.parentElement !== statsTarget) statsTarget.appendChild(dashStats);
+      }
+      if (dashError && userContent && adminSlot) {
+        const errorTarget = simpleCampaign ? userContent : adminSlot;
+        const before = dashStats && dashStats.parentElement === errorTarget
+          ? dashStats
+          : errorTarget.firstChild;
+        if (dashError.parentElement !== errorTarget || dashError.nextSibling !== before) {
+          errorTarget.insertBefore(dashError, before);
+        }
       }
       if (dashCardsPanel && adminSlot && dashCardsPanel.parentElement !== adminSlot) {
         adminSlot.appendChild(dashCardsPanel);
@@ -513,10 +755,14 @@ let openGroupId = null;
     document.getElementById('btnLogout').addEventListener('click', logoutUser);
     document.getElementById('dashFilter').addEventListener('change', () => loadDashboard());
     document.getElementById('btnStart').addEventListener('click', function() { withLoading(this, startCampaign); });
+    document.getElementById('btnCampaignPreview').addEventListener('click', function() { withLoading(this, previewCampaign); });
     document.getElementById('btnPause').addEventListener('click', function() { withLoading(this, pauseCampaign); });
     document.getElementById('btnStop').addEventListener('click', function() { withLoading(this, stopCampaign); });
     document.getElementById('btnReset').addEventListener('click', function() { withLoading(this, resetCampaign); });
     document.getElementById('btnTestSend').addEventListener('click', function() { withLoading(this, testSend); });
+    document.getElementById('btnCampaignCommandReconcile').addEventListener('click', function() {
+      withLoading(this, reconcileCampaignCommand);
+    });
     document.getElementById('btnSchedule').addEventListener('click', function() { withLoading(this, scheduleCampaign); });
     document.getElementById('btnCancelSchedule').addEventListener('click', function() { withLoading(this, cancelSchedule); });
     document.getElementById('sendLogQ').addEventListener('keydown', (e) => {
@@ -539,12 +785,18 @@ let openGroupId = null;
       const action = btn.dataset.action;
       const profileId = parseDataId(btn.dataset.profileId);
       const groupId = parseDataId(btn.dataset.groupId);
-      if (action === 'exit-impersonation') {
+      if (action === 'error-action') {
+        runPanelErrorAction(btn.dataset.errorAction, btn);
+      } else if (action === 'exit-impersonation') {
         exitImpersonation();
       } else if (action === 'send-log-page') {
         loadSendLog(parseDataId(btn.dataset.offset) || 0);
       } else if (action === 'login-profile') {
         withLoading(btn, () => loginProfile(profileId, btn.dataset.fresh === '1', groupId));
+      } else if (action === 'auth-diagnostic-preview') {
+        withLoading(btn, () => showAuthDiagnostic(btn, profileId));
+      } else if (action === 'auth-diagnostic-download') {
+        withLoading(btn, () => downloadAuthDiagnostic(btn, profileId));
       } else if (action === 'reset-login') {
         resetLogin(profileId);
       } else if (action === 'remove-profile') {
@@ -559,6 +811,8 @@ let openGroupId = null;
         deleteGroup(groupId);
       } else if (action === 'save-group-proxy') {
         saveGroupProxy(groupId);
+      } else if (action === 'verify-group-destination') {
+        withLoading(btn, () => verifyGroupDestination(groupId));
       } else if (action === 'login-from-phone') {
         withLoading(btn, () => loginFromPhone(groupId, true));
       } else if (action === 'import-csv') {
@@ -608,7 +862,35 @@ let openGroupId = null;
       return phone;
     }
 
-    function showAuthModal(title, message, password = false) {
+    function profileAuthActionPreference(element) {
+      if (!(element instanceof HTMLElement) || !element.matches(
+        '[data-action="reset-login"], [data-action="login-profile"]'
+      )) return null;
+      return {
+        profileId: element.dataset.profileId || '',
+        action: element.dataset.action || '',
+        groupId: element.dataset.groupId || '',
+        fresh: element.dataset.fresh || '',
+      };
+    }
+
+    function focusProfileAuthAction(profileId, preferred = null) {
+      const targets = [...document.querySelectorAll(
+        '[data-action="reset-login"], [data-action="login-profile"]'
+      )].filter(element => (
+        element.dataset.profileId === String(profileId) && !element.disabled
+      ));
+      const target = preferred
+        ? targets.find(element => (
+          element.dataset.action === preferred.action
+          && element.dataset.groupId === preferred.groupId
+          && element.dataset.fresh === preferred.fresh
+        ))
+        : null;
+      (target || targets[0])?.focus();
+    }
+
+    function showAuthModal(title, message, password = false, restoreFocus = null) {
       return new Promise(resolve => {
         authModalOpen = true;
         groupsRefreshPaused = true;
@@ -646,7 +928,18 @@ let openGroupId = null;
           okBtn.onclick = null;
           cancelBtn.onclick = null;
           input.onkeydown = null;
-          if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+          window.setTimeout(() => {
+            if (
+              previousFocus instanceof HTMLElement
+              && previousFocus !== document.body
+              && previousFocus.isConnected
+              && !previousFocus.matches(':disabled')
+            ) {
+              previousFocus.focus();
+            } else if (typeof restoreFocus === 'function') {
+              restoreFocus();
+            }
+          }, 0);
           resolve(val);
         };
 
@@ -669,6 +962,13 @@ let openGroupId = null;
       return await api(`/profiles/${profileId}`);
     }
 
+    function authRequestId(kind, profileId) {
+      const suffix = (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      return `${kind}-${profileId}-${suffix}`;
+    }
+
     async function startLoginWatch(profileId, initialStep = 'connecting') {
       if (authWatchers.has(profileId)) return;
       authWatchers.add(profileId);
@@ -686,7 +986,9 @@ let openGroupId = null;
           if (p.auth_step === 'waiting_sms' && !authModalOpen) {
             const code = await showAuthModal(
               'SMS-код',
-              `Введите код из SMS для ${p.phone}`
+              `Введите код из SMS для ${p.phone}`,
+              false,
+              () => focusProfileAuthAction(profileId)
             );
             if (code === null) {
               await api(`/profiles/${profileId}/login/reset`, { method: 'POST' });
@@ -695,7 +997,12 @@ let openGroupId = null;
             await api(`/profiles/${profileId}/sms`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ code }),
+              body: JSON.stringify({
+                code,
+                attempt_id: p.attempt_id,
+                revision: p.revision,
+                request_id: authRequestId('code', profileId),
+              }),
             });
             loadGroups(true);
             await sleep(300);
@@ -707,7 +1014,8 @@ let openGroupId = null;
             const pwd = await showAuthModal(
               'Облачный пароль MAX',
               `Введите облачный пароль для ${p.phone}${hint}`,
-              true
+              true,
+              () => focusProfileAuthAction(profileId)
             );
             if (pwd === null) {
               await api(`/profiles/${profileId}/login/reset`, { method: 'POST' });
@@ -716,7 +1024,12 @@ let openGroupId = null;
             await api(`/profiles/${profileId}/password`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ code: pwd }),
+              body: JSON.stringify({
+                code: pwd,
+                attempt_id: p.attempt_id,
+                revision: p.revision,
+                request_id: authRequestId('password', profileId),
+              }),
             });
             loadGroups(true);
             await sleep(300);
@@ -725,11 +1038,17 @@ let openGroupId = null;
 
           if (p.status === 'active' && p.auth_step === 'idle') {
             toast('Аккаунт подключён', 'success');
-            loadGroups(true);
             break;
           }
 
-          if (p.auth_step === 'error' || p.status === 'needs_reauth') {
+          const attemptRunning = [
+            'connecting',
+            'waiting_code',
+            'verifying_code',
+            'waiting_password',
+            'verifying_password',
+          ].includes(p.auth_stage);
+          if (p.auth_step === 'error' || (p.status === 'needs_reauth' && !attemptRunning)) {
             if (p.last_error) toast(p.last_error, 'error');
             loadGroups(true);
             break;
@@ -756,7 +1075,19 @@ let openGroupId = null;
         toast(e.message, 'error');
       } finally {
         authWatchers.delete(profileId);
-        loadGroups(true);
+        const active = document.activeElement;
+        const preferred = profileAuthActionPreference(active);
+        const restoreDefault = !preferred && (
+          active === document.body
+          || !active.isConnected
+          || Boolean(active.closest('#authModal'))
+        );
+        loadGroups(true).then(() => {
+          if (preferred && preferred.profileId === String(profileId)) {
+            focusProfileAuthAction(profileId, preferred);
+          }
+          else if (restoreDefault) focusProfileAuthAction(profileId);
+        });
       }
     }
 
@@ -835,11 +1166,21 @@ let openGroupId = null;
     let _statusWs = null;
     let _statusWsRetry = 0;
     let _statusPollTimer = null;
+    let _statusPollInFlight = false;
+    let _statusPollPending = false;
+    let _statusWsReconnectTimer = null;
 
     function stopStatusPoll() {
       if (_statusPollTimer) {
         clearTimeout(_statusPollTimer);
         _statusPollTimer = null;
+      }
+    }
+
+    function stopStatusReconnect() {
+      if (_statusWsReconnectTimer) {
+        clearTimeout(_statusWsReconnectTimer);
+        _statusWsReconnectTimer = null;
       }
     }
 
@@ -857,27 +1198,56 @@ let openGroupId = null;
       }
     }
 
+    async function refreshStatusFallback() {
+      if (_statusWs || document.visibilityState === 'hidden') return;
+      if (_statusPollInFlight) {
+        _statusPollPending = true;
+        return;
+      }
+      _statusPollInFlight = true;
+      try {
+        await refreshStatus();
+      } catch (_) {
+        // Keep the last truthful snapshot while the transport is unavailable.
+      } finally {
+        _statusPollInFlight = false;
+        if (_statusPollPending) {
+          _statusPollPending = false;
+          if (!_statusWs && document.visibilityState !== 'hidden') {
+            refreshStatusFallback();
+            return;
+          }
+        }
+        if (!_statusWs && document.visibilityState !== 'hidden') startStatusPoll();
+      }
+    }
+
     function startStatusPoll() {
-      if (_statusPollTimer || document.visibilityState === 'hidden') return;
+      if (_statusPollTimer || _statusPollInFlight || _statusWs || document.visibilityState === 'hidden') return;
       setLiveBadge('poll');
       _statusPollTimer = setTimeout(async () => {
         _statusPollTimer = null;
-        if (document.visibilityState !== 'hidden') {
-          await refreshStatus().catch(() => {});
-          startStatusPoll();
-        }
+        await refreshStatusFallback();
       }, 5000);
     }
 
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') stopStatusPoll();
-      else if (!_statusWs) startStatusPoll();
+      if (document.visibilityState === 'hidden') {
+        stopStatusPoll();
+        return;
+      }
+      if (!_statusWs) {
+        // One explicit resync on return, then the normal single fallback timer.
+        refreshStatusFallback();
+        connectStatusWs();
+      }
     });
 
     function connectStatusWs() {
       if (_statusWs && (_statusWs.readyState === WebSocket.OPEN || _statusWs.readyState === WebSocket.CONNECTING)) {
         return;
       }
+      stopStatusReconnect();
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       let ws;
       try {
@@ -888,6 +1258,7 @@ let openGroupId = null;
       }
       _statusWs = ws;
       ws.onopen = () => {
+        if (_statusWs !== ws) return;
         try {
           if (_serverMode) {
             ws.send(JSON.stringify({ type: 'auth' }));
@@ -903,15 +1274,22 @@ let openGroupId = null;
         setLiveBadge('live');
       };
       ws.onmessage = (ev) => {
+        if (_statusWs !== ws) return;
         try {
           applyStatus(JSON.parse(ev.data));
         } catch (_) {}
       };
       ws.onclose = () => {
+        if (_statusWs !== ws) return;
         _statusWs = null;
         startStatusPoll();
         const delay = Math.min(15000, 1000 * Math.pow(2, _statusWsRetry++));
-        setTimeout(connectStatusWs, delay);
+        if (document.visibilityState !== 'hidden' && !_statusWsReconnectTimer) {
+          _statusWsReconnectTimer = setTimeout(() => {
+            _statusWsReconnectTimer = null;
+            connectStatusWs();
+          }, delay);
+        }
       };
       ws.onerror = () => {
         try { ws.close(); } catch (_) {}
@@ -983,10 +1361,13 @@ let openGroupId = null;
     }
 
     async function loadDashboard() {
+      const requestSequence = ++_dashboardLoadSequence;
       const errEl = document.getElementById('dashSummaryError');
       try {
         const d = await api('/dashboard');
+        if (requestSequence !== _dashboardLoadSequence) return;
         if (errEl) errEl.style.display = 'none';
+        if (errEl) setDashboardErrorMetadata(errEl, null);
         if (!isUserRole()) renderDashProgress(d);
         renderDashStats(d);
         if (isSimpleCampaignView()) return;
@@ -999,7 +1380,15 @@ let openGroupId = null;
           box.innerHTML = '<div class="empty-state"><strong>Нет аккаунтов</strong>Добавьте профили во вкладке «Группы»</div>';
           return;
         }
-        box.innerHTML = items.map(p => `
+        box.innerHTML = items.map(p => {
+          const selectedGroupId = Number(p.primary_group_id) || 0;
+          const needsGroupSelection = !selectedGroupId && Number(p.linked_group_count || 0) > 0;
+          const scopeMessage = p.automation_scope_state === 'revoked'
+            ? 'Автоматизация остановлена: согласие отозвано.'
+            : needsGroupSelection
+              ? 'Выберите рабочую группу во вкладке «Группы».'
+              : '';
+          return `
         <div class="dash-card">
           <div class="phone">${esc(p.phone)}${p.label ? ' · ' + esc(p.label) : ''}</div>
           <div class="meta">
@@ -1008,16 +1397,19 @@ let openGroupId = null;
             ${authLabel(p) ? ' · ' + esc(authLabel(p)) : ''}
           </div>
           <div class="meta">Сегодня: ${p.messages_sent_today || 0} · ${esc(p.group_names || '')}</div>
+          ${scopeMessage ? `<div class="hint" role="status">${esc(scopeMessage)}</div>` : ''}
           ${p.last_error ? `<div class="auth-error">${esc(p.last_error)}</div>` : ''}
           <div class="row" style="margin-top:.5rem;margin-bottom:0">
-            <button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${isUserRole() ? 1 : 0}" data-group-id="${p.primary_group_id || ''}">Войти</button>
-            ${isUserRole() ? '' : `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${p.primary_group_id || ''}">Заново</button>`}
+            ${selectedGroupId ? `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${isUserRole() ? 1 : 0}" data-group-id="${selectedGroupId}">Войти</button>` : ''}
+            ${isUserRole() || !selectedGroupId ? '' : `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${selectedGroupId}">Заново</button>`}
           </div>
         </div>
-      `).join('');
+      `;
+        }).join('');
       } catch (e) {
+        if (requestSequence !== _dashboardLoadSequence) return;
         if (errEl) {
-          errEl.textContent = 'Не удалось загрузить сводку: ' + (e.message || 'ошибка');
+          renderDashboardError(errEl, e);
           errEl.style.display = 'block';
         }
         throw e;
@@ -1050,10 +1442,26 @@ let openGroupId = null;
         } else if (!confirm('Запустить рассылку?\n\nСистема будет работать автоматически каждый день, пока вы не нажмёте «Стоп».')) {
           return;
         }
-        await api('/campaign/start', { method: 'POST' });
+        const options = { method: 'POST' };
+        if (_readinessRevision) {
+          options.headers = { 'Content-Type': 'application/json' };
+          options.body = JSON.stringify({ readiness_revision: _readinessRevision });
+        }
+        const result = await sendCampaignCommand('start', '/campaign/start', options);
+        if (result && result.reconciled) {
+          if (result.known) _readinessRevision = null;
+          refreshStatus();
+          return;
+        }
+        _readinessRevision = null;
         refreshStatus();
         toast('Рассылка запущена', 'success');
       } catch (e) {
+        if (e && e.code === 'PREVIEW_STALE') {
+          _readinessRevision = null;
+          const state = document.getElementById('campaignReadinessState');
+          if (state) state.textContent = 'Предпросмотр устарел. Проверьте готовность ещё раз.';
+        }
         const msg = e.message || '';
         if (isUserRole() && /загрузите файл сообщений/i.test(msg)) {
           toast('Нет файла сообщений. Обратитесь к администратору.', 'error');
@@ -1062,9 +1470,177 @@ let openGroupId = null;
         }
       }
     }
+
+    function renderCampaignReadiness(report) {
+      const state = document.getElementById('campaignReadinessState');
+      const details = document.getElementById('campaignReadinessDetails');
+      const blockers = document.getElementById('campaignReadinessBlockers');
+      const selection = document.getElementById('campaignReadinessSelection');
+      if (!state || !details || !blockers || !selection) return;
+      const isReady = report && report.ok === true;
+      _readinessRevision = report && typeof report.readiness_revision === 'string'
+        ? report.readiness_revision
+        : null;
+      state.textContent = isReady ? 'Готово к запуску.' : 'Запуск заблокирован — проверьте причины.';
+      state.className = 'hint ' + (isReady ? 'ok' : 'auth-error');
+      const reasons = [
+        ...((report && report.blockers) || []).map((item) => `Блокирует: ${item}`),
+        ...((report && report.warnings) || []).map((item) => `Предупреждение: ${item}`),
+      ];
+      blockers.innerHTML = reasons.map((item) => `<li>${esc(item)}</li>`).join('');
+      const picked = report && report.selection ? report.selection : {};
+      const groups = Array.isArray(picked.groups) ? picked.groups.length : 0;
+      const profiles = Array.isArray(picked.profiles) ? picked.profiles.length : 0;
+      const libraryCount = Number.isFinite(Number(picked.library_count))
+        ? Number(picked.library_count)
+        : 0;
+      selection.textContent = `Групп: ${groups} · профилей: ${profiles} · сообщений в библиотеке: ${libraryCount}`;
+      details.style.display = '';
+    }
+
+    function pendingCampaignCommand() {
+      let raw = '';
+      try { raw = sessionStorage.getItem(CAMPAIGN_COMMAND_STORAGE_KEY) || ''; } catch (_) {}
+      if (!raw) return null;
+      try {
+        const value = JSON.parse(raw);
+        if (value && ['start', 'stop', 'pause', 'test'].includes(value.command)
+            && typeof value.requestId === 'string'
+            && /^campaign-[a-z]+-[A-Za-z0-9-]{16,64}$/.test(value.requestId)) {
+          return value;
+        }
+      } catch (_) {}
+      return { command: 'unknown', requestId: '' };
+    }
+
+    function storePendingCampaignCommand(command, requestId) {
+      try {
+        sessionStorage.setItem(CAMPAIGN_COMMAND_STORAGE_KEY, JSON.stringify({ command, requestId }));
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function renderCampaignCommandRecovery(pending, status) {
+      const panel = document.getElementById('campaignCommandRecovery');
+      const message = document.getElementById('campaignCommandRecoveryMessage');
+      const reconcile = document.getElementById('btnCampaignCommandReconcile');
+      if (!panel || !message || !reconcile) return;
+      if (!pending) {
+        panel.style.display = 'none';
+        return;
+      }
+      const known = Boolean(status && status.known === true);
+      const command = CAMPAIGN_COMMAND_LABELS[pending.command] || 'Команда';
+      const state = known && typeof status.state === 'string' ? status.state : 'unknown';
+      message.textContent = known
+        ? `${command}: состояние команды — ${state}.`
+        : 'Результат команды пока не подтверждён. Не отправляйте её повторно; проверьте состояние позже.';
+      panel.style.display = 'block';
+      reconcile.style.display = !known || CAMPAIGN_COMMAND_PENDING_STATES.has(state) ? '' : 'none';
+    }
+
+    function campaignCommandStatusMessage(command, status) {
+      if (status && status.known === false && status.state === 'not_found') {
+        return 'Сервер не принял команду. Её можно отправить заново.';
+      }
+      if (!status || status.known !== true) {
+        return 'Результат команды не подтверждён. Команда не повторялась; проверьте состояние позже.';
+      }
+      const label = CAMPAIGN_COMMAND_LABELS[command] || 'Команда';
+      return `${label}: состояние команды — ${status.state}.`;
+    }
+
+    async function reconcilePendingCampaignCommand({ notify = false } = {}) {
+      const pending = pendingCampaignCommand();
+      if (!pending) {
+        renderCampaignCommandRecovery(null, null);
+        return null;
+      }
+      let status = { known: false, state: 'unknown' };
+      if (pending.requestId) {
+        try {
+          const query = new URLSearchParams({
+            command: pending.command,
+            request_id: pending.requestId,
+          });
+          status = await api(`/campaign/command-status?${query.toString()}`);
+        } catch (_) {
+          status = { known: false, state: 'unknown' };
+        }
+      }
+      const known = Boolean(status && status.known === true);
+      const notFound = Boolean(status && status.known === false && status.state === 'not_found');
+      if (known && !CAMPAIGN_COMMAND_PENDING_STATES.has(status.state)) {
+        try { sessionStorage.removeItem(CAMPAIGN_COMMAND_STORAGE_KEY); } catch (_) {}
+      }
+      if (notFound) {
+        try { sessionStorage.removeItem(CAMPAIGN_COMMAND_STORAGE_KEY); } catch (_) {}
+      }
+      renderCampaignCommandRecovery(notFound ? null : pending, status);
+      if (notify) {
+        toast(campaignCommandStatusMessage(pending.command, status), known ? 'info' : 'error');
+      }
+      return { ...(status || {}), reconciled: true };
+    }
+
+    async function sendCampaignCommand(command, path, options = {}) {
+      const existing = pendingCampaignCommand();
+      if (existing) {
+        const status = await reconcilePendingCampaignCommand({ notify: true });
+        return status || { known: false, reconciled: true };
+      }
+      const suffix = globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const requestId = `campaign-${command}-${suffix}`;
+      const pending = { command, requestId };
+      if (!storePendingCampaignCommand(command, requestId)) {
+        renderCampaignCommandRecovery(pending, { known: false, state: 'unknown' });
+        toast('Не удалось сохранить идентификатор команды. Команда не отправлена.', 'error');
+        return { known: false, reconciled: true };
+      }
+      renderCampaignCommandRecovery(pending, { known: false, state: 'unknown' });
+      try {
+        const result = await api(path, {
+          ...options,
+          headers: { ...(options.headers || {}), 'X-Request-ID': requestId },
+        });
+        try { sessionStorage.removeItem(CAMPAIGN_COMMAND_STORAGE_KEY); } catch (_) {}
+        renderCampaignCommandRecovery(null, null);
+        return result;
+      } catch (error) {
+        if (error instanceof PanelApiError && error.status >= 400 && error.status < 500) {
+          const status = await reconcilePendingCampaignCommand();
+          if (status && status.known === false && status.state === 'not_found') {
+            throw error;
+          }
+          toast(
+            campaignCommandStatusMessage(command, status),
+            status && status.known === true ? 'info' : 'error',
+          );
+          return status || { known: false, reconciled: true };
+        }
+        const status = await reconcilePendingCampaignCommand({ notify: true });
+        return status || { known: false, reconciled: true };
+      }
+    }
+
+    async function reconcileCampaignCommand() {
+      await reconcilePendingCampaignCommand({ notify: true });
+    }
+
+    async function previewCampaign() {
+      const report = await api('/campaign/preview', { method: 'POST' });
+      renderCampaignReadiness(report);
+      toast(report.ok ? 'Готовность подтверждена' : 'Есть блокирующие условия', report.ok ? 'success' : 'info');
+    }
+
     async function pauseCampaign() {
       try {
-        await api('/campaign/pause', { method: 'POST' });
+        const result = await sendCampaignCommand('pause', '/campaign/pause', { method: 'POST' });
+        if (result && result.reconciled) return;
         refreshStatus();
         toast('Рассылка на паузе', 'success');
       } catch (e) {
@@ -1074,7 +1650,8 @@ let openGroupId = null;
     async function stopCampaign() {
       try {
         if (!confirm('Остановить рассылку?\n\nАвтозапуск будет выключен, пока вы снова не нажмёте «Старт».')) return;
-        await api('/campaign/stop', { method: 'POST' });
+        const result = await sendCampaignCommand('stop', '/campaign/stop', { method: 'POST' });
+        if (result && result.reconciled) return;
         refreshStatus();
         toast('Рассылка остановлена', 'success');
       } catch (e) {
@@ -1094,7 +1671,8 @@ let openGroupId = null;
 
     async function testSend() {
       try {
-        const r = await api('/campaign/test', { method: 'POST' });
+        const r = await sendCampaignCommand('test', '/campaign/test', { method: 'POST' });
+        if (r && r.reconciled) return;
         toast(`Тест успешен: ${r.phone} → #${r.group_id}`, 'success');
         refreshStatus();
         loadSendLog(0);
@@ -1312,8 +1890,50 @@ let openGroupId = null;
       return `
         <button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${loginFresh ? 1 : 0}" data-group-id="${groupId}" ${busy ? 'disabled' : ''}>Войти</button>
         ${isUserRole() ? '' : `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${groupId}" ${busy ? 'disabled' : ''}>Заново</button>`}
-        ${busy ? `<button type="button" class="small" data-action="reset-login" data-profile-id="${p.id}">Сброс</button>` : ''}
+        ${isUserRole() && p.attempt_id ? `<div class="auth-diagnostic" data-auth-diagnostic-host data-profile-id="${p.id}" data-attempt-id="${esc(p.attempt_id)}"><button type="button" class="small" data-action="auth-diagnostic-preview" data-profile-id="${p.id}">Диагностика входа</button></div>` : ''}
+        ${busy ? `<button type="button" class="small" data-action="reset-login" data-profile-id="${p.id}">Отменить вход</button>` : ''}
         <button type="button" class="small danger" data-action="remove-profile" data-group-id="${groupId}" data-profile-id="${p.id}">Удалить</button>`;
+    }
+
+    async function showAuthDiagnostic(button, profileId) {
+      const host = button.closest('[data-auth-diagnostic-host]');
+      const attemptId = host?.dataset.attemptId || '';
+      if (!host || !attemptId || !Number.isInteger(profileId) || profileId < 1) {
+        throw new Error('Текущая попытка входа недоступна');
+      }
+      const result = await api(`/profiles/${profileId}/auth-attempts/${encodeURIComponent(attemptId)}/diagnostic`);
+      let preview = host.querySelector('pre');
+      if (!preview) {
+        preview = document.createElement('pre');
+        preview.className = 'auth-diagnostic-preview';
+        preview.setAttribute('aria-label', 'Предпросмотр безопасной диагностики входа');
+        const download = document.createElement('button');
+        download.type = 'button';
+        download.className = 'small';
+        download.textContent = 'Скачать JSON';
+        download.dataset.action = 'auth-diagnostic-download';
+        download.dataset.profileId = String(profileId);
+        host.append(preview, download);
+      }
+      preview.textContent = JSON.stringify(result, null, 2);
+    }
+
+    async function downloadAuthDiagnostic(button, profileId) {
+      const host = button.closest('[data-auth-diagnostic-host]');
+      const attemptId = host?.dataset.attemptId || '';
+      if (!host || !attemptId || !Number.isInteger(profileId) || profileId < 1) {
+        throw new Error('Текущая попытка входа недоступна');
+      }
+      const result = await api(`/profiles/${profileId}/auth-attempts/${encodeURIComponent(attemptId)}/diagnostic?download=1`);
+      const file = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
+      const objectUrl = URL.createObjectURL(file);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = 'auth-attempt.json';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
     }
 
     function toggleGroup(id) {
@@ -1367,8 +1987,13 @@ let openGroupId = null;
     }
 
     async function resetLogin(id) {
-      await api(`/profiles/${id}/login/reset`, { method: 'POST' });
-      loadGroups(true);
+      try {
+        const result = await api(`/profiles/${id}/login/reset`, { method: 'POST' });
+        toast(result.message || 'Вход отменён', 'info');
+        loadGroups(true);
+      } catch (e) {
+        toast(e.message || 'Не удалось отменить вход', 'error');
+      }
     }
 
     function isValidInviteLink(link) {
@@ -1396,8 +2021,16 @@ let openGroupId = null;
       const params = new URLSearchParams();
       if (fresh) params.set('fresh', 'true');
       if (groupId != null) params.set('group_id', String(groupId));
+      params.set('request_id', authRequestId('start', id));
       const q = params.toString() ? '?' + params.toString() : '';
       try {
+        if (groupId != null) {
+          await api(`/profiles/${id}/automation-scope`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ group_id: Number(groupId) }),
+          });
+        }
         const r = await api(`/profiles/${id}/login${q}`, { method: 'POST' });
         toast(r.message || 'Вход запущен', 'success');
         loadGroups(true);
@@ -1468,6 +2101,27 @@ let openGroupId = null;
       }
     }
 
+    async function verifyGroupDestination(groupId) {
+      const input = document.getElementById('groupChatId-' + groupId);
+      const chatId = input ? input.value.trim() : '';
+      const revision = input ? Number(input.dataset.revision) : NaN;
+      if (!chatId) return toast('Укажите подтверждённый ID назначения', 'error');
+      if (!Number.isInteger(revision) || revision < 0) {
+        return toast('Обновите карточку группы и повторите подтверждение', 'error');
+      }
+      try {
+        await api(`/groups/${groupId}/destination/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, revision }),
+        });
+        toast('Назначение подтверждено', 'success');
+        loadGroups(true);
+      } catch (e) {
+        toast(e.message || 'Не удалось подтвердить назначение', 'error');
+      }
+    }
+
     async function toggleGroupActive(groupId, active) {
       try {
         await api(`/groups/${groupId}`, {
@@ -1518,11 +2172,23 @@ let openGroupId = null;
           openProfiles[g.id] = await api(`/groups/${g.id}/profiles?offset=${offset}&limit=${PROFILE_PAGE}`);
         }
       }
+      const focusedAuthAction = profileAuthActionPreference(document.activeElement);
       document.getElementById('groupsList').innerHTML = groups.map(g => {
         const open = openGroupId === g.id;
         const pdata = openProfiles[g.id];
         const profiles = pdata ? pdata.items : [];
         const total = pdata ? pdata.total : g.profiles_count;
+        const destinationReady = Number(g.destination_verified) === 1
+          && Boolean(String(g.max_chat_id || '').trim());
+        const destinationRevision = Number.isInteger(Number(g.destination_revision))
+          ? Number(g.destination_revision) : 0;
+        const destinationReview = destinationReady
+          ? `<div class="hint">Назначение подтверждено · revision ${destinationRevision}</div>`
+          : `<div class="auth-error" role="status">Назначение требует явного подтверждения перед рассылкой.</div>
+             <div class="row" style="margin-top:.5rem">
+               <input id="groupChatId-${g.id}" data-revision="${destinationRevision}" placeholder="Подтверждённый ID чата" aria-label="Подтверждённый ID назначения">
+               <button type="button" class="small" data-action="verify-group-destination" data-group-id="${g.id}">Подтвердить назначение</button>
+             </div>`;
         const body = open ? (profiles.length ? profiles.map(p => `
           <tr>
             <td data-label="ID">${p.id}</td>
@@ -1558,6 +2224,7 @@ let openGroupId = null;
             </div>
             ${open ? `
             <div class="group-body">
+              ${destinationReview}
               ${!isUserRole() ? `<div class="row" style="margin-bottom:.75rem">
                 <textarea id="groupProxy-${g.id}" rows="2" placeholder="1 прокси на группу (~30 acc). Несколько URL — ротация по аккаунту…" aria-label="Прокси группы" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
                 <button type="button" class="small" data-action="save-group-proxy" data-group-id="${g.id}">Сохранить прокси</button>
@@ -1579,6 +2246,9 @@ let openGroupId = null;
           </div>`;
       }).join('');
       restoreDrafts();
+      if (focusedAuthAction) {
+        focusProfileAuthAction(focusedAuthAction.profileId, focusedAuthAction);
+      }
       for (const g of groups) {
         if (openGroupId === g.id && openProfiles[g.id]) {
           for (const p of openProfiles[g.id].items) {
@@ -1750,6 +2420,96 @@ let openGroupId = null;
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
+    const MAX_PROFILE_IMPORT_BYTES = 5 * 1024 * 1024;
+    const MAX_PROFILE_IMPORT_ROWS = 2000;
+
+    function detectDelimitedSeparator(line) {
+      const candidates = [',', ';', '\t'];
+      let best = ',';
+      let bestCount = 0;
+      for (const candidate of candidates) {
+        let quoted = false;
+        let count = 0;
+        for (let i = 0; i < line.length; i += 1) {
+          const char = line[i];
+          if (char === '"') {
+            if (quoted && line[i + 1] === '"') i += 1;
+            else quoted = !quoted;
+          } else if (!quoted && char === candidate) {
+            count += 1;
+          }
+        }
+        if (count > bestCount) {
+          best = candidate;
+          bestCount = count;
+        }
+      }
+      return best;
+    }
+
+    function parseDelimitedRecords(text, separator) {
+      const rows = [];
+      let row = [];
+      let field = '';
+      let quoted = false;
+      for (let i = 0; i < text.length; i += 1) {
+        const char = text[i];
+        if (quoted) {
+          if (char === '"' && text[i + 1] === '"') {
+            field += '"';
+            i += 1;
+          } else if (char === '"') {
+            quoted = false;
+          } else {
+            field += char;
+          }
+        } else if (char === '"' && field.length === 0) {
+          quoted = true;
+        } else if (char === separator) {
+          row.push(field);
+          field = '';
+        } else if (char === '\n') {
+          row.push(field.replace(/\r$/, ''));
+          rows.push(row);
+          row = [];
+          field = '';
+        } else {
+          field += char;
+        }
+      }
+      if (quoted) throw new Error('Незакрытая кавычка в CSV');
+      if (field || row.length) {
+        row.push(field);
+        rows.push(row);
+      }
+      return rows;
+    }
+
+    function parseProfileImport(text, byteLength) {
+      if (byteLength > MAX_PROFILE_IMPORT_BYTES) {
+        throw new Error('Файл слишком большой (максимум 5 МБ)');
+      }
+      const firstDataLine = text.split(/\r?\n/).find((line) => {
+        const value = line.trim();
+        return value && !value.startsWith('#');
+      }) || '';
+      const rows = parseDelimitedRecords(
+        text,
+        detectDelimitedSeparator(firstDataLine),
+      );
+      const profiles = [];
+      for (const fields of rows) {
+        const phone = String(fields[0] || '').trim();
+        const label = String(fields[1] || '').trim();
+        if (!phone || phone.startsWith('#') || phone.toLowerCase() === 'phone') continue;
+        if (profiles.length >= MAX_PROFILE_IMPORT_ROWS) {
+          throw new Error('Максимум 2000 профилей за раз');
+        }
+        profiles.push({ phone, label });
+      }
+      return profiles;
+    }
+
     document.getElementById('csvFile').addEventListener('change', async (e) => {
       const f = e.target.files[0];
       e.target.value = '';
@@ -1759,15 +2519,12 @@ let openGroupId = null;
         return;
       }
       const text = await f.text();
-      const profiles = [];
-      for (const raw of text.split(/\r?\n/)) {
-        const line = raw.trim();
-        if (!line || line.startsWith('#') || line.toLowerCase().startsWith('phone')) continue;
-        const parts = line.split(/[,;\t]/);
-        const phone = (parts[0] || '').trim();
-        const label = (parts[1] || '').trim();
-        if (!phone) continue;
-        profiles.push({ phone, label });
+      let profiles;
+      try {
+        profiles = parseProfileImport(text, f.size);
+      } catch (err) {
+        toast(err.message, 'error');
+        return;
       }
       if (!profiles.length) {
         toast('В файле нет номеров', 'error');
@@ -1791,6 +2548,7 @@ let openGroupId = null;
       try { await initServerMode(); } catch (_) {}
       markUiReady();
       applyTabFromHash();
+      await reconcilePendingCampaignCommand();
       try { await initVaultUI(); } catch (e) { toast(e.message, 'error'); }
       if (!isUserRole()) {
         loadMessages();

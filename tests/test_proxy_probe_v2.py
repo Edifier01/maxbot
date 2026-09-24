@@ -67,6 +67,51 @@ def test_fragmented_http_connect_is_read_to_terminator(monkeypatch) -> None:
     assert b"CONNECT fixture.max.invalid:443" in sock.sent[0]
 
 
+def test_tls_success_stops_before_max_handshake_and_otp(monkeypatch) -> None:
+    from app.services.proxy_probe import TargetConfig, TrustConfig, parse_proxy_url, probe_route
+
+    class Socket:
+        def __init__(self) -> None:
+            self.parts = [b"HTTP/1.1 200 Connection established\r\n\r\n"]
+
+        def settimeout(self, _value):
+            pass
+
+        def sendall(self, _data: bytes) -> None:
+            pass
+
+        def recv(self, _size: int) -> bytes:
+            return self.parts.pop(0) if self.parts else b""
+
+        def close(self) -> None:
+            pass
+
+    sock = Socket()
+
+    class Context:
+        def wrap_socket(self, value, *, server_hostname):
+            assert value is sock
+            assert server_hostname == "proxy.example"
+            return value
+
+    monkeypatch.setattr("socket.create_connection", lambda *_args, **_kwargs: sock)
+    monkeypatch.setattr("ssl.create_default_context", lambda: Context())
+
+    result = probe_route(
+        parse_proxy_url("https://proxy.example:8443"),
+        TargetConfig(host="fixture.max.invalid", port=443),
+        TrustConfig(tls_verify=True),
+        deadline=1.0,
+    )
+
+    assert result.ok is True
+    assert result.stages["proxy_tcp"] == "PASS"
+    assert result.stages["tls"] == "PASS"
+    assert result.stages["proxy_connect"] == "PASS"
+    assert result.max_handshake == "NOT_CHECKED"
+    assert result.otp_calls == 0
+
+
 def test_proxy_probe_reports_407_eof_and_oversized_headers(monkeypatch) -> None:
     from app.services.proxy_probe import TargetConfig, TrustConfig, parse_proxy_url, probe_route
 

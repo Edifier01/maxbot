@@ -58,6 +58,8 @@ def test_identical_start_command_is_idempotent() -> None:
         repeated = coordinator.begin_start("req-start", _ready())
         assert isinstance(pending, CommandResult)
         assert repeated == pending
+        assert pending.replayed is False
+        assert repeated.replayed is True
         assert pending.state == "preflight"
         assert connection.execute(
             "SELECT COUNT(*) FROM campaign_command_receipts"
@@ -111,6 +113,157 @@ def test_subscription_or_ban_blocks_start_without_external_action() -> None:
         assert result.accepted is False
         assert result.state == "blocked"
         assert coordinator.can_claim(result.generation) is False
+    finally:
+        connection.close()
+
+
+def test_manual_test_blocks_start_and_stop_fences_completion() -> None:
+    connection, coordinator = _coordinator()
+    try:
+        testing = coordinator.begin_test("req-test")
+        blocked_start = coordinator.begin_start("req-start", _ready())
+        assert testing.accepted is True
+        assert testing.state == "testing"
+        assert blocked_start.accepted is False
+        assert blocked_start.state == "test_in_progress"
+
+        stopping = coordinator.stop("req-stop")
+        fenced = coordinator.complete_test("req-test")
+        assert stopping.state == "stopping"
+        assert fenced.accepted is False
+        assert fenced.state == "fenced_by_stop"
+
+        assert coordinator.complete_stop("req-stop").state == "stopped"
+        retry = coordinator.begin_test("req-test-retry")
+        assert retry.accepted is True
+    finally:
+        connection.close()
+
+
+def test_command_status_reads_receipt_within_current_tenant_scope(monkeypatch) -> None:
+    from app import routes_campaign
+
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    tenant_one = CampaignCommandCoordinator(connection, scope="tenant:1")
+    tenant_two = CampaignCommandCoordinator(connection, scope="tenant:2")
+    receipt = tenant_one.begin_test("test-request-1")
+    assert receipt.state == "testing"
+    connection.execute("DELETE FROM campaign_control")
+    connection.commit()
+
+    current_scope = "tenant:2"
+    monkeypatch.setattr(routes_campaign, "_campaign_scope", lambda: current_scope)
+    monkeypatch.setattr(routes_campaign.m, "_conn", lambda: connection)
+    monkeypatch.setattr(
+        routes_campaign,
+        "_coordinator",
+        lambda: CampaignCommandCoordinator(connection, scope=current_scope),
+    )
+
+    try:
+        hidden = asyncio.run(
+            routes_campaign.campaign_command_status(
+                command="test", request_id="test-request-1"
+            )
+        )
+        assert hidden == {"known": False, "state": "not_found"}
+        assert connection.execute(
+            "SELECT COUNT(*) FROM campaign_control"
+        ).fetchone()[0] == 0
+
+        current_scope = "tenant:1"
+        visible = asyncio.run(
+            routes_campaign.campaign_command_status(
+                command="test", request_id="test-request-1"
+            )
+        )
+        assert visible == {
+            "known": True,
+            "command": "test",
+            "state": "testing",
+            "accepted": True,
+            "generation": 0,
+        }
+        assert connection.execute(
+            "SELECT COUNT(*) FROM campaign_control"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_command_status_is_not_found_for_tenant_without_receipt_table(monkeypatch) -> None:
+    from app import routes_campaign
+
+    connection = sqlite3.connect(":memory:")
+    monkeypatch.setattr(routes_campaign.m, "_conn", lambda: connection)
+    monkeypatch.setattr(routes_campaign, "_campaign_scope", lambda: "tenant:9")
+    try:
+        status = asyncio.run(
+            routes_campaign.campaign_command_status(
+                command="start", request_id="campaign-start-not-created"
+            )
+        )
+        assert status == {"known": False, "state": "not_found"}
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_pause_status_uses_the_persisted_stop_receipt(monkeypatch) -> None:
+    from app import routes_campaign
+
+    connection, coordinator = _coordinator()
+    stopped = coordinator.stop("pause-request-1")
+    monkeypatch.setattr(routes_campaign, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(routes_campaign.m, "_conn", lambda: connection)
+    monkeypatch.setattr(routes_campaign, "_campaign_scope", lambda: "tenant:1")
+    try:
+        status = asyncio.run(
+            routes_campaign.campaign_command_status(
+                command="pause", request_id="pause-request-1"
+            )
+        )
+        assert stopped.state == "stopping"
+        assert status == {
+            "known": True,
+            "command": "pause",
+            "state": "stopping",
+            "accepted": True,
+            "generation": stopped.generation,
+        }
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("stop_first", [False, True])
+def test_lost_test_response_does_not_claim_failed_result_is_final(
+    monkeypatch, stop_first
+) -> None:
+    from app import routes_campaign
+
+    connection, coordinator = _coordinator()
+    coordinator.begin_test("test-failed-request")
+    if stop_first:
+        coordinator.stop("stop-during-test")
+        coordinator.complete_test("test-failed-request")
+    else:
+        coordinator.fail_test("test-failed-request")
+    monkeypatch.setattr(routes_campaign, "_coordinator", lambda: coordinator)
+    monkeypatch.setattr(routes_campaign.m, "_conn", lambda: connection)
+    monkeypatch.setattr(routes_campaign, "_campaign_scope", lambda: "tenant:1")
+    try:
+        status = asyncio.run(
+            routes_campaign.campaign_command_status(
+                command="test", request_id="test-failed-request"
+            )
+        )
+        assert status["known"] is True
+        assert status["command"] == "test"
+        assert status["state"] == "unknown"
+        assert status["accepted"] is False
     finally:
         connection.close()
 
@@ -175,3 +328,16 @@ def test_campaign_start_is_fenced_when_stop_wins_during_preflight(
     assert exc_info.value.status_code == 409
     assert start_worker.await_count == 0
     assert m.get_setting("auto_run") in ("", "0")
+    with m._conn() as connection:
+        control = connection.execute(
+            "SELECT generation, auto_run, stop_requested, state "
+            "FROM campaign_control WHERE scope='local'"
+        ).fetchone()
+    assert tuple(control[1:]) == (0, 1, "stopping")
+    from app.routes_campaign import campaign_stop
+
+    monkeypatch.setattr(m, "_stop_worker", AsyncMock())
+    completed = asyncio.run(campaign_stop(request_id="stop-during-preflight"))
+    repeated = asyncio.run(campaign_stop(request_id="stop-during-preflight"))
+    assert completed == repeated
+    assert completed["state"] == "stopped"

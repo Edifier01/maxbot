@@ -42,6 +42,16 @@ def recovery_hold_file() -> Path | None:
     return None
 
 
+def auth_epoch_file() -> Path | None:
+    """Return the server-only JWT invalidation record path."""
+    raw = os.environ.get("MAX_AUTH_EPOCH_FILE", "").strip()
+    if raw:
+        return Path(raw)
+    if is_server_mode():
+        return Path("/app/control/auth-epoch.json")
+    return None
+
+
 def webhook_url_allowed(value: str) -> bool:
     """Allow explicit HTTPS webhook hosts only; unset allowlist disables webhooks."""
     try:

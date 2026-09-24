@@ -177,3 +177,40 @@ def test_send_clears_stale_connecting_step(tmp_path, monkeypatch):
 
     asyncio.run(_run())
     assert m._auth_sessions[m._auth_session_key(pid)]["step"] == "idle"
+
+
+def test_runtime_client_manager_serializes_real_with_client_calls(tmp_path, monkeypatch):
+    m = _setup_db(tmp_path, monkeypatch)
+    _install_fake_runtime(m, monkeypatch)
+    monkeypatch.setattr(m, "_session_db_has_token", lambda _id: True)
+    monkeypatch.setattr(m, "_decrypt_session", lambda _id: None)
+    monkeypatch.setattr(m, "_encrypt_session", lambda _id: None)
+    monkeypatch.setattr(m, "_safe_stop", AsyncMock())
+
+    async def _run():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def _first(_client):
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            return "first"
+
+        async def _second(_client):
+            nonlocal calls
+            calls += 1
+            return "second"
+
+        first = asyncio.create_task(m._with_client(1, "+79991112233", _first))
+        await entered.wait()
+        second = asyncio.create_task(m._with_client(1, "+79991112233", _second))
+        await asyncio.sleep(0)
+        assert calls == 1
+        release.set()
+        assert await first == "first"
+        assert await second == "second"
+
+    asyncio.run(_run())

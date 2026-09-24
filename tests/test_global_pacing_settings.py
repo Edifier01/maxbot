@@ -131,6 +131,285 @@ def test_admin_put_settings_changes_tenant_get_setting(tmp_path, monkeypatch):
         assert m.get_setting("delay_min_sec") == "9"
 
 
+def test_global_policy_revision_reports_partial_tenant_failure(tmp_path, monkeypatch):
+    m = _setup_server_main(tmp_path, monkeypatch)
+    _init_global(m)
+    _init_tenant(m, 11)
+    _init_tenant(m, 12)
+
+    import app.settings_scope as settings_scope
+
+    original_apply = settings_scope._apply_pacing_revision_to_connection
+
+    def fail_tenant_12(conn, **kwargs):
+        from app.tenant import get_tenant_id
+
+        if get_tenant_id() == 12:
+            raise RuntimeError("controlled tenant failure")
+        return original_apply(conn, **kwargs)
+
+    monkeypatch.setattr(
+        settings_scope,
+        "_apply_pacing_revision_to_connection",
+        fail_tenant_12,
+    )
+
+    from app.routes_models import SettingsIn
+    from app.routes_settings import update_settings
+
+    set_context(user_id=1, role="admin", use_global_data=True)
+    try:
+        result = asyncio.run(update_settings(SettingsIn(jitter_percent=33)))
+    finally:
+        clear_context()
+
+    revision = result["policy_revision"]
+    assert revision["partial"] is True
+    assert revision["applied_tenants"] == [11]
+    assert revision["failed_tenants"] == [
+        {"tenant_id": 12, "safe_error": "tenant_apply_failed"}
+    ]
+    desired = int(revision["desired_revision"])
+    assert revision["applied_revision"] == {
+        "global": desired,
+        "tenant:11": desired,
+    }
+
+    with tenant_scope(tenant_id=11, role="user"):
+        assert m.get_setting("jitter_percent") == "33"
+        state = m._conn().execute(
+            "SELECT desired_revision, applied_revision FROM policy_scope_state "
+            "WHERE scope_key='tenant:11'"
+        ).fetchone()
+        assert dict(state) == {
+            "desired_revision": desired,
+            "applied_revision": desired,
+        }
+    with tenant_scope(tenant_id=12, role="user"):
+        assert m.get_setting("jitter_percent") == m.DEFAULTS["jitter_percent"]
+
+    with tenant_scope(use_global_data=True, role="admin"):
+        state = m._conn().execute(
+            "SELECT desired_revision, applied_revision FROM policy_scope_state "
+            "WHERE scope_key='global'"
+        ).fetchone()
+        assert dict(state) == {
+            "desired_revision": desired,
+            "applied_revision": desired,
+        }
+        outcomes = m._conn().execute(
+            "SELECT tenant_id, status, safe_error FROM policy_apply_results "
+            "WHERE version_id=? ORDER BY tenant_id",
+            (desired,),
+        ).fetchall()
+        assert [dict(row) for row in outcomes] == [
+            {"tenant_id": 11, "status": "applied", "safe_error": ""},
+            {"tenant_id": 12, "status": "failed", "safe_error": "tenant_apply_failed"},
+        ]
+
+
+def test_partial_policy_retry_and_stop_start_preserve_v1_plans_and_revocation(
+    tmp_path, monkeypatch, caplog
+):
+    m = _setup_server_main(tmp_path, monkeypatch)
+    _init_global(m)
+    _init_tenant(m, 11)
+    _init_tenant(m, 12)
+
+    from app.repositories.daily_plans import DailyPlanRepository
+    from app.routes_campaign import CampaignCommandCoordinator, build_readiness
+    from app.routes_models import SettingsIn
+    from app.routes_settings import update_settings
+    from app.services.daily_plans import DailyPlanService, LibraryItem
+
+    set_context(user_id=1, role="admin", use_global_data=True)
+    try:
+        v1_result = asyncio.run(
+            update_settings(SettingsIn(daily_limit_min=2, daily_limit_max=2))
+        )
+    finally:
+        clear_context()
+    v1_revision = int(v1_result["policy_revision"]["desired_revision"])
+
+    plan_date = "2026-09-23"
+    v1_items = (
+        LibraryItem("v1-item-1", "fixture text one", "library-v1"),
+        LibraryItem("v1-item-2", "fixture text two", "library-v1"),
+    )
+    plan_snapshots = {}
+    for tenant_id in (11, 12):
+        with tenant_scope(tenant_id=tenant_id, role="admin"):
+            service = DailyPlanService(DailyPlanRepository(m._conn()))
+            plan = service.materialize_day(
+                f"tenant:{tenant_id}",
+                7,
+                plan_date,
+                sampled_limit=2,
+                role="active",
+                quiet_limit=2,
+                work_group_id=3,
+                library_items=v1_items,
+                mode="round_robin",
+            )
+            assert plan.target == 2
+            assert plan.version_id == "library-v1"
+            plan_snapshots[tenant_id] = plan
+
+    import app.settings_scope as settings_scope
+
+    original_apply = settings_scope._apply_pacing_revision_to_connection
+    fail_tenant_12 = [True]
+
+    def fail_tenant_12_once(conn, **kwargs):
+        if kwargs["scope_key"] == "tenant:12" and fail_tenant_12[0]:
+            fail_tenant_12[0] = False
+            raise RuntimeError("api_token=fixture-private-value")
+        return original_apply(conn, **kwargs)
+
+    monkeypatch.setattr(
+        settings_scope,
+        "_apply_pacing_revision_to_connection",
+        fail_tenant_12_once,
+    )
+
+    set_context(user_id=1, role="admin", use_global_data=True)
+    try:
+        v2_result = asyncio.run(
+            update_settings(
+                SettingsIn(
+                    delay_min_sec=60,
+                    delay_max_sec=120,
+                    daily_limit_min=9,
+                    daily_limit_max=9,
+                )
+            )
+        )
+    finally:
+        clear_context()
+
+    partial = v2_result["policy_revision"]
+    v2_revision = int(partial["desired_revision"])
+    assert v2_revision > v1_revision
+    assert partial["partial"] is True
+    assert partial["applied_tenants"] == [11]
+    assert partial["failed_tenants"] == [
+        {"tenant_id": 12, "safe_error": "tenant_apply_failed"}
+    ]
+    with tenant_scope(use_global_data=True, role="admin"):
+        global_state = m._conn().execute(
+            "SELECT desired_revision, applied_revision FROM policy_scope_state "
+            "WHERE scope_key='global'"
+        ).fetchone()
+        assert tuple(global_state) == (v2_revision, v2_revision)
+    with tenant_scope(tenant_id=11, role="admin"):
+        tenant_11_state = m._conn().execute(
+            "SELECT desired_revision, applied_revision FROM policy_scope_state "
+            "WHERE scope_key='tenant:11'"
+        ).fetchone()
+        assert tuple(tenant_11_state) == (v2_revision, v2_revision)
+        assert m.get_setting("daily_limit_max") == "9"
+    with tenant_scope(tenant_id=12, role="admin"):
+        tenant_12_state = m._conn().execute(
+            "SELECT desired_revision, applied_revision FROM policy_scope_state "
+            "WHERE scope_key='tenant:12'"
+        ).fetchone()
+        assert tuple(tenant_12_state) == (v1_revision, v1_revision)
+        assert m.get_setting("daily_limit_max") == "2"
+
+    from app.settings_scope import propagate_global_pacing_settings
+
+    retried = propagate_global_pacing_settings(
+        {
+            "delay_min_sec": 60,
+            "delay_max_sec": 120,
+            "daily_limit_min": 9,
+            "daily_limit_max": 9,
+            "max_msgs_per_profile_day": 9,
+        },
+        desired_revision=v2_revision,
+        actor=1,
+    )
+    retry_report = retried.as_dict()
+    assert retry_report["desired_revision"] == v2_revision
+    assert retry_report["partial"] is False
+    assert retry_report["applied_tenants"] == [11, 12]
+    assert retry_report["applied_revision"] == {
+        "global": v2_revision,
+        "tenant:11": v2_revision,
+        "tenant:12": v2_revision,
+    }
+    assert "fixture-private-value" not in caplog.text
+
+    for tenant_id in (11, 12):
+        with tenant_scope(tenant_id=tenant_id, role="admin"):
+            connection = m._conn()
+            repository = DailyPlanRepository(connection)
+            cancelled = repository.cancel_queued_for_profile(
+                f"tenant:{tenant_id}", 7, "CONSENT_REVOKED"
+            )
+            assert cancelled == 2
+            assert repository.count_slots(f"tenant:{tenant_id}", "queued") == 0
+            assert repository.count_slots(f"tenant:{tenant_id}", "cancelled") == 2
+
+            with connection:
+                coordinator = CampaignCommandCoordinator(
+                    connection, scope=f"tenant:{tenant_id}"
+                )
+                readiness = build_readiness(
+                    version="policy-v2",
+                    scope=f"tenant:{tenant_id}",
+                    checks={"local_fixture_ready": True},
+                )
+                first = coordinator.begin_start(
+                    f"rc10-start-before-stop-{tenant_id}", readiness
+                )
+                assert coordinator.complete_start(
+                    f"rc10-start-before-stop-{tenant_id}"
+                ).state == "running"
+                stop = coordinator.stop(f"rc10-stop-{tenant_id}")
+                assert stop.state == "stopping"
+                assert coordinator.complete_stop(
+                    f"rc10-stop-{tenant_id}"
+                ).state == "stopped"
+                second = coordinator.begin_start(
+                    f"rc10-start-after-stop-{tenant_id}", readiness
+                )
+                assert second.generation > first.generation
+                assert coordinator.complete_start(
+                    f"rc10-start-after-stop-{tenant_id}"
+                ).state == "running"
+
+            service = DailyPlanService(DailyPlanRepository(connection))
+            current = service.materialize_day(
+                f"tenant:{tenant_id}",
+                7,
+                plan_date,
+                sampled_limit=9,
+                role="active",
+                quiet_limit=9,
+                work_group_id=3,
+                library_items=(
+                    LibraryItem("v2-item", "new text", "library-v2"),
+                ),
+                mode="round_robin",
+            )
+            assert current.plan_id == plan_snapshots[tenant_id].plan_id
+            assert current.target == 2
+            assert current.sampled_limit == 2
+            assert current.version_id == "library-v1"
+            assert repository.count_slots(f"tenant:{tenant_id}", "queued") == 0
+            assert repository.count_slots(f"tenant:{tenant_id}", "cancelled") == 2
+
+            state = connection.execute(
+                "SELECT desired_revision, applied_revision FROM policy_scope_state "
+                "WHERE scope_key=?",
+                (f"tenant:{tenant_id}",),
+            ).fetchone()
+            assert tuple(state) == (v2_revision, v2_revision)
+            assert m.get_setting("daily_limit_max") == "9"
+            assert m.get_setting("delay_min_sec") == "60"
+
+
 def test_global_scope_reuses_one_sqlite_connection(tmp_path, monkeypatch):
     m = _setup_server_main(tmp_path, monkeypatch)
     _init_global(m)

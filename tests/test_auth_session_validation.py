@@ -59,3 +59,41 @@ def test_rejects_missing_tenant(auth_mw):
             assert "Учреждение" in resp.body.decode()
 
     asyncio.run(run())
+
+
+def test_rejects_revoked_jwt_on_api_read_after_positive_cache_hit(auth_mw):
+    payload = {
+        "sub": "1",
+        "role": "user",
+        "tenant_id": 1,
+        "jti": "cross-worker-revoke",
+        "tv": 0,
+    }
+    user = {"id": 1, "role": "user", "tenant_id": 1}
+    tenant = {"id": 1, "token_version": 0}
+    revoked = False
+
+    async def run():
+        nonlocal revoked
+        call_next = AsyncMock(return_value={"summary": "protected fixture data"})
+        with (
+            patch("app.middleware.decode_token", return_value=payload),
+            patch("app.auth_epoch.current_epoch", return_value=0.0),
+            patch("app.middleware.db_pg.is_token_revoked", side_effect=lambda _jti: revoked),
+            patch("app.middleware.db_pg.get_user_by_id", return_value=user),
+            patch("app.middleware.db_pg.get_tenant", return_value=tenant),
+        ):
+            first = await auth_mw.dispatch(_authed_request(), call_next)
+            assert first == {"summary": "protected fixture data"}
+            revoked = True  # Another worker commits the shared revocation row.
+            second = await auth_mw.dispatch(_authed_request(), call_next)
+
+        assert getattr(second, "status_code", None) == 401
+        assert call_next.await_count == 1
+
+    try:
+        asyncio.run(run())
+    finally:
+        from app import auth
+
+        auth.clear_session_cache()

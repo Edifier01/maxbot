@@ -56,6 +56,33 @@ def test_messages_upload(tmp_path, monkeypatch):
     assert r.json()["count"] == 2
 
 
+def test_messages_upload_rejects_over_limit_before_publishing(monkeypatch):
+    import main as m
+    from fastapi import HTTPException, UploadFile
+
+    from app.campaign_runtime import REGISTRY
+    from app.routes_messages import upload_messages
+
+    monkeypatch.setattr(m, "MAX_UPLOAD_BYTES", 8)
+    monkeypatch.setattr(REGISTRY, "any_worker_busy", lambda: False)
+    monkeypatch.setattr(
+        m,
+        "save_messages_file",
+        lambda _content: pytest.fail("oversized message file must not be published"),
+    )
+
+    class InMemoryFile(BytesIO):
+        _rolled = False
+
+    upload = UploadFile(filename="oversized.txt", file=InMemoryFile(b"123456789"))
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(upload_messages(upload))
+
+    assert caught.value.status_code == 413
+    assert upload.file.tell() == 9
+
+
 def test_messages_upload_rejects_active_worker_before_write(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_TEST", "1")
     monkeypatch.setenv("MAX_SERVER_MODE", "0")
@@ -230,4 +257,3 @@ def test_backup_database_uses_tenant_backups_dir(tmp_path, monkeypatch):
     assert dest.is_file()
     global_backups = tmp_path / "data" / "backups"
     assert not list(global_backups.glob("app-*.db")) if global_backups.exists() else True
-

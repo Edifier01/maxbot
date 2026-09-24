@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -17,10 +18,14 @@ from app.tenant import get_tenant_id, tenant_scope
 @pytest.fixture
 def m(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("MAX_SERVER_MODE", "0")
     monkeypatch.setenv("MAX_DATA", str(tmp_path / "data"))
     import app.sqlite_backend as sqlite_backend
+    import app.config as config
     import main as main_mod
 
+    importlib.reload(config)
+    importlib.reload(main_mod)
     sqlite_backend.reset_connections()
     main_mod._refresh_data_paths()
     main_mod.init_db()
@@ -91,6 +96,30 @@ def test_campaign_start_sets_auto_run(m, monkeypatch):
     assert m.get_setting("auto_run") == "1"
 
 
+def test_campaign_start_and_worker_share_persisted_generation_fence(m, monkeypatch):
+    monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["hello"])
+    monkeypatch.setattr(m, "_active_groups", lambda: [{"id": 1}])
+    monkeypatch.setattr(m, "_has_active_profiles", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+    monkeypatch.setattr(m, "_preflight_group_proxies", AsyncMock())
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+
+    from app.routes_campaign import CampaignCommandCoordinator, campaign_start
+
+    response = asyncio.run(campaign_start(request_id="shared-generation"))
+    generation = start_mock.await_args.kwargs["control_generation"]
+    assert response["state"] == "running"
+    assert generation == response["generation"]
+
+    from app.campaign_worker import _campaign_control_allows_claim
+
+    assert _campaign_control_allows_claim(generation) is True
+    CampaignCommandCoordinator(m._conn(), scope="local").stop("legacy-stop")
+    assert _campaign_control_allows_claim(generation) is False
+
+
 def test_auto_resume_logs_only_after_worker_starts(m, monkeypatch):
     m.set_setting("auto_run", "1")
     start_mock = AsyncMock(return_value=True)
@@ -105,6 +134,528 @@ def test_auto_resume_logs_only_after_worker_starts(m, monkeypatch):
     assert asyncio.run(m._try_auto_resume()) is True
     start_mock.assert_awaited_once_with(record_campaign=True)
     log_mock.assert_called_once_with("Автовозобновление: рассылка запущена")
+
+
+def test_auto_resume_accepts_current_immutable_library_without_legacy_pool(m, monkeypatch):
+    from app.repositories.message_sets import MessageSetRepository
+
+    MessageSetRepository(m._conn()).publish("local", ("current-library-text",))
+    m.set_setting("auto_run", "1")
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    monkeypatch.setattr(m, "_prepare_auto_resume_pool", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+
+    assert m.load_message_pool() == []
+    assert m._has_current_message_library() is True
+    assert asyncio.run(m._try_auto_resume()) is True
+    start_mock.assert_awaited_once_with(record_campaign=True)
+
+
+def test_legacy_message_pool_random_norepeat_exhausts_one_tenant_deck(
+    m, monkeypatch
+):
+    from app.campaign_runtime import RUNTIME
+    from app.campaign_worker import _claim_next_job_sync
+
+    today = m._local_today().isoformat()
+    m.set_setting("campaign_goal", "message_pool")
+    m.set_setting("message_pick_mode", "random_norepeat")
+    m.set_setting("role_plan_enabled", "0")
+    monkeypatch.setattr(m, "load_message_pool", lambda: ["one", "two", "three"])
+    with m._conn() as connection:
+        connection.execute(
+            "UPDATE queue_state SET running=1, profile_idx=0, message_idx=0, "
+            "group_idx=0, message_bag='[]' WHERE id=1"
+        )
+        for group_id, profile_id in ((3, 7), (4, 8)):
+            connection.execute(
+                "INSERT INTO groups (id, name, is_active) VALUES (?, ?, 1)",
+                (group_id, f"group-{group_id}"),
+            )
+            connection.execute(
+                "INSERT INTO profiles "
+                "(id, phone, status, daily_limit, daily_limit_day, sent_day) "
+                "VALUES (?, ?, 'active', 10, ?, ?)",
+                (profile_id, f"+7999000{profile_id:04d}", today, today),
+            )
+            connection.execute(
+                "INSERT INTO group_profiles "
+                "(group_id, profile_id, is_enabled) VALUES (?, ?, 1)",
+                (group_id, profile_id),
+            )
+
+    texts: list[str] = []
+    for _ in range(3):
+        job = _claim_next_job_sync()
+        assert isinstance(job, dict)
+        texts.append(str(job["text"]))
+        RUNTIME.groups_in_flight.clear()
+        RUNTIME.jobs_in_flight = 0
+        RUNTIME.profile_reserved.clear()
+
+    assert sorted(texts) == ["one", "three", "two"]
+    RUNTIME.pool_done_announced = False
+    assert _claim_next_job_sync() == "DONE"
+
+
+def test_campaign_preview_is_read_only_and_returns_revision(m):
+    from app.repositories.daily_plans import DailyPlanRepository
+    from app.repositories.message_sets import MessageSetRepository
+    from app.routes_campaign import campaign_preview
+
+    with m._conn() as c:
+        c.execute(
+            "INSERT INTO profiles (id, phone, status) "
+            "VALUES (7, '+79990007777', 'active')"
+        )
+        c.execute(
+            "INSERT INTO groups (id, name, max_chat_id, is_active) "
+            "VALUES (3, 'fixture', '77', 1)"
+        )
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (3, 7, 1)"
+        )
+        DailyPlanRepository(c)
+        MessageSetRepository(c).publish("local", ("preview-text",))
+        before_link = dict(
+            c.execute(
+                "SELECT * FROM group_profiles WHERE group_id=3 AND profile_id=7"
+            ).fetchone()
+        )
+
+    response = asyncio.run(campaign_preview())
+    repeat_response = asyncio.run(campaign_preview())
+
+    assert response["ok"] is True
+    assert response["selection"]["groups"] == [3]
+    assert response["selection"]["profiles"] == [7]
+    assert len(response["readiness_revision"]) == 64
+    assert repeat_response["readiness_revision"] == response["readiness_revision"]
+    with m._conn() as c:
+        after_link = dict(
+            c.execute(
+                "SELECT * FROM group_profiles WHERE group_id=3 AND profile_id=7"
+            ).fetchone()
+        )
+        assert c.execute("SELECT COUNT(*) FROM profile_daily_plans").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM daily_cycles").fetchone()[0] == 0
+    assert after_link == before_link
+
+
+def test_campaign_preview_reports_window_shortfall_without_mutation(m, monkeypatch):
+    from app.campaign_worker import materialize_daily_plans
+    from app.repositories.message_sets import MessageSetRepository
+    from app.routes_campaign import campaign_preview
+
+    today = m._local_today()
+    clock = [datetime.combine(today, datetime.min.time())]
+    monkeypatch.setattr(
+        m, "_local_now", lambda: clock[0]
+    )
+    for key, value in (
+        ("daily_limit_min", "3"),
+        ("daily_limit_max", "3"),
+        ("warmup_enabled", "0"),
+        ("human_rhythm_enabled", "1"),
+        ("delay_min_sec", "60"),
+        ("delay_max_sec", "60"),
+        ("send_windows_weekday", "00:00-00:01"),
+        ("send_windows_weekend", "00:00-00:01"),
+    ):
+        m.set_setting(key, value)
+    with m._conn() as c:
+        c.execute(
+            "INSERT INTO profiles (id, phone, status) "
+            "VALUES (7, '+79990007777', 'active')"
+        )
+        c.execute(
+            "INSERT INTO groups (id, name, max_chat_id, is_active) "
+            "VALUES (3, 'fixture', '77', 1)"
+        )
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (3, 7, 1)"
+        )
+        MessageSetRepository(c).publish("local", ("shortfall-text",))
+
+    assert materialize_daily_plans() == 1
+    response = asyncio.run(campaign_preview())
+
+    assert response["warnings"] == ["daily_plan_window_shortfall"]
+    assert response["selection"]["feasibility"] == {
+        "state": "shortfall",
+        "planned_slots": 3,
+        "minimum_capacity": 1,
+        "minimum_delay_sec": 60.0,
+        "shortfall": 2,
+    }
+    with m._conn() as c:
+        assert c.execute("SELECT COUNT(*) FROM profile_daily_plans").fetchone()[0] == 1
+
+    clock[0] = datetime.combine(today, datetime.min.time()) + timedelta(minutes=1)
+    advanced = asyncio.run(campaign_preview())
+    assert advanced["warnings"] == ["daily_plan_window_shortfall"]
+    assert advanced["selection"]["feasibility"]["minimum_capacity"] == 0
+    assert advanced["selection"]["feasibility"]["shortfall"] == 3
+
+
+def test_campaign_start_rejects_stale_readiness_revision(m, monkeypatch):
+    from app.repositories.message_sets import MessageSetRepository
+    from app.routes_campaign import (
+        CampaignStartIn,
+        _readiness_revision,
+        campaign_start,
+    )
+
+    with m._conn() as c:
+        c.execute(
+            "INSERT INTO profiles (id, phone, status) "
+            "VALUES (7, '+79990007777', 'active')"
+        )
+        c.execute(
+            "INSERT INTO groups (id, name, max_chat_id, is_active) "
+            "VALUES (3, 'fixture', '77', 1)"
+        )
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (3, 7, 1)"
+        )
+        MessageSetRepository(c).publish("local", ("start-text",))
+
+    old_revision = _readiness_revision()
+    with m._conn() as c:
+        c.execute("UPDATE groups SET is_active=0 WHERE id=3")
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(
+            campaign_start(
+                body=CampaignStartIn(readiness_revision=old_revision),
+                request_id="stale-preview",
+            )
+        )
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "PREVIEW_STALE"
+    start_mock.assert_not_awaited()
+
+
+def test_campaign_preview_and_start_block_ambiguous_legacy_budget(m, monkeypatch):
+    from app.repositories.message_sets import MessageSetRepository
+    from app.routes_campaign import campaign_preview, campaign_start
+
+    today = m._local_today().isoformat()
+    with m._conn() as c:
+        c.execute(
+            "INSERT INTO profiles "
+            "(id, phone, status, daily_limit, daily_limit_day, sent_day, messages_sent_today) "
+            "VALUES (7, '+79990007777', 'active', 5, ?, ?, 2)",
+            (today, today),
+        )
+        c.execute(
+            "INSERT INTO groups (id, name, max_chat_id, is_active) "
+            "VALUES (3, 'fixture', '77', 1)"
+        )
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (3, 7, 1)"
+        )
+        MessageSetRepository(c).publish("local", ("start-text",))
+        c.execute(
+            "INSERT INTO send_log(profile_id, group_id, status, sent_at) "
+            "VALUES (7, 3, 'sent', ?)",
+            (f"{today} 08:00:00",),
+        )
+
+    preview = asyncio.run(campaign_preview())
+    assert preview["ok"] is False
+    assert "migration_review_required" in preview["blockers"]
+    assert preview["selection"]["migration"] == {
+        "state": "review_required",
+        "profiles": [7],
+    }
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(campaign_start(request_id="ambiguous-legacy"))
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "MIGRATION_REVIEW_REQUIRED"
+    start_mock.assert_not_awaited()
+
+
+def test_campaign_start_accepts_unchanged_readiness_revision(m, monkeypatch):
+    from app.repositories.message_sets import MessageSetRepository
+    from app.routes_campaign import CampaignStartIn, _readiness_revision, campaign_start
+
+    with m._conn() as c:
+        c.execute(
+            "INSERT INTO profiles (id, phone, status) "
+            "VALUES (7, '+79990007777', 'active')"
+        )
+        c.execute(
+            "INSERT INTO groups (id, name, max_chat_id, is_active) "
+            "VALUES (3, 'fixture', '77', 1)"
+        )
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (3, 7, 1)"
+        )
+        MessageSetRepository(c).publish("local", ("start-text",))
+
+    monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
+    monkeypatch.setattr(m, "_preflight_group_proxies", AsyncMock())
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+    revision = _readiness_revision()
+
+    response = asyncio.run(
+        campaign_start(
+            body=CampaignStartIn(readiness_revision=revision),
+            request_id="fresh-preview",
+        )
+    )
+
+    assert response["ok"] is True
+    assert response["state"] == "running"
+    start_mock.assert_awaited_once()
+    assert start_mock.await_args.kwargs["preflight"] is False
+
+
+def test_repeated_start_creates_one_plan_per_profile_not_a_pool_broadcast(m, monkeypatch):
+    from app.repositories.message_sets import MessageSetRepository
+    from app.routes_campaign import campaign_start
+
+    today = m._local_today().isoformat()
+    with m._conn() as c:
+        for profile_id, limit, group_id in ((7, 5, 3), (8, 7, 4)):
+            c.execute(
+                "INSERT INTO profiles "
+                "(id, phone, status, daily_limit, daily_limit_day, sent_day) "
+                "VALUES (?, ?, 'active', ?, ?, ?)",
+                (profile_id, f"+7999000{profile_id:04d}", limit, today, today),
+            )
+            c.execute(
+                "INSERT INTO groups (id, name, max_chat_id, is_active) "
+                "VALUES (?, ?, ?, 1)",
+                (group_id, f"fixture-{group_id}", str(group_id)),
+            )
+            c.execute(
+                "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+                "VALUES (?, ?, 1)",
+                (group_id, profile_id),
+            )
+        MessageSetRepository(c).publish(
+            "local", tuple(f"text-{index}" for index in range(7))
+        )
+
+    monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
+    monkeypatch.setattr(m, "_preflight_group_proxies", AsyncMock())
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+
+    first = asyncio.run(campaign_start(request_id="repeat-start"))
+    second = asyncio.run(campaign_start(request_id="repeat-start"))
+
+    assert first["state"] == "running"
+    assert second["state"] == "running"
+    start_mock.assert_awaited_once()
+    with m._conn() as c:
+        plans = c.execute(
+            "SELECT profile_id, target, work_group_id FROM profile_daily_plans "
+            "WHERE business_date=? ORDER BY profile_id",
+            (today,),
+        ).fetchall()
+    assert [tuple(row) for row in plans] == [(7, 5, 3), (8, 7, 4)]
+
+
+def test_auto_run_next_day_materializes_existing_library_without_reimport(m, monkeypatch):
+    from app.campaign_worker import materialize_daily_plans
+    from app.repositories.message_sets import MessageSetRepository
+
+    today = m._local_today()
+    tomorrow = today + timedelta(days=1)
+    with m._conn() as c:
+        c.execute(
+            "INSERT INTO profiles "
+            "(id, phone, status, messages_sent_today, sent_day) "
+            "VALUES (7, '+79990007777', 'active', 0, ?)",
+            (today.isoformat(),),
+        )
+        c.execute(
+            "INSERT INTO groups (id, name, max_chat_id, is_active) "
+            "VALUES (3, 'fixture', '77', 1)"
+        )
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (3, 7, 1)"
+        )
+        c.execute(
+            "UPDATE profiles SET daily_limit=1, daily_limit_day=? WHERE id=7",
+            (today.isoformat(),),
+        )
+        version_id = MessageSetRepository(c).publish(
+            "local", ("reusable-library-text",)
+        )[0]
+
+    m.set_setting("daily_limit_min", "1")
+    m.set_setting("daily_limit_max", "1")
+    m.set_setting("warmup_enabled", "0")
+    assert materialize_daily_plans() == 1
+    m.set_setting("auto_run", "1")
+    monkeypatch.setattr(m, "_local_today", lambda: tomorrow)
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    monkeypatch.setattr(m, "_prepare_auto_resume_pool", lambda: True)
+    monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+    calls: list[dict[str, object]] = []
+
+    async def start_and_materialize(**kwargs):
+        calls.append(kwargs)
+        assert materialize_daily_plans() == 1
+        return True
+
+    monkeypatch.setattr(m, "_start_worker", start_and_materialize)
+
+    assert asyncio.run(m._try_auto_resume(log_prefix="Следующий день")) is True
+    assert calls == [{"record_campaign": True}]
+    assert m.load_message_pool() == []
+    with m._conn() as c:
+        plans = c.execute(
+            "SELECT business_date, version_id FROM profile_daily_plans "
+            "WHERE profile_id=7 ORDER BY business_date"
+        ).fetchall()
+        texts = c.execute(
+            "SELECT p.business_date, s.rendered_text "
+            "FROM profile_message_slots s "
+            "JOIN profile_daily_plans p ON p.plan_id=s.plan_id "
+            "WHERE p.profile_id=7 ORDER BY p.business_date"
+        ).fetchall()
+    assert [(row["business_date"], row["version_id"]) for row in plans] == [
+        (today.isoformat(), version_id),
+        (tomorrow.isoformat(), version_id),
+    ]
+    assert [row["rendered_text"] for row in texts] == [
+        "reusable-library-text",
+        "reusable-library-text",
+    ]
+
+
+def test_materialization_keeps_production_sampled_bounds_and_auto_run(m):
+    from app.campaign_worker import materialize_daily_plans
+    from app.repositories.message_sets import MessageSetRepository
+
+    today = m._local_today().isoformat()
+    with m._conn() as c:
+        c.execute(
+            "INSERT INTO profiles (id, phone, status, created_at) "
+            "VALUES (7, '+79990007777', 'active', '2026-01-01')"
+        )
+        c.execute(
+            "INSERT INTO groups (id, name, is_active) VALUES (3, 'fixture', 1)"
+        )
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (3, 7, 1)"
+        )
+        MessageSetRepository(c).publish("local", ("sampled-config-text",))
+
+    m.set_setting("daily_limit_min", "5")
+    m.set_setting("daily_limit_max", "10")
+    m.set_setting("warmup_enabled", "0")
+    m.set_setting("auto_run", "1")
+
+    assert materialize_daily_plans() == 1
+    with m._conn() as c:
+        plan = c.execute(
+            "SELECT sampled_limit, target FROM profile_daily_plans "
+            "WHERE profile_id=7 AND business_date=?",
+            (today,),
+        ).fetchone()
+    assert 5 <= int(plan["sampled_limit"]) <= 10
+    assert 5 <= int(plan["target"]) <= 10
+    assert m.get_setting("daily_limit_min") == "5"
+    assert m.get_setting("daily_limit_max") == "10"
+    assert m.get_setting("auto_run") == "1"
+
+
+def test_auto_run_zero_does_not_resume_existing_library_on_next_day(m, monkeypatch):
+    from app.repositories.message_sets import MessageSetRepository
+
+    today = m._local_today()
+    tomorrow = today + timedelta(days=1)
+    with m._conn() as connection:
+        version_id = MessageSetRepository(connection).publish(
+            "local", ("retain-without-auto-run",)
+        )[0]
+
+    m.set_setting("auto_run", "0")
+    monkeypatch.setattr(m, "_local_today", lambda: tomorrow)
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+
+    assert asyncio.run(m._try_auto_resume(log_prefix="Следующий день")) is False
+    start_mock.assert_not_awaited()
+    with m._conn() as connection:
+        current = MessageSetRepository(connection).current("local")
+        assert connection.execute(
+            "SELECT COUNT(*) FROM profile_daily_plans"
+        ).fetchone()[0] == 0
+    assert current["version_id"] == version_id
+
+
+@pytest.mark.parametrize("blocker", ["banned", "revoked"])
+def test_auto_resume_keeps_library_and_performs_no_action_for_blocked_profile(
+    m, monkeypatch, blocker
+):
+    from app.repositories.message_sets import MessageSetRepository
+
+    today = m._local_today().isoformat()
+    with m._conn() as c:
+        c.execute(
+            "INSERT INTO profiles "
+            "(id, phone, status, messages_sent_today, sent_day) "
+            "VALUES (7, '+79990007777', ?, 0, ?)",
+            ("active" if blocker == "revoked" else "banned", today),
+        )
+        c.execute(
+            "INSERT INTO groups (id, name, max_chat_id, is_active) "
+            "VALUES (3, 'fixture', '77', 1)"
+        )
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (3, 7, 1)"
+        )
+        c.execute(
+            "UPDATE profiles SET daily_limit=1, daily_limit_day=? WHERE id=7",
+            (today,),
+        )
+        version_id = MessageSetRepository(c).publish("local", ("retain-me",))[0]
+        if blocker == "revoked":
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS profile_automation_scope ("
+                "profile_id INTEGER PRIMARY KEY, automation_group_id INTEGER, "
+                "consent_state TEXT NOT NULL, revision INTEGER NOT NULL)"
+            )
+            c.execute(
+                "INSERT INTO profile_automation_scope "
+                "(profile_id, automation_group_id, consent_state, revision) "
+                "VALUES (7, 3, 'revoked', 2)"
+            )
+
+    m.set_setting("auto_run", "1")
+    monkeypatch.setattr(m, "_vault_ready_for_send", lambda: True)
+    start_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(m, "_start_worker", start_mock)
+
+    assert asyncio.run(m._try_auto_resume()) is False
+    start_mock.assert_not_awaited()
+    with m._conn() as c:
+        current = MessageSetRepository(c).current("local")
+    assert current["version_id"] == version_id
 
 
 def test_auto_resume_reuses_running_campaign(m, monkeypatch):

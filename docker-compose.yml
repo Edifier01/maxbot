@@ -14,6 +14,7 @@ services:
     pids_limit: 256
     environment:
       MAX_SERVER_MODE: "1"
+      MAX_USE_DATABASE_URL: "1"
       MAX_HOST: "0.0.0.0"
       MAX_PORT: "8765"
       WORKER_POOL_SIZE: "1"
@@ -27,6 +28,7 @@ services:
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:?задайте ADMIN_PASSWORD в .env}"
       INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?задайте INTERNAL_SERVICE_TOKEN в .env}"
       WEBHOOK_ALLOWED_HOSTS: "${WEBHOOK_ALLOWED_HOSTS:-}"
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       REGISTRATION_OPEN: "${REGISTRATION_OPEN:-0}"
       AUTH_RATE_LIMIT: "${AUTH_RATE_LIMIT:-10}"
       AUTH_RATE_WINDOW_SEC: "${AUTH_RATE_WINDOW_SEC:-900}"
@@ -51,6 +53,7 @@ services:
       retries: 3
       start_period: 40s
     restart: unless-stopped
+    stop_grace_period: 45s
     networks:
       - internal
 
@@ -106,6 +109,7 @@ services:
     pids_limit: 256
     environment:
       MAX_SERVER_MODE: "1"
+      MAX_USE_DATABASE_URL: "1"
       MAX_HOST: "app"
       MAX_PORT: "8765"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?задайте REDIS_PASSWORD в .env}@redis:6379/0"

@@ -385,10 +385,8 @@
     .modal input { max-width: none; width: 100%; margin-bottom: 1rem; }
     .modal-actions { display: flex; gap: .5rem; justify-content: flex-end; }
     #toast-container {
-      position: fixed;
-      bottom: max(1.5rem, env(safe-area-inset-bottom, 0px));
-      right: max(1.5rem, env(safe-area-inset-right, 0px));
       display: flex; flex-direction: column; gap: .5rem; z-index: 200;
+      width: min(1280px, 100%); margin: 0 auto; padding: .5rem 1.25rem 0;
     }
     .toast {
       background: var(--bg-elev); border: 1px solid var(--line); color: var(--text);
@@ -398,6 +396,13 @@
     }
     .toast.success { border-color: rgba(62,207,142,.45); }
     .toast.error { border-color: rgba(239,95,95,.45); }
+    .auth-diagnostic { display: inline-grid; gap: .35rem; justify-items: start; }
+    .auth-diagnostic-preview {
+      max-width: min(28rem, 82vw); max-height: 14rem; overflow: auto; margin: 0;
+      padding: .5rem; border: 1px solid var(--line); border-radius: 8px;
+      color: var(--muted); background: var(--bg); font: .75rem/1.4 var(--mono);
+      white-space: pre-wrap; overflow-wrap: anywhere;
+    }
     @keyframes slideIn {
       from { transform: translateY(8px); opacity: 0; }
       to { transform: none; opacity: 1; }
@@ -565,8 +570,7 @@
       .data-table td[colspan]::before, .group-table-wrap td[colspan]::before { display: none; }
       .group-table-wrap td[data-label="Действия"]::before { display: block; margin-bottom: .45rem; }
       #toast-container {
-        left: 1rem; right: 1rem;
-        bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+        padding: .5rem 1rem 0;
         align-items: stretch;
       }
       .toast { max-width: none; width: 100%; }
@@ -614,6 +618,7 @@
     <button type="button" role="tab" id="tab-settings" aria-controls="settings" aria-selected="false" tabindex="-1" data-tab="settings">Настройки</button>
   </nav>
   </div>
+  <div id="toast-container" role="status" aria-live="polite"></div>
   <main id="main-content">
     <section id="campaign" class="active" role="tabpanel" aria-labelledby="tab-campaign">
       <div class="panel campaign-panel">
@@ -671,6 +676,23 @@
         </button>
       </div>
       <div id="runBadgeSlot" class="campaign-user-only run-badge-slot"></div>
+      <div id="campaignCommandRecovery" class="panel" role="status" aria-live="polite" style="display:none">
+        <div id="campaignCommandRecoveryMessage"></div>
+        <button type="button" class="small" id="btnCampaignCommandReconcile" style="margin-top:.5rem">
+          Проверить состояние команды
+        </button>
+      </div>
+      <div id="campaignReadinessPanel" class="panel campaign-admin-only" aria-labelledby="campaignReadinessTitle">
+        <div class="section-head" style="margin-bottom:.55rem">
+          <h3 id="campaignReadinessTitle">Готовность к запуску</h3>
+          <button type="button" class="small" id="btnCampaignPreview" data-loading-label="Проверка…">Проверить готовность</button>
+        </div>
+        <div id="campaignReadinessState" class="hint" role="status" aria-live="polite">Проверка ещё не выполнялась.</div>
+        <div id="campaignReadinessDetails" style="display:none;margin-top:.55rem">
+          <ul id="campaignReadinessBlockers" class="preview" style="margin:0"></ul>
+          <div id="campaignReadinessSelection" class="hint"></div>
+        </div>
+      </div>
       <details class="campaign-more campaign-admin-only">
         <summary>Дополнительно</summary>
         <div class="toolbar">
@@ -932,8 +954,6 @@
       </div>
     </div>
   </div>
-
-  <div id="toast-container" role="status" aria-live="polite"></div>
 
   <script src="/static/js/index.js" defer></script>
 </body>

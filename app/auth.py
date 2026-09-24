@@ -10,7 +10,7 @@ from typing import Any
 import bcrypt
 import jwt
 
-from app import db_pg
+from app import auth_epoch, db_pg
 from app.config import JWT_ALGORITHM, JWT_EXPIRE_HOURS, JWT_SECRET
 
 # ponytail: in-process TTL shaves PG round-trips; logout/revoke must invalidate explicitly.
@@ -54,11 +54,13 @@ def create_token(
 ) -> str:
     now = datetime.now(timezone.utc)
     tv = db_pg.get_tenant_token_version(tenant_id) if tenant_id is not None else 0
+    current_auth_epoch = auth_epoch.current_epoch()
     payload = {
         "sub": str(user_id),
         "jti": secrets.token_urlsafe(16),
         "tenant_id": tenant_id,
         "tv": tv,
+        "ae": current_auth_epoch,
         "role": role,
         "imp": impersonating,
         "imp_by": impersonator_id,
@@ -70,6 +72,11 @@ def create_token(
 
 def validate_token_session(payload: dict[str, Any]) -> str | None:
     """Return error detail if session invalid, else None."""
+    try:
+        if not auth_epoch.token_is_current(payload):
+            return "Сессия требует повторной авторизации"
+    except auth_epoch.AuthEpochInvalid:
+        return "Сессия требует повторной авторизации"
     jti = payload.get("jti")
     if jti and db_pg.is_token_revoked(jti):
         return "Сессия отозвана"
@@ -93,6 +100,14 @@ def cached_validate_token_session(payload: dict[str, Any]) -> str | None:
     if jti:
         hit = _session_cache.get(jti)
         if hit and _time.monotonic() < hit[0]:
+            try:
+                if not auth_epoch.token_is_current(payload):
+                    return "Сессия требует повторной авторизации"
+            except auth_epoch.AuthEpochInvalid:
+                return "Сессия требует повторной авторизации"
+            if db_pg.is_token_revoked(jti):
+                _session_cache.pop(jti, None)
+                return "Сессия отозвана"
             return hit[1]
     result = validate_token_session(payload)
     if jti:

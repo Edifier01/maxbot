@@ -323,6 +323,25 @@ If the var is **unset in the app process**, `POST /api/auth/register` returns **
 
 `GET /api/admin/subscriptions/expiring?days=7` — список истекающих подписок.
 
+### Admin bootstrap and password recovery
+
+`scripts/ensure-admin.sh` only repairs the role/tenant placement of the
+configured admin; it does not change a password. For a separately authorized
+password recovery, run the interactive command on the VPS:
+
+```bash
+bash scripts/recover-admin.sh
+```
+
+The operator must enter a non-secret authorization reference and the new
+password twice. The password is sent only through stdin to a one-shot app
+container and is never placed in command arguments, logs, `.env` or Git. The
+command updates the selected admin in PostgreSQL, atomically records the
+non-secret reference in the separate control volume, and invalidates all JWTs
+issued before the recovery epoch; this is intentionally broader than only the
+admin cookie. A failed database update leaves the conservative re-login gate
+in place. Do not run this command without an approved change/reference.
+
 ### Register rollback
 
 При ошибке `init_tenant_db` после register — PG tenant/user удаляются, `data/tenants/{id}/` очищается.

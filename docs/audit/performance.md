@@ -16,6 +16,41 @@ SHAs.
 
 ## Current regression execution
 
+## 2026-09-24 dirty-candidate continuation
+
+Candidate base: `716516917e393834713e63b9f51e930b332bee38`; all results below
+are current dirty-worktree evidence, not commit-bound acceptance.
+
+| Gate | Result |
+|---|---|
+| Full Python suite | `690 passed, 19 skipped in 29.64s`; the skipped modules are PostgreSQL-dependent and remain disclosed, not counted as PASS in this invocation |
+| Dedicated PostgreSQL modules + server E2E | `19 passed` + `4 passed` against pinned PostgreSQL 16 in a disposable tmpfs-only local container; 62 Starlette deprecation warnings, no failures; the container was auto-removed |
+| Targeted T30 daily-plan/library/worker cases | `3 passed`; two target-five accounts retain the shared five-item library over ten accepted slots, restart preserves selections, and the worker may claim an already-queued slot |
+| Two-tab local API/WebSocket window | `PASS` at `390x844`; two tabs, 60 seconds, 26 API responses, no `429`, no repeated status GET while both WebSockets were healthy, no browser errors or external requests |
+| Current image build | `PASS`; final BuildKit manifest list `sha256:4e9379836059516aa61039d0a78020f7d3e136ea8d71fe4c0512bc2b0d4b4927`; `--pull=false`, synthetic values, no image push |
+| Final local Compose runtime smoke | `PASS` for app/PostgreSQL/Redis health; `db_backend=postgres`, recovery hold active, no published app port or startup exception; exact image manifest `sha256:4e9379836059516aa61039d0a78020f7d3e136ea8d71fe4c0512bc2b0d4b4927`; temporary project resources removed |
+| Focused rendered UI checks | Playwright `2 passed` at `390x844` (safe auth-attempt preview/download and toast flow), `1 passed` at `1440x1000` (toast flow); screenshots stored under `/tmp/maxbot-t26-*` |
+| Static/config checks | `PASS`; compileall, all shell/JS syntax checks, `pip check`, Compose config with synthetic values, staged and unstaged `git diff --check` |
+
+The Master reference workload is still `NOT RUN`: there is no aligned
+before/after baseline and candidate workload recording the required dataset,
+host, five repetitions, p50/p95, SQL counts, CPU/RSS, event-loop lag and
+subscriber/hidden-tab/WebSocket-outage cases. No performance improvement
+percentage is claimed. The latest Python invocation skipped 19 PostgreSQL
+modules; the separately recorded PostgreSQL run is historical evidence and is
+not represented as a rerun against this exact dirty delta.
+
+## 2026-09-24 T08 continuation
+
+The latest full SQLite suite is `693 passed, 19 skipped in 31.89s`; the new
+T08 focused deletion tests are `4 passed`, and a fresh disposable PostgreSQL
+server E2E run is `4 passed` (including successful admin tenant deletion).
+An isolated Windows Python 3.14.1 OS probe reproduced the locked-file false
+success from `rmtree(ignore_errors=True)` and verified strict deletion raises
+without removing the locked file. These are safety regressions, not performance
+measurements. T30-C02 remains `NOT RUN`; no aligned five-repetition baseline
+comparison was created.
+
 | Command | Result |
 |---|---|
 | `docker run --rm -v /tmp/maxbot-production-candidate:/workspace -w /workspace python:3.12-slim ... python -m pytest tests/ -q --tb=short` | PASS, exit 0; `498 passed, 19 skipped in 15.68s` on source candidate `c5f52980dd7297d97ad440efe8a0fdf94997fb1b` |
@@ -71,8 +106,11 @@ tenant, ten subscribers, two tabs and WebSocket outage/hidden-tab cases) is
 `NOT RUN`: the full reference workload is not available in this run. The
 rendered browser gate is separately PASS in `docs/audit/ui-review.md`. Local
 event-loop responsiveness tests are fixture-level checks, not a real-time
-production or MAX measurement. No request-rate increase or parallel sender was
-introduced.
+production or MAX measurement. Session-cache hits now perform a durable
+revocation lookup for each authenticated request (including each WebSocket
+status read); this increases database read volume versus the former cache-only
+path. The reference workload and resulting throughput/latency impact remain
+`NOT RUN` / unmeasured. No parallel sender was introduced.
 
 ## Optional bounded client reuse
 

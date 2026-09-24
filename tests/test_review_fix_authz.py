@@ -222,6 +222,291 @@ def test_user_cannot_patch_group_is_active_or_proxy(tmp_path, monkeypatch):
         assert "proxy" not in renamed
 
 
+def test_bulk_profile_import_returns_safe_structured_row_error(
+    tmp_path, monkeypatch
+):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_groups import bulk_add_group_profiles
+    from app.routes_models import BulkProfilesIn, ProfileIn
+
+    with tenant_scope(tenant_id=1, role="admin"):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as connection:
+            group_id = int(
+                connection.execute(
+                    "INSERT INTO groups (name, invite_link) VALUES (?, ?)",
+                    ("fixture", "https://max.example/join/fixture"),
+                ).lastrowid
+            )
+
+        secret = "proxy_password=fixture-private-value"
+
+        def fail_phone_normalization(_phone):
+            raise RuntimeError(secret)
+
+        monkeypatch.setattr(m, "_normalize_phone", fail_phone_normalization)
+
+        result = asyncio.run(
+            bulk_add_group_profiles(
+                group_id,
+                BulkProfilesIn(profiles=[ProfileIn(phone="+79001234567")]),
+            )
+        )
+
+    error = result["errors"][0]
+    assert error["code"] == "UNCLASSIFIED"
+    assert error["source"] == "unknown"
+    assert error["stage"] == "profile_import"
+    assert error["recommended_action"] == "REVIEW_OPERATION"
+    assert error["error"] == "Операция не выполнена; требуется проверка."
+    assert secret not in repr(result)
+
+
+def test_dashboard_database_failure_returns_safe_structured_error(
+    tmp_path, monkeypatch, caplog
+):
+    _setup_tenant_db(tmp_path, monkeypatch)
+    from app import routes_dashboard
+
+    secret = "database_password=fixture-private-value"
+
+    class FailingConnection:
+        def __enter__(self):
+            raise RuntimeError(secret)
+
+        def __exit__(self, _exc_type, _exc_value, _traceback):
+            return False
+
+    monkeypatch.setattr(routes_dashboard.m, "_conn", FailingConnection)
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(routes_dashboard.dashboard())
+
+    assert caught.value.status_code == 500
+    assert caught.value.detail["code"] == "STORAGE_ERROR"
+    assert caught.value.detail["source"] == "storage"
+    assert caught.value.detail["stage"] == "dashboard"
+    assert secret not in repr(caught.value.detail)
+    assert secret not in caplog.text
+
+
+def test_server_log_database_failure_returns_safe_error_and_redacted_log(
+    tmp_path, monkeypatch, caplog
+):
+    _setup_tenant_db(tmp_path, monkeypatch)
+    from app import routes_dashboard
+
+    secret = "database_password=fixture-private-value"
+
+    class FailingConnection:
+        def __enter__(self):
+            raise RuntimeError(secret)
+
+        def __exit__(self, _exc_type, _exc_value, _traceback):
+            return False
+
+    monkeypatch.setattr(routes_dashboard.m, "_conn", FailingConnection)
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(routes_dashboard.get_log())
+
+    assert caught.value.status_code == 503
+    assert caught.value.detail["code"] == "STORAGE_ERROR"
+    assert caught.value.detail["source"] == "storage"
+    assert caught.value.detail["stage"] == "log"
+    assert secret not in repr(caught.value.detail)
+    assert secret not in caplog.text
+
+
+def test_legacy_log_secret_is_redacted_from_log_and_status_projections(
+    tmp_path, monkeypatch
+):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_dashboard import get_log
+    from app.routes_monitor import status
+
+    secret = "proxy_password=fixture-private-value"
+    with tenant_scope(tenant_id=1, role="user"):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as connection:
+            connection.execute(
+                "INSERT INTO app_log (msg) VALUES (?)",
+                (f"Nested ConnectionError: auth failure; {secret}",),
+            )
+
+        log_response = asyncio.run(get_log())
+        status_response = asyncio.run(status())
+
+    assert secret not in repr(log_response)
+    assert secret not in repr(status_response)
+
+
+def test_websocket_status_redacts_legacy_log_secret_before_sending(
+    tmp_path, monkeypatch
+):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app import routes_monitor
+
+    secret = "proxy_password=fixture-private-value"
+    with tenant_scope(tenant_id=1, role="user"):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as connection:
+            connection.execute(
+                "INSERT INTO app_log (msg) VALUES (?)",
+                (f"Nested ConnectionError: auth failure; {secret}",),
+            )
+
+        class FixtureWebSocket:
+            headers = {"origin": "https://panel.example", "host": "panel.example"}
+            cookies = {"max_token": "fixture-jwt"}
+
+            def __init__(self):
+                self.messages = []
+
+            async def accept(self):
+                return None
+
+            async def send_json(self, value):
+                self.messages.append(value)
+                m.RUNTIME.shutting_down = True
+
+            async def close(self, *, code=None):
+                return None
+
+        async def authenticated(_websocket):
+            return True
+
+        async def session_ok(_websocket):
+            return True
+
+        async def no_wait(_seconds):
+            return None
+
+        websocket = FixtureWebSocket()
+        previous_shutdown = m.RUNTIME.shutting_down
+        m.RUNTIME.shutting_down = False
+        monkeypatch.setattr(routes_monitor, "_authenticate_ws", authenticated)
+        monkeypatch.setattr(routes_monitor, "_ws_cookie_session_ok_async", session_ok)
+        monkeypatch.setattr(routes_monitor.asyncio, "sleep", no_wait)
+        try:
+            asyncio.run(routes_monitor.ws_status(websocket))
+        finally:
+            m.RUNTIME.shutting_down = previous_shutdown
+
+    assert len(websocket.messages) == 1
+    assert secret not in repr(websocket.messages[0])
+    assert "Подробности диагностической записи скрыты." in websocket.messages[0]["log"]
+
+
+def test_dashboard_redacts_legacy_profile_error_before_ui_projection(
+    tmp_path, monkeypatch
+):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_dashboard import dashboard
+    from app.routes_groups import list_group_profiles
+    from app.routes_profiles import get_profile, list_profiles
+
+    secret = "proxy_password=fixture-private-value"
+    with tenant_scope(tenant_id=1, role="user"):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as connection:
+            group_id = int(
+                connection.execute(
+                    "INSERT INTO groups (name, invite_link) VALUES (?, ?)",
+                    ("fixture", "https://max.example/join/fixture"),
+                ).lastrowid
+            )
+            profile_id = int(
+                connection.execute(
+                    "INSERT INTO profiles (phone, status, last_error) "
+                    "VALUES (?, ?, ?)",
+                    (
+                        "+79001234567",
+                        m.ProfileStatus.NEEDS_REAUTH,
+                        f"RuntimeError: auth failed; {secret}",
+                    ),
+                ).lastrowid
+            )
+            connection.execute(
+                "INSERT INTO group_profiles (group_id, profile_id) VALUES (?, ?)",
+                (group_id, profile_id),
+            )
+
+        result = asyncio.run(dashboard())
+        group_result = asyncio.run(list_group_profiles(group_id))
+        profile_list = asyncio.run(list_profiles())
+        profile_detail = asyncio.run(get_profile(profile_id))
+
+    row = next(item for item in result["items"] if item["id"] == profile_id)
+    assert row["last_error"] == "MAX отклонил это действие."
+    assert row["last_error_code"] == "MAX_ACTION_FORBIDDEN"
+    assert secret not in repr(
+        (result, group_result, profile_list, profile_detail)
+    )
+
+
+def test_append_log_redacts_secrets_before_printing_or_persisting(
+    tmp_path, monkeypatch, capsys
+):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    secret = "proxy_password=fixture-private-value"
+    with tenant_scope(tenant_id=1, role="user"):
+        if not m._db_path().exists():
+            m.init_db()
+        m.append_log(f"Nested ConnectionError: auth failure; {secret}")
+        printed = capsys.readouterr().out
+        with m._conn() as connection:
+            stored = connection.execute(
+                "SELECT msg FROM app_log ORDER BY id DESC LIMIT 1"
+            ).fetchone()["msg"]
+
+    assert secret not in printed
+    assert secret not in stored
+    assert "Подробности диагностической записи скрыты." in stored
+
+
+def test_send_log_redacts_legacy_exception_text_before_returning_rows(
+    tmp_path, monkeypatch
+):
+    m = _setup_tenant_db(tmp_path, monkeypatch)
+    from app.routes_dashboard import get_send_log
+
+    secret = "proxy_password=fixture-private-value"
+    with tenant_scope(tenant_id=1, role="user"):
+        if not m._db_path().exists():
+            m.init_db()
+        with m._conn() as connection:
+            group_id = int(
+                connection.execute(
+                    "INSERT INTO groups (name, invite_link) VALUES (?, ?)",
+                    ("fixture", "https://max.example/join/fixture"),
+                ).lastrowid
+            )
+            profile_id = int(
+                connection.execute(
+                    "INSERT INTO profiles (phone, status) VALUES (?, ?)",
+                    ("+79001234567", m.ProfileStatus.ACTIVE),
+                ).lastrowid
+            )
+            connection.execute(
+                "INSERT INTO send_log (profile_id, group_id, message_idx, status, error) "
+                "VALUES (?, ?, 0, 'failed', ?)",
+                (profile_id, group_id, f"RuntimeError: send rejected; {secret}"),
+            )
+
+        result = asyncio.run(get_send_log())
+
+    row = result["items"][0]
+    assert row["error_code"] == "MAX_ACTION_FORBIDDEN"
+    assert row["error_action"] == "REVIEW_ACTION"
+    assert row["error"] == "MAX отклонил это действие."
+    assert secret not in repr(result)
+
+
 def test_admin_imp_can_patch_group_proxy(tmp_path, monkeypatch):
     m = _setup_tenant_db(tmp_path, monkeypatch)
     from app.routes_groups import patch_group

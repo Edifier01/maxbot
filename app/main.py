@@ -28,7 +28,9 @@ def main(argv: list[str] | None = None) -> None:
     import main as app_main  # noqa: WPS433 — intentional import of root module
 
     app_main._self_check_round_robin()
-    app_main.init_db()
+    from app.tenant_init import init_startup_db
+
+    init_startup_db(app_main)
 
     from app.campaign_runtime import RUNTIME
 
@@ -74,7 +76,14 @@ def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
     try:
-        uvicorn.run(app_main.app, host=app_main.HOST, port=app_main.PORT, log_level="info")
+        uvicorn.run(
+            app_main.app,
+            host=app_main.HOST,
+            port=app_main.PORT,
+            log_level="info",
+            ws_max_size=app_main.MAX_WS_MESSAGE_BYTES,
+            ws_max_queue=app_main.MAX_WS_QUEUE,
+        )
     finally:
         hooks.after_shutdown()
 

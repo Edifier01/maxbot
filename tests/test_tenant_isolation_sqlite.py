@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import sqlite3
+import threading
 
 import pytest
 
@@ -106,3 +108,64 @@ def test_status_payload_log_is_tenant_scoped(tmp_path, monkeypatch):
         log_text = " ".join(payload["log"])
         assert "TENANT1-SECRET-LINE" not in log_text
         assert "TENANT2-OWN-LINE" in log_text
+
+
+def test_concurrent_tenant_transactions_use_distinct_connections(
+    tmp_path, monkeypatch
+) -> None:
+    """Two server scopes must transact without sharing data or a connection."""
+    monkeypatch.setenv("MAX_SERVER_MODE", "1")
+    monkeypatch.setenv("MAX_TEST", "1")
+
+    import importlib
+
+    import app.config as cfg
+
+    importlib.reload(cfg)
+
+    import main as m
+
+    importlib.reload(m)
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    m._refresh_data_paths()
+    m.reset_test_runtime()
+
+    for tenant_id in (1, 2):
+        with tenant_scope(tenant_id=tenant_id, role="user"):
+            m.init_db()
+
+    barrier = threading.Barrier(2)
+
+    def write_marker(tenant_id: int) -> tuple[int, str]:
+        marker = f"CONCURRENT-TENANT-{tenant_id}"
+        with tenant_scope(tenant_id=tenant_id, role="user"):
+            connection = m._conn()
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute("INSERT INTO app_log(msg) VALUES (?)", (marker,))
+                barrier.wait(timeout=2)
+                connection.commit()
+            finally:
+                if connection.in_transaction:
+                    connection.rollback()
+            own = connection.execute(
+                "SELECT COUNT(*) FROM app_log WHERE msg=?", (marker,)
+            ).fetchone()[0]
+            return id(connection), str(own)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(write_marker, (1, 2)))
+
+    assert len({connection_id for connection_id, _own in results}) == 2
+    assert [own for _connection_id, own in results] == ["1", "1"]
+    for tenant_id, other_id in ((1, 2), (2, 1)):
+        database = tmp_path / "data" / "tenants" / str(tenant_id) / "app.db"
+        with sqlite3.connect(database) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM app_log WHERE msg=?",
+                (f"CONCURRENT-TENANT-{tenant_id}",),
+            ).fetchone()[0] == 1
+            assert connection.execute(
+                "SELECT COUNT(*) FROM app_log WHERE msg=?",
+                (f"CONCURRENT-TENANT-{other_id}",),
+            ).fetchone()[0] == 0

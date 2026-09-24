@@ -69,6 +69,32 @@ def test_budget_date_is_frozen_before_midnight_and_ack_does_not_relabel_it() -> 
     assert business_date_utc3(acknowledged_at) == "2026-09-21"
 
 
+def test_server_deadline_across_business_midnight_still_blocks_until_expiry() -> None:
+    before_deadline = datetime(2026, 9, 20, 20, 30, tzinfo=UTC)
+    deadline = datetime(2026, 9, 20, 21, 30, tzinfo=UTC)
+    waiting = evaluate_eligibility(
+        now=before_deadline,
+        role="active",
+        sampled_limit=5,
+        quiet_limit=1,
+        sent_count=0,
+        server_deadline=deadline,
+    )
+    assert waiting.allowed is False
+    assert waiting.reason == "deadline"
+    assert waiting.next_allowed_at == deadline
+
+    after_deadline = evaluate_eligibility(
+        now=datetime(2026, 9, 20, 22, 0, tzinfo=UTC),
+        role="active",
+        sampled_limit=5,
+        quiet_limit=1,
+        sent_count=0,
+        server_deadline=deadline,
+    )
+    assert after_deadline.allowed is True
+
+
 def test_eligibility_blocks_tenant_ban_but_proxy_failure_only_blocks_route() -> None:
     now = datetime(2026, 9, 20, 10, 0, tzinfo=UTC)
     tenant_stop = evaluate_eligibility(

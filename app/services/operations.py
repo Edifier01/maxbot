@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+import sqlite3
 
 from app.repositories.operations import OperationRecord, OperationRepository
 
@@ -47,6 +48,7 @@ class OperationLedger:
         slot_id: str | None = None,
         route_snapshot: dict[str, object] | None = None,
         max_pre_effect_retries: int = 2,
+        reservation_guard: Callable[[sqlite3.Connection], None] | None = None,
     ) -> OperationRecord:
         return self.repository.create(
             scope=scope,
@@ -61,6 +63,7 @@ class OperationLedger:
             slot_id=slot_id,
             route_snapshot=route_snapshot,
             max_pre_effect_retries=max_pre_effect_retries,
+            reservation_guard=reservation_guard,
         )
 
     def get(self, operation_id: str) -> OperationRecord:

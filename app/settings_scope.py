@@ -5,8 +5,10 @@ Allowlist only. Secrets and per-tenant ops keys are never copied.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from dataclasses import dataclass
 from typing import Mapping
 
 logger = logging.getLogger(__name__)
@@ -91,6 +93,31 @@ GLOBAL_PACING_NEVER_COPY = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class PacingFanoutReport:
+    """Durable result of one global policy revision fan-out."""
+
+    desired_revision: int
+    applied: list[int]
+    failed: dict[int, str]
+
+    def as_dict(self) -> dict[str, object]:
+        applied_revisions = {"global": self.desired_revision}
+        applied_revisions.update(
+            {f"tenant:{tenant_id}": self.desired_revision for tenant_id in self.applied}
+        )
+        return {
+            "desired_revision": self.desired_revision,
+            "applied_revision": applied_revisions,
+            "applied_tenants": list(self.applied),
+            "failed_tenants": [
+                {"tenant_id": tenant_id, "safe_error": error}
+                for tenant_id, error in sorted(self.failed.items())
+            ],
+            "partial": bool(self.failed),
+        }
+
+
 def filter_pacing_updates(data: Mapping[str, object]) -> dict[str, str]:
     """Keep allowlisted keys only; stringify values like set_setting."""
     out: dict[str, str] = {}
@@ -160,36 +187,186 @@ def seed_tenant_settings_from_global(conn) -> None:
         )
 
 
-def propagate_global_pacing_settings(values: Mapping[str, str]) -> int:
-    """Copy allowlisted key/values into every tenant SQLite; invalidate cache.
+def _policy_scope_key(m) -> str:
+    if not m._is_server_mode():
+        return "local"
+    from app.tenant import get_tenant_id, use_global_data
 
-    Returns the number of tenant DBs updated.
+    if use_global_data():
+        return "global"
+    tenant_id = get_tenant_id()
+    return f"tenant:{tenant_id}" if tenant_id is not None else "local"
+
+
+def _safe_actor(actor: object) -> str:
+    return str(actor or "").strip()[:64]
+
+
+def _update_settings_cache(m, values: Mapping[str, str]) -> None:
+    scope = m._settings_cache_scope()
+    with m._settings_cache_lock:
+        for key, value in values.items():
+            m._settings_cache[(scope[0], scope[1], key)] = value
+
+
+def _apply_pacing_revision_to_connection(
+    conn,
+    *,
+    scope_key: str,
+    values: Mapping[str, str],
+    actor: object,
+    source_revision: int | None = None,
+) -> int:
+    """Apply one policy version atomically inside one SQLite scope."""
+
+    from app.runtime import main as m
+    old_values: dict[str, str] = {}
+    for key, value in values.items():
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        old_values[key] = str(row["value"]) if row is not None else ""
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+
+    payload = json.dumps(
+        dict(sorted(values.items())),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    cursor = conn.execute(
+        "INSERT INTO policy_versions "
+        "(scope_key, source_revision, values_json, actor, effective_rule) "
+        "VALUES (?, ?, ?, ?, 'next_approved_boundary')",
+        (scope_key, source_revision, payload, _safe_actor(actor)),
+    )
+    local_revision = int(cursor.lastrowid)
+    desired_revision = (
+        int(source_revision) if source_revision is not None else local_revision
+    )
+    conn.execute(
+        "INSERT INTO policy_scope_state "
+        "(scope_key, desired_revision, applied_revision) VALUES (?, ?, ?) "
+        "ON CONFLICT(scope_key) DO UPDATE SET "
+        "desired_revision=excluded.desired_revision, "
+        "applied_revision=excluded.applied_revision, "
+        "updated_at=CURRENT_TIMESTAMP",
+        (scope_key, desired_revision, desired_revision),
+    )
+
+    for key, value in values.items():
+        old_value = old_values[key]
+        if old_value != value:
+            conn.execute(
+                "INSERT INTO settings_audit (key, old_value, new_value) VALUES (?, ?, ?)",
+                (key, m._audit_mask(key, old_value), m._audit_mask(key, value)),
+            )
+    conn.execute(
+        "DELETE FROM settings_audit WHERE id NOT IN "
+        "(SELECT id FROM settings_audit ORDER BY id DESC LIMIT 1000)"
+    )
+    return desired_revision
+
+
+def apply_pacing_revision(values: Mapping[str, object], actor: object = "") -> int | None:
+    """Commit an allowlisted policy revision atomically in the current scope."""
+
+    from app.runtime import main as m
+
+    filtered = filter_pacing_updates(values)
+    if not filtered:
+        return None
+    scope_key = _policy_scope_key(m)
+    conn = m._scoped_sqlite_conn()
+    with conn:
+        revision = _apply_pacing_revision_to_connection(
+            conn,
+            scope_key=scope_key,
+            values=filtered,
+            actor=actor,
+        )
+    _update_settings_cache(m, filtered)
+    return revision
+
+
+def _record_policy_apply_result(
+    m,
+    *,
+    desired_revision: int,
+    tenant_id: int,
+    status: str,
+    safe_error: str = "",
+) -> None:
+    with m._global_conn() as conn:
+        conn.execute(
+            "INSERT INTO policy_apply_results "
+            "(version_id, tenant_id, status, safe_error) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(version_id, tenant_id) DO UPDATE SET "
+            "status=excluded.status, safe_error=excluded.safe_error, "
+            "applied_at=CURRENT_TIMESTAMP",
+            (desired_revision, tenant_id, status, safe_error[:128]),
+        )
+
+
+def propagate_global_pacing_settings(
+    values: Mapping[str, object],
+    desired_revision: int | None = None,
+    actor: object = "",
+) -> PacingFanoutReport:
+    """Apply one global revision to tenants and record partial failures.
+
+    Each tenant SQLite transaction is independent. The global revision and its
+    apply results are durable, but this function never claims a cross-DB
+    transaction.
     """
     from app.runtime import main as m
     from app.tenant import tenant_scope
 
-    filtered = {
-        k: str(v)
-        for k, v in values.items()
-        if k in GLOBAL_PACING_SETTING_KEYS
-    }
+    filtered = filter_pacing_updates(values)
     if not filtered:
-        return 0
-    updated = 0
-    for tid in iter_tenant_ids(m.ROOT):
+        return PacingFanoutReport(
+            desired_revision=int(desired_revision or 0), applied=[], failed={}
+        )
+    if desired_revision is None:
+        desired_revision = apply_pacing_revision(filtered, actor=actor)
+    if desired_revision is None:
+        raise RuntimeError("policy_revision_not_created")
+
+    applied: list[int] = []
+    failed: dict[int, str] = {}
+    for tid in sorted(iter_tenant_ids(m.ROOT)):
         try:
             with tenant_scope(tenant_id=tid, role="admin"):
-                with m._conn() as c:
-                    for key, val in filtered.items():
-                        c.execute(
-                            "INSERT INTO settings (key, value) VALUES (?, ?) "
-                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                            (key, val),
-                        )
-                with m._settings_cache_lock:
-                    for key, val in filtered.items():
-                        m._settings_cache[("tenant", tid, key)] = val
-            updated += 1
+                conn = m._conn()
+                with conn:
+                    _apply_pacing_revision_to_connection(
+                        conn,
+                        scope_key=f"tenant:{tid}",
+                        values=filtered,
+                        actor=actor,
+                        source_revision=int(desired_revision),
+                    )
+                _update_settings_cache(m, filtered)
+            _record_policy_apply_result(
+                m,
+                desired_revision=int(desired_revision),
+                tenant_id=tid,
+                status="applied",
+            )
+            applied.append(tid)
         except Exception:
-            logger.exception("pacing settings copy failed tenant_id=%s", tid)
-    return updated
+            logger.error("pacing settings copy failed tenant_id=%s", tid)
+            safe_error = "tenant_apply_failed"
+            failed[tid] = safe_error
+            _record_policy_apply_result(
+                m,
+                desired_revision=int(desired_revision),
+                tenant_id=tid,
+                status="failed",
+                safe_error=safe_error,
+            )
+    return PacingFanoutReport(
+        desired_revision=int(desired_revision), applied=applied, failed=failed
+    )

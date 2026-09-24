@@ -9,10 +9,11 @@ from app.runtime import main as m
 from app.settings_scope import (
     LEGACY_PRESENCE_SETTING_KEYS,
     GLOBAL_PACING_SETTING_KEYS,
+    apply_pacing_revision,
     filter_pacing_updates,
     propagate_global_pacing_settings,
 )
-from app.tenant import is_admin, use_global_data
+from app.tenant import get_user_id, is_admin, use_global_data
 
 router = APIRouter(tags=["settings"])
 
@@ -103,12 +104,28 @@ async def update_settings(body: SettingsIn):
             pass  # не затираем пустой строкой случайно — только явное
         else:
             m.set_setting("telegram_bot_token", str(tok).strip())
-    prev_mode = m._message_pick_mode()
-    for field, val in data.items():
-        m.set_setting(field, "" if val is None else str(val))
-    # legacy-поле = верхняя граница дневного лимита
+
+    # Keep the legacy alias in the same atomic policy revision as the daily
+    # limit update and before splitting pacing from tenant-local settings.
     if "daily_limit_max" in data and "max_msgs_per_profile_day" not in data:
-        m.set_setting("max_msgs_per_profile_day", str(data["daily_limit_max"]))
+        data["max_msgs_per_profile_day"] = str(data["daily_limit_max"])
+
+    pacing_data = filter_pacing_updates(data)
+    local_data = {
+        key: value for key, value in data.items() if key not in GLOBAL_PACING_SETTING_KEYS
+    }
+    prev_mode = m._message_pick_mode()
+    actor = get_user_id()
+    revision = apply_pacing_revision(pacing_data, actor=actor)
+    report = None
+    if copy_global and pacing_data and revision is not None:
+        report = propagate_global_pacing_settings(
+            pacing_data,
+            desired_revision=revision,
+            actor=actor,
+        )
+    for field, val in local_data.items():
+        m.set_setting(field, "" if val is None else str(val))
     if "message_pick_mode" in data and data["message_pick_mode"] != prev_mode:
         qs_mi = 0
         with m._conn() as c:
@@ -116,21 +133,21 @@ async def update_settings(body: SettingsIn):
             qs_mi = int(row["message_idx"] if row else 0)
         if qs_mi == 0:
             m._rebuild_message_bag()
-    if copy_global:
-        to_copy = filter_pacing_updates(data)
-        if (
-            "daily_limit_max" in data
-            and "max_msgs_per_profile_day" not in data
-            and "max_msgs_per_profile_day" in GLOBAL_PACING_SETTING_KEYS
-        ):
-            to_copy["max_msgs_per_profile_day"] = str(data["daily_limit_max"])
-        if to_copy:
-            n = propagate_global_pacing_settings(to_copy)
-            if n:
-                m.append_log(
-                    f"Админ: настройки рассылки скопированы в {n} учреждений"
-                )
-    return {"ok": True}
+    if report is not None:
+        m.append_log(
+            f"Админ: ревизия настроек {report.desired_revision} применена "
+            f"к {len(report.applied)} учреждениям; отказов={len(report.failed)}"
+        )
+    result: dict[str, object] = {"ok": True}
+    if report is not None:
+        result["policy_revision"] = report.as_dict()
+    elif revision is not None:
+        result["policy_revision"] = {
+            "desired_revision": revision,
+            "applied_revision": {"current": revision},
+            "partial": False,
+        }
+    return result
 
 
 @router.get("/api/settings/audit")
@@ -142,5 +159,18 @@ async def settings_audit(limit: int = 50):
             "SELECT * FROM settings_audit ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    return {"items": [dict(r) for r in rows]}
-
+        policy_rows = c.execute(
+            "SELECT version_id, tenant_id, status, safe_error, applied_at "
+            "FROM policy_apply_results ORDER BY applied_at DESC, version_id DESC "
+            "LIMIT ?",
+            (limit,),
+        ).fetchall()
+        policy_state = c.execute(
+            "SELECT scope_key, desired_revision, applied_revision, updated_at "
+            "FROM policy_scope_state ORDER BY scope_key"
+        ).fetchall()
+    return {
+        "items": [dict(r) for r in rows],
+        "policy_apply_results": [dict(r) for r in policy_rows],
+        "policy_scope_state": [dict(r) for r in policy_state],
+    }

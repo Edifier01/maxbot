@@ -3,31 +3,133 @@ function jsonHeaders(json = true) {
       if (json) h['Content-Type'] = 'application/json';
       return h;
     }
-    function formatApiError(detail) {
-      if (!detail) return '';
-      if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
-        const safeMessage = typeof detail.safe_message === 'string'
-          ? detail.safe_message.trim().slice(0, 300)
-          : '';
-        if (safeMessage) return safeMessage;
-        const safe = {
-          PROXY_AUTH_FAILED: 'Проверьте учётные данные прокси.',
-          PROXY_CONNECT_FAILED: 'Не удалось подключиться через прокси.',
-          MAX_ACCOUNT_BANNED: 'Аккаунт MAX заблокирован. Отправка остановлена.',
-          SEND_OUTCOME_UNKNOWN: 'Результат действия неизвестен. Сначала выполните сверку.',
-          NETWORK_UNAVAILABLE: 'Сеть недоступна. Проверьте соединение.',
-          UNCLASSIFIED: 'Операция не выполнена. Требуется проверка.',
-        };
-        if (safe[detail.code]) return safe[detail.code];
-        return 'Операция не выполнена.';
-      }
-      if (typeof detail === 'string') return detail;
-      if (Array.isArray(detail)) {
-        return detail.map(d => (d && d.msg) ? d.msg : 'Некорректный ввод').join('; ');
-      }
-      return 'Операция не выполнена.';
-    }
-    const ruDateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short' });
+const KNOWN_ERROR_CODES = new Set([
+  'AUTH_REQUIRED', 'AUTH_SESSION_EXPIRED', 'AUTH_SESSION_REVOKED', 'LOGIN_INVALID',
+  'PERMISSION_DENIED', 'SUBSCRIPTION_INACTIVE', 'PROFILE_NOT_FOUND', 'OBJECT_NOT_FOUND',
+  'WORK_GROUP_SELECTION_REQUIRED', 'DESTINATION_REVIEW_REQUIRED', 'MEMBERSHIP_REVIEW_REQUIRED',
+  'CONSENT_REVOKED', 'ACCOUNT_AUTOMATION_CONFLICT', 'ROUTE_MISSING', 'ROUTE_CONFLICT',
+  'ROUTE_DISABLED', 'ROUTE_REVISION_CONFLICT', 'PROXY_URL_INVALID',
+  'PROXY_UNSUPPORTED_SCHEME', 'PROXY_AUTH_FAILED', 'PROXY_CONNECT_FAILED',
+  'PROXY_RESPONSE_INVALID', 'TLS_ERROR', 'MAX_CONNECT_FAILED', 'SDK_INCOMPATIBLE',
+  'MAX_SESSION_REVOKED', 'MAX_RATE_LIMIT', 'MAX_ACCOUNT_BANNED', 'MAX_ACTION_FORBIDDEN',
+  'CONNECTION_TIMEOUT', 'CODE_REQUEST_TIMEOUT', 'CODE_INPUT_TIMEOUT',
+  'PASSWORD_INPUT_TIMEOUT', 'OTP_FORMAT_INVALID', 'OTP_INVALID', 'OTP_EXPIRED',
+  'PASSWORD_INVALID', 'ATTEMPT_STATE_CONFLICT', 'ATTEMPT_EXPIRED', 'ATTEMPT_INTERRUPTED',
+  'REGISTRATION_REQUIRED', 'SEND_OUTCOME_UNKNOWN', 'ACK_PERSIST_PENDING', 'CLEANUP_FAILED',
+  'DAILY_BUDGET_ALLOCATED', 'CAMPAIGN_BUSY', 'PREVIEW_STALE', 'COMMAND_STATE_UNKNOWN',
+  'STOP_PENDING', 'RESTORE_HOLD', 'MIGRATION_REVIEW_REQUIRED', 'VAULT_KEY_REQUIRED',
+  'VAULT_INTEGRITY_FAILED', 'STORAGE_ERROR', 'POLICY_APPLY_PARTIAL', 'VERSION_CONFLICT',
+  'POOL_EMPTY', 'IMPORT_INVALID', 'INPUT_TOO_LARGE', 'SETTINGS_NOT_LOADED',
+  'API_RATE_LIMIT', 'NETWORK_UNAVAILABLE', 'SERVER_UNAVAILABLE', 'LOGOUT_NOT_CONFIRMED',
+  'IMPERSONATION_EXIT_FAILED', 'UNCLASSIFIED',
+]);
+
+const ERROR_ACTION_LABELS = Object.freeze({
+  AUTHENTICATE: 'Открыть вход',
+  REAUTHENTICATE: 'Войти заново',
+  REVIEW_INPUT: 'Проверить ввод',
+  REVIEW_ACCESS: 'Проверить доступ',
+  REVIEW_SUBSCRIPTION: 'Проверить подписку',
+  REVIEW_PROFILE: 'Открыть профили',
+  REVIEW_OBJECT: 'Проверить объект',
+  SELECT_GROUP: 'Выбрать группу',
+  REVIEW_DESTINATION: 'Проверить назначение',
+  REVIEW_MEMBERSHIP: 'Проверить участие',
+  STOP_OPERATION: 'Открыть остановку',
+  REVIEW_CONFLICT: 'Проверить конфликт',
+  CONFIGURE_ROUTE: 'Настроить маршрут',
+  REVIEW_ROUTE: 'Проверить маршрут',
+  ENABLE_ROUTE: 'Открыть маршруты',
+  RELOAD_ROUTE: 'Перезагрузить маршруты',
+  REVIEW_PROXY: 'Проверить прокси',
+  REVIEW_NETWORK: 'Проверить сеть',
+  REVIEW_RUNTIME: 'Проверить среду',
+  WAIT_RETRY: 'Показать состояние',
+  STOP_TENANT: 'Открыть остановку',
+  REVIEW_ACTION: 'Проверить операцию',
+  RETRY_LOGIN: 'Открыть профили',
+  RESTART_LOGIN: 'Открыть профили',
+  REQUEST_NEW_CODE: 'Открыть профили',
+  RELOAD_OPERATION: 'Перезагрузить операцию',
+  RESTART_OPERATION: 'Открыть операцию',
+  REVIEW_OPERATION: 'Открыть операцию',
+  REVIEW_REGISTRATION: 'Открыть профили',
+  RECONCILE_BEFORE_RETRY: 'Открыть журнал',
+  PERSIST_ACK: 'Открыть журнал',
+  REVIEW_CLEANUP: 'Открыть пользователей',
+  REVIEW_BUDGET: 'Открыть операцию',
+  WAIT_OPERATION: 'Показать состояние',
+  RELOAD_PREVIEW: 'Перезагрузить операцию',
+  REVIEW_RESTORE: 'Открыть операцию',
+  REVIEW_MIGRATION: 'Открыть пользователей',
+  UNLOCK_VAULT: 'Открыть настройки',
+  REVIEW_VAULT: 'Открыть настройки',
+  REVIEW_STORAGE: 'Открыть настройки',
+  REVIEW_POLICY: 'Открыть настройки',
+  RELOAD_DATA: 'Перезагрузить данные',
+  REVIEW_LIBRARY: 'Открыть сообщения',
+  REVIEW_IMPORT: 'Открыть сообщения',
+  RELOAD_SETTINGS: 'Перезагрузить настройки',
+  REVIEW_SESSION: 'Открыть вход',
+});
+
+function normalizedErrorAction(action) {
+  return Object.prototype.hasOwnProperty.call(ERROR_ACTION_LABELS, action)
+    ? action
+    : 'REVIEW_OPERATION';
+}
+
+function safeAdminMetadata(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(value)
+    ? value
+    : '';
+}
+
+class AdminApiError extends Error {
+  constructor(message, status, detail) {
+    super(message);
+    this.name = 'AdminApiError';
+    this.status = status;
+    const structured = detail && typeof detail === 'object' && !Array.isArray(detail)
+      ? detail
+      : {};
+    const code = safeAdminMetadata(structured.code);
+    this.code = KNOWN_ERROR_CODES.has(code) ? code : 'UNCLASSIFIED';
+    this.source = safeAdminMetadata(structured.source);
+    this.stage = safeAdminMetadata(structured.stage);
+    this.recommendedAction = normalizedErrorAction(
+      safeAdminMetadata(structured.recommended_action),
+    );
+  }
+}
+
+function formatApiError(detail) {
+  if (!detail) return '';
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const code = typeof detail.code === 'string' ? detail.code : '';
+    const safeMessage = typeof detail.safe_message === 'string'
+      ? detail.safe_message.trim().slice(0, 300)
+      : '';
+    if (KNOWN_ERROR_CODES.has(code) && safeMessage) return safeMessage;
+    const safe = {
+      PROXY_AUTH_FAILED: 'Проверьте учётные данные прокси.',
+      PROXY_CONNECT_FAILED: 'Не удалось подключиться через прокси.',
+      MAX_ACCOUNT_BANNED: 'Аккаунт MAX заблокирован. Отправка остановлена.',
+      ACCOUNT_AUTOMATION_CONFLICT: 'Аккаунт MAX уже используется в другой области автоматизации.',
+      SEND_OUTCOME_UNKNOWN: 'Результат действия неизвестен. Сначала выполните сверку.',
+      NETWORK_UNAVAILABLE: 'Сеть недоступна. Проверьте соединение.',
+      UNCLASSIFIED: 'Операция не выполнена. Требуется проверка.',
+    };
+    if (safe[code]) return safe[code];
+    return 'Операция не выполнена.';
+  }
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(d => (d && d.msg) ? d.msg : 'Некорректный ввод').join('; ');
+  }
+  return 'Операция не выполнена.';
+}
+const ruDateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short' });
     function formatAdminDate(iso) {
       if (!iso) return '?';
       const d = new Date(iso);
@@ -48,13 +150,113 @@ function jsonHeaders(json = true) {
       c.appendChild(t);
       setTimeout(() => t.remove(), duration);
     }
+
+    function renderAdminError(error) {
+      const main = document.querySelector('main');
+      if (!main) return;
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      panel.style.color = 'var(--danger)';
+      const code = error instanceof AdminApiError ? error.code : 'UNCLASSIFIED';
+      const action = error instanceof AdminApiError
+        ? error.recommendedAction
+        : 'REVIEW_OPERATION';
+      panel.dataset.errorCode = code;
+      panel.dataset.errorAction = normalizedErrorAction(action);
+      if (error instanceof AdminApiError && error.source) {
+        panel.dataset.errorSource = error.source;
+      }
+      if (error instanceof AdminApiError && error.stage) {
+        panel.dataset.errorStage = error.stage;
+      }
+      const title = document.createElement('strong');
+      title.textContent = 'Не удалось открыть админку';
+      panel.append(title, document.createElement('br'));
+      const message = document.createElement('span');
+      message.textContent = error instanceof AdminApiError
+        ? error.message
+        : 'Сервис временно недоступен.';
+      panel.append(message);
+      panel.append(document.createElement('br'));
+      const hint = document.createElement('p');
+      hint.className = 'hint';
+      hint.textContent = 'Проверьте состояние сервера и повторите действие после явного подтверждения.';
+      panel.append(hint);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn';
+      button.dataset.action = 'error-action';
+      button.dataset.errorAction = normalizedErrorAction(action);
+      button.textContent = ERROR_ACTION_LABELS[button.dataset.errorAction];
+      button.setAttribute('aria-label', 'Действие: ' + button.textContent);
+      panel.append(button, document.createTextNode(' '));
+      const logoutButton = document.createElement('button');
+      logoutButton.type = 'button';
+      logoutButton.className = 'btn';
+      logoutButton.dataset.action = 'logout';
+      logoutButton.textContent = 'Выйти и войти снова';
+      panel.append(logoutButton);
+      main.replaceChildren(panel);
+    }
+
+    async function runAdminErrorAction(action, button) {
+      const normalized = normalizedErrorAction(action);
+      const container = button && (button.closest('[data-error-code]') || button.parentElement);
+      if (button) button.dataset.errorActionInvoked = normalized;
+      if (container) container.setAttribute('data-error-action-invoked', normalized);
+      if (normalized === 'AUTHENTICATE'
+          || normalized === 'REAUTHENTICATE'
+          || normalized === 'REVIEW_SESSION') {
+        location.href = '/auth.html';
+        return;
+      }
+      try {
+        const messageActions = new Set(['REVIEW_LIBRARY', 'REVIEW_IMPORT']);
+        if (messageActions.has(normalized)) {
+          await switchTab('messages');
+          await loadAdminMessages();
+          return;
+        }
+        const settingActions = new Set([
+          'UNLOCK_VAULT', 'REVIEW_VAULT', 'REVIEW_STORAGE', 'REVIEW_POLICY',
+          'RELOAD_SETTINGS',
+        ]);
+        if (settingActions.has(normalized)) {
+          await switchTab('settings');
+          await loadGlobalSettings();
+          return;
+        }
+        await switchTab('users');
+        await loadUsers();
+        toast('Проверьте состояние учреждения перед продолжением.', 'info');
+      } catch (actionError) {
+        toast(actionError instanceof AdminApiError
+          ? actionError.message
+          : 'Не удалось открыть рекомендуемый раздел.', 'error');
+      }
+    }
+
     async function api(path, opts = {}) {
       const isForm = opts.body instanceof FormData;
       opts.credentials = opts.credentials || 'same-origin';
       opts.headers = { ...jsonHeaders(!isForm), ...(opts.headers || {}) };
-      const r = await fetch('/api' + path, opts);
+      let r;
+      try {
+        r = await fetch('/api' + path, opts);
+      } catch (_) {
+        throw new AdminApiError('Сеть недоступна. Проверьте соединение.', 0, {
+          code: 'NETWORK_UNAVAILABLE',
+          recommended_action: 'REVIEW_NETWORK',
+        });
+      }
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(formatApiError(j.detail) || r.statusText);
+      if (!r.ok) {
+        throw new AdminApiError(
+          formatApiError(j.detail) || r.statusText || 'Операция не выполнена.',
+          r.status,
+          j.detail,
+        );
+      }
       return j;
     }
     async function tryRestoreSession() {
@@ -518,6 +720,10 @@ function jsonHeaders(json = true) {
       const btn = e.target.closest('[data-action]');
       if (!btn) return;
       const action = btn.dataset.action;
+      if (action === 'error-action') {
+        runAdminErrorAction(btn.dataset.errorAction, btn);
+        return;
+      }
       if (action === 'logout') {
         logout();
         return;
@@ -578,10 +784,6 @@ function jsonHeaders(json = true) {
         applyTabFromHash();
         await loadUsers();
       } catch (e) {
-        document.querySelector('main').innerHTML =
-          '<div class="panel" style="color:var(--danger)">' +
-          '<strong>Не удалось открыть админку</strong><br>' + esc(e.message) +
-          '<p class="hint">Частая причина — старая версия сервера. На VDS: git pull && docker compose up --build -d</p>' +
-          '<button class="btn" data-action="logout">Выйти и войти снова</button></div>';
+        renderAdminError(e);
       }
     })();

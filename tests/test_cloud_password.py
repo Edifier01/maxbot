@@ -39,12 +39,123 @@ def test_submit_cloud_password_api(tmp_path, monkeypatch):
         from app.routes_profiles import submit_password
 
         sess = m._ensure_auth_session(pid)
-        m._set_auth_step(pid, "waiting_cloud_password", "hint123")
-        result = asyncio.run(submit_password(pid, CodeIn(code="secret-cloud")))
+        attempt, _ = m._start_auth_attempt(
+            pid, group_id=None, fresh=True, request_id="password-start"
+        )
+        waiting_code = m._auth_attempts().waiting_code(
+            "local", pid, attempt_id=attempt.attempt_id
+        )
+        m._persist_auth_attempt(waiting_code)
+        m._sync_auth_attempt_view(waiting_code)
+        verifying_code = m._submit_auth_code(
+            pid,
+            attempt_id=waiting_code.attempt_id,
+            revision=waiting_code.revision,
+            request_id="code-submit",
+        )
+        waiting_password = m._auth_attempts().waiting_password(
+            "local", pid, attempt_id=attempt.attempt_id, hint="hint123"
+        )
+        m._persist_auth_attempt(waiting_password)
+        m._sync_auth_attempt_view(waiting_password)
+        result = asyncio.run(
+            submit_password(
+                pid,
+                CodeIn(
+                    code="secret-cloud",
+                    attempt_id=waiting_password.attempt_id,
+                    revision=waiting_password.revision,
+                    request_id="password-submit",
+                ),
+            )
+        )
         assert result["ok"] is True
 
         assert sess["pwd_q"].get_nowait() == "secret-cloud"
         assert m._auth_sessions[m._auth_session_key(pid)]["step"] == "verifying_password"
+        with m._conn() as c:
+            metadata = repr(c.execute("SELECT * FROM auth_attempts").fetchall())
+        assert "secret-cloud" not in metadata
+    finally:
+        monkeypatch.undo()
+        import app.config as cfg
+
+        importlib.reload(cfg)
+        importlib.reload(m)
+
+
+def test_password_submission_rejects_stale_revision_and_deduplicates_queue(
+    tmp_path, monkeypatch
+):
+    m = _setup_db(tmp_path, monkeypatch)
+    try:
+        with m._conn() as c:
+            c.execute(
+                "INSERT INTO profiles (phone, label, status) VALUES (?, ?, ?)",
+                ("+79991112234", "t", m.ProfileStatus.PENDING),
+            )
+            pid = c.execute(
+                "SELECT id FROM profiles WHERE phone=?", ("+79991112234",)
+            ).fetchone()["id"]
+
+        from fastapi import HTTPException
+
+        from app.routes_models import CodeIn
+        from app.routes_profiles import submit_password
+
+        attempt, _ = m._start_auth_attempt(
+            pid, group_id=None, fresh=True, request_id="password-start"
+        )
+        waiting_code = m._auth_attempts().waiting_code(
+            "local", pid, attempt_id=attempt.attempt_id
+        )
+        m._persist_auth_attempt(waiting_code)
+        verifying_code = m._submit_auth_code(
+            pid,
+            attempt_id=waiting_code.attempt_id,
+            revision=waiting_code.revision,
+            request_id="code-submit",
+        )
+        waiting_password = m._auth_attempts().waiting_password(
+            "local", pid, attempt_id=verifying_code.attempt_id, hint="hint"
+        )
+        m._persist_auth_attempt(waiting_password)
+        m._sync_auth_attempt_view(waiting_password)
+
+        with pytest.raises(HTTPException) as stale:
+            asyncio.run(
+                submit_password(
+                    pid,
+                    CodeIn(
+                        code="  literal  ",
+                        attempt_id=waiting_password.attempt_id,
+                        revision=waiting_password.revision - 1,
+                        request_id="stale",
+                    ),
+                )
+            )
+        assert stale.value.status_code == 409
+        assert waiting_password.revision == m._auth_sessions[
+            m._auth_session_key(pid)
+        ]["revision"]
+
+        payload = CodeIn(
+            code="  literal  ",
+            attempt_id=waiting_password.attempt_id,
+            revision=waiting_password.revision,
+            request_id="password-submit-once",
+        )
+        first = asyncio.run(submit_password(pid, payload))
+        repeated = asyncio.run(submit_password(pid, payload))
+        assert first["revision"] == repeated["revision"]
+        assert m._auth_sessions[m._auth_session_key(pid)]["pwd_q"].get_nowait() == (
+            "  literal  "
+        )
+        with pytest.raises(asyncio.QueueEmpty):
+            m._auth_sessions[m._auth_session_key(pid)]["pwd_q"].get_nowait()
+        with m._conn() as c:
+            metadata = repr(c.execute("SELECT * FROM auth_attempts").fetchall())
+        assert "literal" not in metadata
     finally:
         monkeypatch.undo()
         import app.config as cfg

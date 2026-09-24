@@ -30,8 +30,9 @@ def test_missing_destination_does_not_join() -> None:
     async def run() -> None:
         gateway = ResolveOnlyGateway()
         group = {"max_chat_id": "", "invite_link": "https://max.ru/join/fixture"}
-        with pytest.raises(m.DestinationAuthorizationError):
+        with pytest.raises(m.DestinationAuthorizationError) as caught:
             await m.resolve_chat_id(gateway, group)
+        assert caught.value.code == "MEMBERSHIP_REVIEW_REQUIRED"
         assert gateway.actions == ["resolve_destination"]
 
     asyncio.run(run())

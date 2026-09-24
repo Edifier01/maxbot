@@ -8,12 +8,37 @@ umask 077
 
 DEPLOY_PATH="${1:-/opt/maxsender}"
 REPO_URL="${2:-git@github.com:Edifier01/maxbot.git}"
-DEPLOY_USER="${SUDO_USER:-$USER}"
+
+if [[ -n "${DEPLOY_USER:-}" ]]; then
+  :
+elif [[ -n "${SUDO_USER:-}" ]]; then
+  DEPLOY_USER="$SUDO_USER"
+elif [[ "${USER:-}" != "root" && -n "${USER:-}" ]]; then
+  DEPLOY_USER="$USER"
+else
+  echo "Укажите DEPLOY_USER при запуске от root" >&2
+  exit 1
+fi
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Запустите от root: sudo bash $0"
   exit 1
 fi
+
+if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
+  echo "Пользователь deployment не найден: $DEPLOY_USER" >&2
+  exit 1
+fi
+DEPLOY_HOME="$(getent passwd "$DEPLOY_USER" | cut -d: -f6)"
+DEPLOY_GROUP="$(id -gn "$DEPLOY_USER")"
+if [[ -z "$DEPLOY_HOME" || ! -d "$DEPLOY_HOME" ]]; then
+  echo "Домашний каталог deployment не найден: $DEPLOY_HOME" >&2
+  exit 1
+fi
+
+run_as_deploy() {
+  runuser -u "$DEPLOY_USER" -- env HOME="$DEPLOY_HOME" "$@"
+}
 
 if ! command -v docker >/dev/null; then
   apt-get update -qq
@@ -35,20 +60,13 @@ if ! command -v docker >/dev/null; then
   usermod -aG docker "$DEPLOY_USER"
 fi
 
-if [[ ! -d "$DEPLOY_PATH/.git" ]]; then
-  mkdir -p "$(dirname "$DEPLOY_PATH")"
-  sudo -u "$DEPLOY_USER" git clone "$REPO_URL" "$DEPLOY_PATH"
-fi
-
-chown -R "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_PATH"
-
-KEY_DIR="/home/$DEPLOY_USER/.ssh"
+KEY_DIR="$DEPLOY_HOME/.ssh"
 KEY_FILE="$KEY_DIR/github_deploy"
-mkdir -p "$KEY_DIR"
-chmod 700 "$KEY_DIR"
+install -d -m 700 -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" "$KEY_DIR"
 
 if [[ ! -f "$KEY_FILE" ]]; then
-  sudo -u "$DEPLOY_USER" ssh-keygen -t ed25519 -f "$KEY_FILE" -N "" -C "maxsender-deploy@$(hostname)"
+  run_as_deploy ssh-keygen -t ed25519 -f "$KEY_FILE" -N "" \
+    -C "maxsender-deploy@$(hostname)"
 fi
 
 echo
@@ -56,13 +74,35 @@ echo "=== Deploy key для GitHub (только чтение) ==="
 echo "Settings → Deploy keys → Add deploy key:"
 cat "${KEY_FILE}.pub"
 echo
+
+if [[ "$REPO_URL" == git@* || "$REPO_URL" == ssh://* ]]; then
+  echo "=== Проверка SSH authorization до clone ==="
+  if ! run_as_deploy env GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes" \
+    git ls-remote "$REPO_URL" HEAD >/dev/null; then
+    echo "Deploy key не авторизован для $REPO_URL; добавьте public key и запустите bootstrap снова." >&2
+    exit 1
+  fi
+fi
+
+if [[ ! -d "$DEPLOY_PATH/.git" ]]; then
+  if [[ -e "$DEPLOY_PATH" ]] && [[ -n "$(find "$DEPLOY_PATH" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    echo "Каталог deployment существует и не пуст: $DEPLOY_PATH" >&2
+    exit 1
+  fi
+  install -d -m 755 -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" "$DEPLOY_PATH"
+  run_as_deploy env GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes" \
+    git clone "$REPO_URL" "$DEPLOY_PATH"
+fi
+
+chown -R "$DEPLOY_USER:$DEPLOY_GROUP" "$DEPLOY_PATH"
+
 echo "=== Git remote на сервере ==="
-sudo -u "$DEPLOY_USER" git -C "$DEPLOY_PATH" remote set-url origin "$REPO_URL" 2>/dev/null || true
+run_as_deploy git -C "$DEPLOY_PATH" remote set-url origin "$REPO_URL" 2>/dev/null || true
 
 ENV_FILE="$DEPLOY_PATH/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   install -m 600 "$DEPLOY_PATH/.env.example" "$ENV_FILE"
-  chown "$DEPLOY_USER:$DEPLOY_USER" "$ENV_FILE"
+  chown "$DEPLOY_USER:$DEPLOY_GROUP" "$ENV_FILE"
   echo "Создан $ENV_FILE — заполните DOMAIN, JWT_SECRET, пароли."
 fi
 chmod 600 "$ENV_FILE"

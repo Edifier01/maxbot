@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import uuid
 
@@ -110,3 +110,90 @@ def test_ensure_group_role_plan_ordered(tmp_path, monkeypatch):
     assert set(roles_by_name["active"]) == set(pids[:2])
     assert set(roles_by_name["quiet"]) == set(pids[2:4])
     assert set(roles_by_name["skip"]) == set(pids[4:6])
+
+
+def test_late_member_does_not_reshuffle_pinned_roles(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(m, "DATA", data)
+    monkeypatch.setattr(m, "DB_PATH", data / "app.db")
+    m._settings_cache.clear()
+    m.init_db()
+    m.set_setting("human_rhythm_enabled", "1")
+    m.set_setting("role_plan_enabled", "1")
+    m.set_setting("role_cycle_anchor", "2026-07-01")
+    today = date(2026, 7, 1)
+    monkeypatch.setattr(m, "_local_today", lambda: today)
+    monkeypatch.setattr(m, "_role_cycle_day", lambda: 0)
+
+    suffix = uuid.uuid4().hex[:8]
+    with m._conn() as c:
+        c.execute("INSERT INTO groups (name, is_active) VALUES ('G', 1)")
+        gid = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
+        pids: list[int] = []
+        for i in range(3):
+            cur = c.execute(
+                "INSERT INTO profiles (phone, status) VALUES (?, ?)",
+                (f"+7911{suffix}{i:02d}", m.ProfileStatus.ACTIVE),
+            )
+            pid = int(cur.lastrowid)
+            pids.append(pid)
+            c.execute(
+                "INSERT INTO group_profiles (group_id, profile_id, order_index, is_enabled) "
+                "VALUES (?, ?, ?, 1)",
+                (gid, pid, i + 1),
+            )
+
+    campaign_query._ensure_group_role_plan(gid)
+    with m._conn() as c:
+        before = {
+            row["profile_id"]: (row["day_role"], row["day_order"])
+            for row in c.execute(
+                "SELECT profile_id, day_role, day_order FROM group_profiles "
+                "WHERE group_id=? ORDER BY profile_id",
+                (gid,),
+            ).fetchall()
+        }
+        cur = c.execute(
+            "INSERT INTO profiles (phone, status) VALUES (?, ?)",
+            (f"+7911{suffix}99", m.ProfileStatus.ACTIVE),
+        )
+        late_pid = int(cur.lastrowid)
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, order_index, is_enabled) "
+            "VALUES (?, ?, ?, 1)",
+            (gid, late_pid, 99),
+        )
+
+    campaign_query._ensure_group_role_plan(gid)
+    with m._conn() as c:
+        after = {
+            row["profile_id"]: (row["day_role"], row["day_order"], row["role_day"])
+            for row in c.execute(
+                "SELECT profile_id, day_role, day_order, role_day FROM group_profiles "
+                "WHERE group_id=? ORDER BY profile_id",
+                (gid,),
+            ).fetchall()
+        }
+
+    for pid, snapshot in before.items():
+        assert after[pid][:2] == snapshot
+        assert after[pid][2] == today.isoformat()
+    assert after[late_pid][0] == "skip"
+    assert after[late_pid][2] == today.isoformat()
+    assert after[late_pid][1] > max(order for _, order in before.values())
+
+
+def test_role_rotation_is_independent_from_send_window_switch(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(m, "DATA", data)
+    monkeypatch.setattr(m, "DB_PATH", data / "app.db")
+    m._settings_cache.clear()
+    m.init_db()
+    m.set_setting("human_rhythm_enabled", "0")
+    m.set_setting("role_plan_enabled", "0")
+    m.set_setting("send_windows_weekday", "09:00-10:00")
+
+    assert m._role_plan_enabled() is True
+    assert m._in_send_window(datetime(2026, 7, 1, 12, 0)) is True

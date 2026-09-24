@@ -126,6 +126,7 @@ class DailyPlanService:
         library_items: tuple[LibraryItem, ...],
         mode: str = "random_norepeat",
         rng: random.Random | object | None = None,
+        accepted_count: int = 0,
     ) -> DailyPlanView:
         existing = self.repository.get_plan(scope, profile_id, business_date)
         if existing is not None:
@@ -162,9 +163,15 @@ class DailyPlanService:
                 )
                 return self._view(scope, filled)
             return self._view(scope, existing)
-        target = effective_daily_target(
+        accepted = int(accepted_count)
+        if accepted < 0:
+            raise ValueError("accepted_count must not be negative")
+        base_target = effective_daily_target(
             sampled_limit, role=role, quiet_limit=quiet_limit
         )
+        if accepted > base_target:
+            raise ValueError("accepted_count exceeds sampled target")
+        target = base_target - accepted
         if rng is None:
             rng = random.Random()
         warning = ""
@@ -246,6 +253,11 @@ class DailyPlanService:
         except RuntimeError as exc:
             raise PoolEmptyError(str(exc)) from exc
         return self._operation(row)
+
+    def cancel_queued_for_profile(
+        self, scope: str, profile_id: int, reason: str
+    ) -> int:
+        return self.repository.cancel_queued_for_profile(scope, profile_id, reason)
 
     def expire_before(self, scope: str, business_date: str) -> int:
         return self.repository.expire_before(scope, business_date)

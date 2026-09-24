@@ -35,6 +35,11 @@ bash scripts/verify_deploy.sh
 `verify_deploy.sh` считает readiness успешным только после валидного ответа
 health с `db_ok: true`; неуспешные попытки завершаются ненулевым кодом.
 
+Для исправления роли существующего администратора используется
+`bash scripts/ensure-admin.sh`. Смена пароля — отдельная авторизованная
+операция `bash scripts/recover-admin.sh`; она не выполняется автоматически и
+отзывает ранее выданные JWT.
+
 ## Поддерживаемые границы
 
 - `maxapi-python` закреплён строго на `2.4.1`; transport и session identity

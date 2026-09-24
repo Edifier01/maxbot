@@ -113,6 +113,15 @@ class MessageLibrary:
             raise MessageValidationError("message version is unavailable")
         rows = repository.items(scope, version_id)
         items = tuple(str(item["text"]) for item in rows)
+        try:
+            expected_count = int(row["item_count"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MessageValidationError("message version item count is invalid") from exc
+        if expected_count != len(items):
+            raise MessageValidationError("message version item count mismatch")
+        item_ids = [str(item["item_id"]) for item in rows]
+        if len(set(item_ids)) != len(item_ids) or any(not item_id for item_id in item_ids):
+            raise MessageValidationError("message version item identity mismatch")
         checksum = hashlib.sha256("\n".join(items).encode("utf-8")).hexdigest()
         if checksum != str(row["checksum"]):
             raise MessageValidationError("message version checksum mismatch")

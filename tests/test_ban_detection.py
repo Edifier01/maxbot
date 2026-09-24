@@ -50,16 +50,22 @@ def test_mark_profile_failed_sets_banned(tmp_path, monkeypatch):
             """
         )
 
+    log_messages: list[str] = []
+    monkeypatch.setattr(m, "append_log", log_messages.append)
+    raw_error = "Account banned by MAX; proxy_password=fixture-private-value"
+
     with tenant_scope(tenant_id=4, role="user"):
-        assert m._mark_profile_failed(1, "Account banned by MAX", is_auth_err=False)
+        assert m._mark_profile_failed(1, raw_error, is_auth_err=False)
 
         with m._conn() as c:
             row = c.execute(
                 "SELECT status, last_error, fail_count FROM profiles WHERE id=1"
             ).fetchone()
         assert row["status"] == m.ProfileStatus.BANNED
-        assert "banned" in row["last_error"].lower()
+        assert row["last_error"] == "Аккаунт MAX заблокирован."
+        assert "fixture-private-value" not in row["last_error"]
         assert row["fail_count"] == 1
+        assert all("fixture-private-value" not in message for message in log_messages)
 
 
 def test_handle_profile_banned_stops_worker_and_auto_run(tmp_path, monkeypatch):
@@ -94,7 +100,9 @@ def test_handle_profile_banned_stops_worker_and_auto_run(tmp_path, monkeypatch):
     async def _run():
         with tenant_scope(tenant_id=9, role="user"):
             m.set_setting("auto_run", "1")
-            await m._handle_profile_banned(3, "Account banned")
+            await m._handle_profile_banned(
+                3, "Account banned; token=fixture-private-value"
+            )
 
     asyncio.run(_run())
 
@@ -106,6 +114,7 @@ def test_handle_profile_banned_stops_worker_and_auto_run(tmp_path, monkeypatch):
     assert kwargs["finish_status"] == "stopped"
     assert kwargs["tenant_id"] == 9
     assert "забанен" in kwargs["reason"].lower() or "banned" in kwargs["reason"].lower()
+    assert "fixture-private-value" not in kwargs["reason"]
 
 
 def test_send_with_retry_triggers_ban_shutdown(tmp_path, monkeypatch):
@@ -177,7 +186,7 @@ def test_send_with_retry_triggers_ban_shutdown(tmp_path, monkeypatch):
             assert ok is False
 
     asyncio.run(_run())
-    ban_handler.assert_awaited_once_with(7, "Account banned permanently")
+    ban_handler.assert_awaited_once_with(7, "Аккаунт MAX заблокирован.")
 
     with tenant_scope(tenant_id=6, role="user"):
         with m._conn() as c:

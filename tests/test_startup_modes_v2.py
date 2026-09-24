@@ -38,9 +38,19 @@ def test_required_routes_are_present_in_openapi_without_starting_services() -> N
         "/api/health",
         "/api/status",
         "/api/diagnostics/auth-attempts/{attempt_id}",
+        "/api/profiles/{profile_id}/auth-attempts/{attempt_id}/diagnostic",
         "/api/message-sets/preview",
     ):
         assert path in paths
+
+
+def test_main_ui_toasts_are_between_navigation_and_content() -> None:
+    source = (ROOT / "static/index.html").read_text(encoding="utf-8-sig")
+    toast = source.index('<div id="toast-container"')
+    main = source.index('<main id="main-content">')
+    assert toast < main
+    style = source[source.index("#toast-container {"):source.index(".toast {", source.index("#toast-container {"))]
+    assert "position: fixed" not in style
 
 
 def test_migration_runbook_is_additive_and_repeatable() -> None:

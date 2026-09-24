@@ -95,3 +95,14 @@ def init_global_db(main_module) -> None:
         # Always migrate: empty file from early _global_conn() has no tables.
         main_module.init_db()
         main_module._try_legacy_unlock()
+
+
+def init_startup_db(main_module) -> None:
+    """Initialize root startup SQLite state in the explicit global scope."""
+    if main_module._is_server_mode():
+        from app.tenant import tenant_scope
+
+        with tenant_scope(use_global_data=True, role="admin"):
+            main_module.init_db()
+        return
+    main_module.init_db()

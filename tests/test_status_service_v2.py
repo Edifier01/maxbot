@@ -59,6 +59,19 @@ def test_scope_authorization_is_checked_before_snapshot_or_subscription() -> Non
         service.get_snapshot("tenant:1", projection="cabinet", actor_scope="tenant:2")
 
 
+def test_one_hundred_status_scope_connect_disconnect_cycles_are_retired() -> None:
+    service = StatusService(lambda scope: {"scope": scope, "ok": True})
+    for index in range(100):
+        scope = f"tenant:{index}"
+        service.subscribe(scope, actor_scope=scope, role="user")
+        service.get_snapshot(scope, actor_scope=scope)
+        service.close_scope(scope)
+
+    assert service._subscribers == {}
+    assert service._snapshot_cache == {}
+    assert service._streams == {}
+
+
 def test_summary_repository_is_read_only_and_keeps_library_separate_from_plan_counts() -> None:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row

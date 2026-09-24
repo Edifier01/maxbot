@@ -56,6 +56,56 @@ def test_same_session_never_has_two_clients() -> None:
     assert len(created) == 2
 
 
+def test_shutdown_cancels_login_tasks_and_is_idempotent() -> None:
+    import main
+    from app import shutdown
+    from app.campaign_runtime import REGISTRY
+
+    async def run() -> None:
+        REGISTRY.reset_test()
+        main._login_tasks.clear()
+        main._client_manager = None
+        shutdown.reset_test()
+        stopped = asyncio.Event()
+
+        async def login_task() -> None:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        task = asyncio.create_task(login_task())
+        await asyncio.sleep(0)
+        main._login_tasks["fixture"] = task
+        await shutdown.graceful_shutdown(encrypt=False, cancel_background=False)
+        assert stopped.is_set()
+        assert main._login_tasks == {}
+        await shutdown.graceful_shutdown(encrypt=False, cancel_background=False)
+
+    asyncio.run(run())
+
+
+def test_test_mode_shutdown_does_not_leave_default_executor_pending(monkeypatch) -> None:
+    monkeypatch.setenv("MAX_TEST", "1")
+    import main
+    from app import shutdown
+    from app.campaign_runtime import REGISTRY
+
+    calls: list[str] = []
+
+    async def run() -> None:
+        REGISTRY.reset_test()
+        shutdown.reset_test()
+        main._client_manager = None
+        monkeypatch.setattr(
+            main, "_encrypt_all_sessions", lambda: calls.append("resealed")
+        )
+        await asyncio.wait_for(shutdown.graceful_shutdown(), timeout=1)
+
+    asyncio.run(run())
+    assert calls == ["resealed"]
+
+
 def test_close_failure_keeps_accepted_outcome() -> None:
     from app.services.client_manager import ClientCleanupError, ClientManager
 
@@ -73,6 +123,35 @@ def test_close_failure_keeps_accepted_outcome() -> None:
 
     async def _ready(client: _Client) -> _Client:
         return client
+
+    asyncio.run(run())
+
+
+def test_deleting_profile_rejects_new_client_acquisition() -> None:
+    from app.services.client_manager import ClientCleanupError, ClientManager
+
+    async def run() -> None:
+        manager = ClientManager(delete_timeout=2)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def cancel_and_wait() -> None:
+            entered.set()
+            await release.wait()
+
+        deleting = asyncio.create_task(
+            manager.delete_profile_runtime(
+                "local",
+                7,
+                cancel_and_wait=cancel_and_wait,
+                remove_runtime=lambda: None,
+            )
+        )
+        await entered.wait()
+        with pytest.raises(ClientCleanupError, match="profile_deletion_in_progress"):
+            await manager.acquire("local", 7, {}, "send", lambda: object())
+        release.set()
+        await deleting
 
     asyncio.run(run())
 

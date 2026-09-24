@@ -472,6 +472,35 @@ def admin_exists() -> bool:
         return cur.fetchone() is not None
 
 
+def get_admin_by_email(email: str) -> dict[str, Any] | None:
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT id, email, role FROM users "
+            "WHERE lower(email) = lower(%s) AND role = 'admin'",
+            (email.strip(),),
+        )
+        return cur.fetchone()
+
+
+def update_admin_password(email: str, password_hash: str) -> int:
+    """Replace one admin password and return its stable user id."""
+    with _cursor(transaction=True) as cur:
+        cur.execute(
+            "SELECT id FROM users "
+            "WHERE lower(email) = lower(%s) AND role = 'admin' FOR UPDATE",
+            (email.strip(),),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("admin account not found")
+        user_id = int(row["id"])
+        cur.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s",
+            (password_hash, user_id),
+        )
+    return user_id
+
+
 def get_tenant_user(tenant_id: int) -> dict[str, Any] | None:
     with _cursor() as cur:
         cur.execute(

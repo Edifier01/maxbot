@@ -8,6 +8,7 @@ never copied into an ErrorInfo or returned to a caller.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import re
 from typing import Final
 
@@ -34,6 +35,12 @@ class _ErrorSpec:
     retryable: bool = False
 
 
+class _StoredCodeError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 # Keep the catalogue finite and source-independent.  Consumer tasks can add
 # UI-specific wording without ever exposing adapter exception strings.
 _CATALOG: Final[dict[str, _ErrorSpec]] = {
@@ -49,7 +56,10 @@ _CATALOG: Final[dict[str, _ErrorSpec]] = {
     "DESTINATION_REVIEW_REQUIRED": _ErrorSpec("Требуется проверить назначение.", "REVIEW_DESTINATION"),
     "MEMBERSHIP_REVIEW_REQUIRED": _ErrorSpec("Требуется проверить членство.", "REVIEW_MEMBERSHIP"),
     "CONSENT_REVOKED": _ErrorSpec("Согласие отозвано.", "STOP_OPERATION"),
-    "ACCOUNT_AUTOMATION_CONFLICT": _ErrorSpec("Для аккаунта уже выполняется другая операция.", "WAIT_OPERATION"),
+    "ACCOUNT_AUTOMATION_CONFLICT": _ErrorSpec(
+        "Аккаунт MAX уже используется в другой области автоматизации.",
+        "REVIEW_CONFLICT",
+    ),
     "ROUTE_MISSING": _ErrorSpec("Для аккаунта не задан маршрут.", "CONFIGURE_ROUTE"),
     "ROUTE_CONFLICT": _ErrorSpec("Маршрут аккаунта конфликтует с текущими данными.", "REVIEW_ROUTE"),
     "ROUTE_DISABLED": _ErrorSpec("Маршрут аккаунта отключён.", "ENABLE_ROUTE"),
@@ -107,12 +117,34 @@ _CATALOG: Final[dict[str, _ErrorSpec]] = {
 
 _PROXY_AUTH_RE = re.compile(r"auth|credential|unauthori[sz]ed|407|login|password", re.I)
 _PROXY_RESPONSE_RE = re.compile(r"response|status|protocol|http", re.I)
-_MAX_BAN_RE = re.compile(r"account\s+(?:is\s+)?(?:ban|block)|banned|blocked|suspend|заблок|бан", re.I)
+_MAX_BAN_RE = re.compile(
+    r"account\s+(?:is\s+)?(?:ban|block)|banned|blocked|suspend|restrict|"
+    r"заблок|бан|ограничен",
+    re.I,
+)
 _MAX_REVOKED_RE = re.compile(r"revok|invalid\s+session|session\s+expired|отозван|ист[её]к", re.I)
 _MAX_RATE_RE = re.compile(r"flood|rate|too\s+many|wait\s+\d+|лимит|частот", re.I)
 _TIMEOUT_RE = re.compile(r"timeout|timed\s+out|истекло\s+время", re.I)
 _SECRET_WORD_RE = re.compile(r"password|passwd|otp|token|secret|cookie", re.I)
+_LOG_SECRET_RE = re.compile(
+    r"(?:password|passwd|passphrase|otp|secret|token|cookie|authorization|"
+    r"api[_-]?key|access[_-]?key)\s*[:=]\s*|"
+    r"\bbearer\s+[A-Za-z0-9._~+/=-]{8,}|"
+    r"(?:https?|socks5?)://[^/@\s:]+:[^/@\s]+@|"
+    r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|"
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+    re.I,
+)
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_RETRY_AFTER_MAX_LEN = 40
+
+
+def sanitize_log_line(value: str) -> str:
+    """Hide an entire diagnostic line when it contains credential material."""
+    candidate = str(value or "")
+    if _LOG_SECRET_RE.search(candidate):
+        return "Подробности диагностической записи скрыты."
+    return candidate
 
 
 def _text(exc: BaseException) -> str:
@@ -125,6 +157,22 @@ def _safe_identifier(value: str | None) -> str | None:
         return None
     candidate = str(value).strip()
     if not _IDENTIFIER_RE.fullmatch(candidate) or _SECRET_WORD_RE.search(candidate):
+        return None
+    return candidate
+
+
+def _safe_retry_after(value: str | None) -> str | None:
+    """Keep only a bounded, timezone-aware ISO-8601 deadline."""
+    if not value:
+        return None
+    candidate = str(value).strip()
+    if len(candidate) > _RETRY_AFTER_MAX_LEN:
+        return None
+    try:
+        parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
         return None
     return candidate
 
@@ -182,7 +230,12 @@ def classify_exception(
         normalized_source = "unknown"
     normalized_stage = stage.strip().lower()[:64] if stage else "unknown"
     normalized_outcome = outcome.strip().lower() if outcome else "rejected"
-    code = _classify_code(normalized_source, normalized_stage, _text(exc), normalized_outcome)
+    explicit_code = str(getattr(exc, "code", "") or "")
+    code = (
+        explicit_code
+        if explicit_code in _CATALOG
+        else _classify_code(normalized_source, normalized_stage, _text(exc), normalized_outcome)
+    )
     spec = _spec(code)
     # A mutating response that was lost is never an automatic replay signal.
     retryable = spec.retryable and not (
@@ -195,13 +248,28 @@ def classify_exception(
         stage=normalized_stage,
         safe_message=spec.safe_message,
         retryable=retryable,
-        retry_after_at=retry_after_at if code == "MAX_RATE_LIMIT" else None,
+        retry_after_at=_safe_retry_after(retry_after_at) if code == "MAX_RATE_LIMIT" else None,
         session_preserved=code not in {"MAX_SESSION_REVOKED"},
         request_id=_safe_identifier(request_id),
         attempt_id=_safe_identifier(attempt_id),
         operation_id=_safe_identifier(operation_id),
         recommended_action=spec.recommended_action,
     )
+
+
+def classify_persisted_error(
+    value: str,
+    *,
+    source: str,
+    stage: str,
+    outcome: str = "rejected",
+) -> ErrorInfo:
+    """Rebuild safe metadata from a stored code or untrusted legacy text."""
+    candidate = str(value or "")[:1000]
+    error: BaseException = (
+        _StoredCodeError(candidate) if candidate in _CATALOG else RuntimeError(candidate)
+    )
+    return classify_exception(error, source=source, stage=stage, outcome=outcome)
 
 
 def redact_error(info: ErrorInfo) -> ErrorInfo:
@@ -213,7 +281,7 @@ def redact_error(info: ErrorInfo) -> ErrorInfo:
         stage=info.stage[:64] if info.stage else "unknown",
         safe_message=spec.safe_message,
         retryable=bool(info.retryable) and info.code != "SEND_OUTCOME_UNKNOWN",
-        retry_after_at=info.retry_after_at if info.code == "MAX_RATE_LIMIT" else None,
+        retry_after_at=_safe_retry_after(info.retry_after_at) if info.code == "MAX_RATE_LIMIT" else None,
         session_preserved=bool(info.session_preserved),
         request_id=_safe_identifier(info.request_id),
         attempt_id=_safe_identifier(info.attempt_id),

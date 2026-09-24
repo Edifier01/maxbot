@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import shutil
-
 from fastapi import APIRouter, HTTPException
 
-from app.routes_models import BulkProfilesIn, GroupIn, GroupPatchIn, ProfileIn
+from app.routes_models import (
+    BulkProfilesIn,
+    DestinationVerifyIn,
+    GroupIn,
+    GroupPatchIn,
+    ProfileIn,
+)
 from app.runtime import main as m
+from app.services.errors import classify_exception
 from app.tenant import is_cabinet_user, redact_cabinet_row
 
 router = APIRouter(tags=["groups"])
@@ -25,11 +28,7 @@ def _phone_or_400(raw: str) -> str:
 
 
 def _delete_orphan_profile(c, profile_id: int) -> bool:
-    """Delete a profile only when no group still references it.
-
-    This runs in the caller's SQLite transaction so group membership and
-    profile cleanup either commit together or roll back together.
-    """
+    """Finalize an orphan profile only after its runtime has been drained."""
     linked = c.execute(
         "SELECT 1 FROM group_profiles WHERE profile_id=? LIMIT 1", (profile_id,)
     ).fetchone()
@@ -40,17 +39,62 @@ def _delete_orphan_profile(c, profile_id: int) -> bool:
     return True
 
 
+def _unselect_removed_work_group(c, profile_id: int, group_id: int) -> bool:
+    """Fence a selected work group when its legacy association is removed."""
+    table = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='profile_automation_scope'"
+    ).fetchone()
+    if table is None:
+        return False
+    row = c.execute(
+        "SELECT automation_group_id FROM profile_automation_scope WHERE profile_id=?",
+        (int(profile_id),),
+    ).fetchone()
+    if row is None or row["automation_group_id"] != int(group_id):
+        return False
+    c.execute(
+        "UPDATE profile_automation_scope SET automation_group_id=NULL, "
+        "consent_state='unselected', revision=revision+1 WHERE profile_id=?",
+        (int(profile_id),),
+    )
+    return True
+
+
+def _cancel_queued_profile_slots(
+    c, profile_id: int, *, group_id: int | None, reason: str
+) -> int:
+    """Cancel only queued daily slots pinned to a removed work association."""
+    tables = {
+        str(row["name"])
+        for row in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('profile_daily_plans', 'profile_message_slots')"
+        ).fetchall()
+    }
+    if tables != {"profile_daily_plans", "profile_message_slots"}:
+        return 0
+    group_clause = "" if group_id is None else " AND work_group_id=?"
+    params: list[object] = [str(reason)[:500], int(profile_id)]
+    if group_id is not None:
+        params.append(int(group_id))
+    cursor = c.execute(
+        "UPDATE profile_message_slots SET status='cancelled', "
+        "failure_reason=?, updated_at=datetime('now') "
+        "WHERE status='queued' AND plan_id IN ("
+        "SELECT plan_id FROM profile_daily_plans "
+        "WHERE profile_id=? AND status='active'" + group_clause + ")",
+        params,
+    )
+    return int(cursor.rowcount or 0)
+
+
 async def _cleanup_profile_runtime(profile_id: int) -> None:
-    """Cancel and await login before removing the session runtime directory."""
-    session_key = m._auth_session_key(profile_id)
-    task = m._login_tasks.pop(session_key, None)
-    if task and not task.done():
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-    m._auth_sessions.pop(session_key, None)
-    session_dir = m._resolve_data_dir() / "sessions" / str(profile_id)
-    shutil.rmtree(session_dir, ignore_errors=True)
+    """Drain all profile operations before removing the session runtime."""
+    try:
+        await m._delete_profile_runtime(profile_id)
+    except Exception as exc:
+        raise HTTPException(409, "PROFILE_RUNTIME_CLEANUP_FAILED") from exc
 
 
 @router.get("/api/groups")
@@ -177,7 +221,9 @@ async def patch_group(group_id: int, body: GroupPatchIn):
             if not link:
                 raise HTTPException(400, "Нельзя очистить пригласительную ссылку группы")
             c.execute(
-                "UPDATE groups SET invite_link=? WHERE id=?",
+                "UPDATE groups SET invite_link=?, max_chat_id='', "
+                "destination_verified=0, destination_revision=destination_revision+1 "
+                "WHERE id=?",
                 (link, group_id),
             )
         if "proxy" in data:
@@ -193,6 +239,38 @@ async def patch_group(group_id: int, body: GroupPatchIn):
             )
         row = c.execute("SELECT * FROM groups WHERE id=?", (group_id,)).fetchone()
     return redact_cabinet_row(dict(row))
+
+
+@router.post("/api/groups/{group_id}/destination/verify")
+async def verify_group_destination(group_id: int, body: DestinationVerifyIn):
+    """Persist an explicit owner confirmation for the current link revision."""
+    m._require_worker_idle()
+    from app.repositories.automation_scope import (
+        AutomationScopeError,
+        AutomationScopeRepository,
+    )
+
+    with m._conn() as c:
+        row = c.execute(
+            "SELECT invite_link FROM groups WHERE id=?", (int(group_id),)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "Группа не найдена")
+        if not str(row["invite_link"] or "").strip():
+            raise HTTPException(409, "DESTINATION_REVIEW_REQUIRED")
+        try:
+            AutomationScopeRepository(c).verify_destination(
+                int(group_id),
+                body.chat_id,
+                expected_revision=body.revision,
+            )
+        except AutomationScopeError as exc:
+            status = 404 if exc.code == "OBJECT_NOT_FOUND" else 409
+            raise HTTPException(status, exc.code) from exc
+        confirmed = c.execute(
+            "SELECT * FROM groups WHERE id=?", (int(group_id),)
+        ).fetchone()
+    return redact_cabinet_row(dict(confirmed))
 
 
 @router.post("/api/groups/{group_id}/profiles")
@@ -310,7 +388,19 @@ async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
                 )
                 added.append({"id": pid, "phone": phone})
             except Exception as e:
-                errors.append({"phone": getattr(item, "phone", "?"), "error": str(e)})
+                info = classify_exception(
+                    e, source="unknown", stage="profile_import", outcome="rejected"
+                )
+                errors.append(
+                    {
+                        "phone": getattr(item, "phone", "?"),
+                        "error": info.safe_message,
+                        "code": info.code,
+                        "source": info.source,
+                        "stage": info.stage,
+                        "recommended_action": info.recommended_action,
+                    }
+                )
 
     for a in added:
         m._ensure_auth_session(a["id"])
@@ -330,7 +420,7 @@ async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
 async def delete_group(group_id: int):
 
     m._require_worker_idle()
-    deleted_profiles: list[int] = []
+    orphan_profiles: list[int] = []
     with m._conn() as c:
         if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
             raise HTTPException(404, "Группа не найдена")
@@ -340,11 +430,35 @@ async def delete_group(group_id: int):
                 "SELECT profile_id FROM group_profiles WHERE group_id=?", (group_id,)
             ).fetchall()
         ]
+        selected_profiles = {
+            int(pid)
+            for pid in pids
+            if _unselect_removed_work_group(c, int(pid), int(group_id))
+        }
+        for pid in pids:
+            _cancel_queued_profile_slots(
+                c,
+                int(pid),
+                group_id=None if int(pid) in selected_profiles else int(group_id),
+                reason="WORK_GROUP_UNLINKED",
+            )
         c.execute("DELETE FROM group_profiles WHERE group_id=?", (group_id,))
         c.execute("DELETE FROM groups WHERE id=?", (group_id,))
-        deleted_profiles = [pid for pid in pids if _delete_orphan_profile(c, pid)]
-    for pid in deleted_profiles:
+        orphan_profiles = [
+            pid
+            for pid in pids
+            if not c.execute(
+                "SELECT 1 FROM group_profiles WHERE profile_id=? LIMIT 1", (pid,)
+            ).fetchone()
+        ]
+    for pid in orphan_profiles:
         await _cleanup_profile_runtime(pid)
+        try:
+            m._release_automation_identity(pid)
+        except Exception as exc:
+            raise HTTPException(409, "SESSION_DELETE_FAILED") from exc
+        with m._conn() as c:
+            _delete_orphan_profile(c, pid)
     m.append_log(f"Группа #{group_id} удалена")
     return {"ok": True}
 
@@ -353,7 +467,7 @@ async def delete_group(group_id: int):
 async def remove_group_profile(group_id: int, profile_id: int):
 
     m._require_worker_idle()
-    deleted_profile = False
+    orphan_profile = False
     with m._conn() as c:
         row = c.execute(
             "SELECT 1 FROM group_profiles WHERE group_id=? AND profile_id=?",
@@ -361,12 +475,27 @@ async def remove_group_profile(group_id: int, profile_id: int):
         ).fetchone()
         if not row:
             raise HTTPException(404, "Профиль не в этой группе")
+        selected_removed = _unselect_removed_work_group(c, profile_id, group_id)
+        _cancel_queued_profile_slots(
+            c,
+            profile_id,
+            group_id=None if selected_removed else group_id,
+            reason="WORK_GROUP_UNLINKED",
+        )
         c.execute(
             "DELETE FROM group_profiles WHERE group_id=? AND profile_id=?",
             (group_id, profile_id),
         )
-        deleted_profile = _delete_orphan_profile(c, profile_id)
-    if deleted_profile:
+        orphan_profile = not c.execute(
+            "SELECT 1 FROM group_profiles WHERE profile_id=? LIMIT 1", (profile_id,)
+        ).fetchone()
+    if orphan_profile:
         await _cleanup_profile_runtime(profile_id)
+        try:
+            m._release_automation_identity(profile_id)
+        except Exception as exc:
+            raise HTTPException(409, "SESSION_DELETE_FAILED") from exc
+        with m._conn() as c:
+            _delete_orphan_profile(c, profile_id)
     m.append_log(f"Профиль #{profile_id} удалён из группы #{group_id}")
     return {"ok": True}

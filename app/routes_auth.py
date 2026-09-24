@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from starlette.responses import JSONResponse
@@ -71,16 +73,16 @@ def _auth_json_response(
 async def login(body: LoginIn, request: Request):
     if not is_server_mode():
         raise HTTPException(400, "Вход доступен только на сервере")
-    user = auth.authenticate(body.login, body.password)
+    user = await asyncio.to_thread(auth.authenticate, body.login, body.password)
     if not user:
         raise HTTPException(401, "Неверный логин или пароль")
 
     if user.get("tenant_id"):
         from app.tenant_init import init_tenant_db
 
-        init_tenant_db(app_main, user["tenant_id"])
+        await asyncio.to_thread(init_tenant_db, app_main, user["tenant_id"])
 
-    data, token = _token_response(user)
+    data, token = await asyncio.to_thread(_token_response, user)
     return _auth_json_response(data, request, remember_me=body.remember_me, token=token)
 
 
@@ -97,17 +99,17 @@ async def restore_session(request: Request):
         raise HTTPException(401, "Сессия истекла") from e
     if payload.get("imp"):
         raise HTTPException(401, "Сессия недоступна")
-    session_err = auth.validate_token_session(payload)
+    session_err = await asyncio.to_thread(auth.validate_token_session, payload)
     if session_err:
         raise HTTPException(401, session_err)
-    user = db_pg.get_user_by_id(int(payload["sub"]))
+    user = await asyncio.to_thread(db_pg.get_user_by_id, int(payload["sub"]))
     if not user:
         raise HTTPException(401, "Пользователь не найден")
     if user.get("tenant_id"):
         from app.tenant_init import init_tenant_db
 
-        init_tenant_db(app_main, user["tenant_id"])
-    return _session_payload(user)
+        await asyncio.to_thread(init_tenant_db, app_main, user["tenant_id"])
+    return await asyncio.to_thread(_session_payload, user)
 
 
 def _user_cookie_token(request: Request) -> str:
@@ -127,10 +129,10 @@ async def exit_impersonation(request: Request):
         raise HTTPException(401, "Сессия истекла") from e
     if payload.get("imp"):
         raise HTTPException(401, "Сессия недоступна")
-    session_err = auth.validate_token_session(payload)
+    session_err = await asyncio.to_thread(auth.validate_token_session, payload)
     if session_err:
         raise HTTPException(401, session_err)
-    user = db_pg.get_user_by_id(int(payload["sub"]))
+    user = await asyncio.to_thread(db_pg.get_user_by_id, int(payload["sub"]))
     if not user:
         raise HTTPException(401, "Пользователь не найден")
     impersonation_token = _user_cookie_token(request)
@@ -142,9 +144,11 @@ async def exit_impersonation(request: Request):
         if impersonation_payload and impersonation_payload.get("imp"):
             jti = impersonation_payload.get("jti")
             if jti:
-                db_pg.revoke_token(jti, auth.token_expires_at(impersonation_payload))
+                await asyncio.to_thread(
+                    db_pg.revoke_token, jti, auth.token_expires_at(impersonation_payload)
+                )
                 auth.invalidate_session_cache(jti)
-    data = _session_payload(user)
+    data = await asyncio.to_thread(_session_payload, user)
     response = JSONResponse(content=data)
     set_auth_cookie(response, admin_token, remember_me=False, request=request)
     clear_admin_backup_cookie(response, request)
@@ -167,7 +171,7 @@ async def logout(request: Request):
         raise HTTPException(401, "Сессия истекла") from e
     jti = payload.get("jti")
     if jti:
-        db_pg.revoke_token(jti, auth.token_expires_at(payload))
+        await asyncio.to_thread(db_pg.revoke_token, jti, auth.token_expires_at(payload))
         auth.invalidate_session_cache(jti)
     response = JSONResponse(content={"ok": True})
     clear_auth_cookie(response, request)

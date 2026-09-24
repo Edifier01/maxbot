@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -361,6 +362,31 @@ def test_health_valid_cookie_or_service_token_gets_extras(monkeypatch):
             assert "worker_running" not in junk_cookie
 
     asyncio.run(run())
+
+
+def test_health_cookie_session_check_runs_off_event_loop(monkeypatch):
+    from app.routes_monitor import health
+
+    _patch_health_runtime(monkeypatch)
+    payload = {"sub": "1", "role": "user", "tenant_id": 2, "jti": "j", "tv": 0}
+    loop_thread = threading.get_ident()
+    validator_threads = []
+
+    def validate(_payload):
+        validator_threads.append(threading.get_ident())
+        return None
+
+    async def run():
+        with patch("app.db_pg.ping", return_value=True), patch(
+            "app.db_pg.ping_latency_ms", return_value=1.0
+        ), patch("app.db_pg.count_subscriptions_expiring", return_value=0), patch(
+            "app.auth.decode_token", return_value=payload
+        ), patch("app.auth.cached_validate_token_session", side_effect=validate):
+            body = await health(_health_request(cookie="good-jwt"))
+        assert body["worker_running"] is True
+
+    asyncio.run(run())
+    assert validator_threads and validator_threads[0] != loop_thread
 
 
 def test_require_production_secrets_rejects_change_me(monkeypatch):

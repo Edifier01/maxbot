@@ -16,7 +16,12 @@ from app.runtime import main as m
 router = APIRouter(tags=["monitor"])
 
 _WS_AUTH_TIMEOUT = 5.0
-_WS_REVALIDATE_EVERY = 30
+_WS_CONNECTIONS = asyncio.Semaphore(getattr(m, "MAX_WS_CONNECTIONS", 100))
+
+
+def _ws_message_limit() -> int:
+    value = getattr(m, "MAX_WS_MESSAGE_BYTES", 64 * 1024)
+    return value if isinstance(value, int) and value > 0 else 64 * 1024
 
 
 def _ws_origin_allowed(ws: WebSocket) -> bool:
@@ -56,6 +61,8 @@ async def _authenticate_ws(ws: WebSocket) -> bool:
         raw = await asyncio.wait_for(ws.receive_text(), timeout=_WS_AUTH_TIMEOUT)
     except (TimeoutError, asyncio.TimeoutError):
         return False
+    if len(raw.encode("utf-8")) > _ws_message_limit():
+        return False
 
     try:
         data = json.loads(raw)
@@ -72,7 +79,7 @@ async def _authenticate_ws(ws: WebSocket) -> bool:
             payload = decode_token(token)
         except jwt.PyJWTError:
             return False
-        if cached_validate_token_session(payload):
+        if await asyncio.to_thread(cached_validate_token_session, payload):
             return False
         user_id = int(payload["sub"])
         tenant_id = payload.get("tenant_id")
@@ -106,6 +113,10 @@ def _ws_cookie_session_ok(ws: WebSocket) -> bool:
     return cached_validate_token_session(payload) is None
 
 
+async def _ws_cookie_session_ok_async(ws: WebSocket) -> bool:
+    return await asyncio.to_thread(_ws_cookie_session_ok, ws)
+
+
 def _health_public(db_ok: bool) -> dict:
     vs = m.vault_status()
     return {
@@ -116,7 +127,7 @@ def _health_public(db_ok: bool) -> dict:
     }
 
 
-def _health_authorized(request: Request) -> bool:
+async def _health_authorized(request: Request) -> bool:
     from app.auth import cached_validate_token_session, decode_token
     from app.config import INTERNAL_SERVICE_TOKEN
 
@@ -132,7 +143,7 @@ def _health_authorized(request: Request) -> bool:
         payload = decode_token(cookie)
     except jwt.PyJWTError:
         return False
-    return cached_validate_token_session(payload) is None
+    return await asyncio.to_thread(cached_validate_token_session, payload) is None
 
 
 @router.get("/api/health")
@@ -152,7 +163,7 @@ async def health(request: Request):
     except Exception:
         db_ok = False
 
-    if not _health_authorized(request):
+    if not await _health_authorized(request):
         return _health_public(db_ok)
 
     started = getattr(m, "_app_started_at", None)
@@ -256,7 +267,7 @@ async def prometheus_metrics():
 @router.get("/api/status")
 async def status():
 
-    return m._build_status_payload()
+    return await asyncio.to_thread(m._build_status_payload)
 
 
 @router.websocket("/ws/status")
@@ -266,27 +277,31 @@ async def ws_status(ws: WebSocket):
     from app.config import is_server_mode
     from app.tenant import clear_context
 
-    if not _ws_origin_allowed(ws):
-        await ws.close(code=4403)
-        return
-    await ws.accept()
-    if not await _authenticate_ws(ws):
-        await ws.close(code=4401)
-        return
-    ticks = 0
     try:
+        await asyncio.wait_for(_WS_CONNECTIONS.acquire(), timeout=0.05)
+    except (TimeoutError, asyncio.TimeoutError):
+        await ws.close(code=4429)
+        return
+    try:
+        if not _ws_origin_allowed(ws):
+            await ws.close(code=4403)
+            return
+        await ws.accept()
+        if not await _authenticate_ws(ws):
+            await ws.close(code=4401)
+            return
         while not m.RUNTIME.shutting_down:
-            await ws.send_json(m._build_status_payload())
-            await asyncio.sleep(1.0)
-            ticks += 1
-            if ticks % _WS_REVALIDATE_EVERY == 0 and not _ws_cookie_session_ok(ws):
+            if not await _ws_cookie_session_ok_async(ws):
                 await ws.close(code=4401)
                 break
+            await ws.send_json(await asyncio.to_thread(m._build_status_payload))
+            await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         pass
     except Exception:
         with contextlib.suppress(Exception):
             await ws.close()
     finally:
+        _WS_CONNECTIONS.release()
         if is_server_mode():
             clear_context()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -57,16 +59,32 @@ def _read_version(connection, scope: str, version_id: str | None = None):
     if row is None:
         raise HTTPException(404, "message version is unavailable")
     items = connection.execute(
-        "SELECT item_id, text FROM message_set_items WHERE scope=? AND version_id=? "
+        "SELECT item_id, ordinal, text FROM message_set_items WHERE scope=? AND version_id=? "
         "ORDER BY ordinal",
         (scope, row["version_id"]),
     ).fetchall()
+    expected_count = int(row["item_count"])
+    item_ids = [str(item["item_id"]) for item in items]
+    ordinals = [int(item["ordinal"]) for item in items]
+    texts = [str(item["text"]) for item in items]
+    checksum = hashlib.sha256("\n".join(texts).encode("utf-8")).hexdigest()
+    if (
+        expected_count != len(items)
+        or ordinals != list(range(len(items)))
+        or len(set(item_ids)) != len(item_ids)
+        or any(not item_id for item_id in item_ids)
+        or checksum != str(row["checksum"])
+    ):
+        raise HTTPException(409, "message version integrity check failed")
     return {
         "scope": scope,
         "version_id": row["version_id"],
         "checksum": row["checksum"],
         "library_count": int(row["item_count"]),
-        "items": [dict(item) for item in items],
+        "items": [
+            {"item_id": str(item["item_id"]), "text": str(item["text"])}
+            for item in items
+        ],
     }
 
 

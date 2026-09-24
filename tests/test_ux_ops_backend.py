@@ -11,7 +11,11 @@ from datetime import date
 import pytest
 
 from app.tenant import tenant_scope
-from app.tenant_init import ensure_tenant_data, init_global_db, init_tenant_db
+from app.tenant_init import (
+    ensure_tenant_data,
+    init_global_db,
+    init_tenant_db,
+)
 
 
 def _setup_local(tmp_path, monkeypatch):
@@ -43,6 +47,32 @@ def _setup_server(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "ROOT", tmp_path)
     m._refresh_data_paths()
     return m
+
+
+def test_global_sqlite_migrates_with_postgres_primary_backend(tmp_path, monkeypatch):
+    m = _setup_server(tmp_path, monkeypatch)
+    monkeypatch.setattr(m, "DB_BACKEND", "postgres")
+
+    init_global_db(m)
+    import app.tenant_init as tenant_init
+
+    startup_init = getattr(tenant_init, "init_startup_db", None)
+    assert callable(startup_init)
+    startup_init(m)
+
+    with tenant_scope(use_global_data=True, role="admin"):
+        with m._conn() as connection:
+            tables = {
+                row["name"]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+    assert {"settings", "queue_state"} <= tables
+
+    with tenant_scope(tenant_id=11, role="user"):
+        with pytest.raises(RuntimeError, match="runtime SQLite"):
+            m._conn()
 
 
 def test_patch_is_active_and_campaign_requires_active_groups(tmp_path, monkeypatch):
@@ -204,7 +234,10 @@ def test_message_pool_reset_reports_failed_tenant_ids(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match=r"\b2\b"):
         m.save_messages_file(b"one\ntwo\n")
-    assert m.load_message_pool() == ["one", "two"]
+    # A failed tenant reset is fail-closed: the global pool and every tenant
+    # queue remain on the previous checkpoint instead of reporting a partial
+    # publication as success.
+    assert m.load_message_pool() == []
     assert not (m.ROOT / "data" / "global" / "messages" / "active.txt").exists()
 
 
@@ -253,3 +286,77 @@ def test_send_day_and_dashboard_use_utc_plus_three(tmp_path, monkeypatch):
     assert body["sent_today"] == 1
     log = asyncio.run(get_send_log())
     assert log["items"][0]["sent_at"] == "2026-08-26 00:30:00"
+
+
+def test_dashboard_requires_explicit_group_for_ambiguous_profile(tmp_path, monkeypatch):
+    m = _setup_local(tmp_path, monkeypatch)
+    with m._conn() as c:
+        profile_id = c.execute(
+            "INSERT INTO profiles (phone, status) VALUES (?, 'active')",
+            ("+79000000003",),
+        ).lastrowid
+        first_group = c.execute(
+            "INSERT INTO groups (name, is_active) VALUES ('first', 1)"
+        ).lastrowid
+        second_group = c.execute(
+            "INSERT INTO groups (name, is_active) VALUES ('second', 1)"
+        ).lastrowid
+        for group_id in (first_group, second_group):
+            c.execute(
+                "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+                "VALUES (?, ?, 1)",
+                (group_id, profile_id),
+            )
+
+    from app.repositories.automation_scope import AutomationScopeRepository
+    from app.routes_dashboard import dashboard
+
+    ambiguous = asyncio.run(dashboard())["items"][-1]
+    assert ambiguous["linked_group_count"] == 2
+    assert ambiguous["primary_group_id"] is None
+    assert ambiguous["automation_group_id"] is None
+
+    with m._conn() as c:
+        AutomationScopeRepository(c).select_work_group(profile_id, second_group)
+
+    selected = asyncio.run(dashboard())["items"][-1]
+    assert selected["linked_group_count"] == 2
+    assert selected["automation_group_id"] == second_group
+    assert selected["primary_group_id"] == second_group
+
+    with m._conn() as c:
+        AutomationScopeRepository(c).unlink_work_group(profile_id)
+
+    unselected = asyncio.run(dashboard())["items"][-1]
+    assert unselected["primary_group_id"] is None
+    assert unselected["automation_scope_state"] == "unselected"
+
+
+def test_send_history_keeps_archived_group_rows(tmp_path, monkeypatch):
+    """An archived group remains visible in its authorized send history."""
+    m = _setup_local(tmp_path, monkeypatch)
+    with m._conn() as c:
+        profile_id = c.execute(
+            "INSERT INTO profiles (phone, status) VALUES (?, 'active')",
+            ("+79000000002",),
+        ).lastrowid
+        group_id = c.execute(
+            "INSERT INTO groups (name, is_active) VALUES ('archived', 0)"
+        ).lastrowid
+        c.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (?, ?, 1)",
+            (group_id, profile_id),
+        )
+        c.execute(
+            "INSERT INTO send_log (profile_id, group_id, message_idx, status, error) "
+            "VALUES (?, ?, 0, 'sent', '')",
+            (profile_id, group_id),
+        )
+
+    from app.routes_dashboard import get_send_log
+
+    log = asyncio.run(get_send_log())
+    assert log["total"] == 1
+    assert log["items"][0]["group_id"] == group_id
+    assert log["items"][0]["group_name"] == "archived"

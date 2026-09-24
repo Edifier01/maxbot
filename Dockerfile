@@ -1,6 +1,6 @@
 # Build context: project root (docker-compose: context .)
 # Digest обновлять осознанно после CI smoke.
-FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36 AS builder
+FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libffi-dev \
@@ -10,12 +10,13 @@ COPY requirements.lock requirements-server.lock ./
 RUN pip wheel --no-cache-dir --wheel-dir /wheels \
     -r requirements.lock -r requirements-server.lock
 
-FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36 AS runtime
+FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9 AS runtime
 
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/* \
+    && python -m pip uninstall --yes pip \
     && rm -rf /wheels \
     && groupadd --gid 10001 maxsender \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin maxsender \

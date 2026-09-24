@@ -93,6 +93,11 @@ def _db_path() -> Path:
 def _conn() -> sqlite3.Connection:
     global _db_conn
     m = _main()
+    if m._is_server_mode():
+        from app.tenant import use_global_data
+
+        if use_global_data():
+            return _global_conn()
     if m.DB_BACKEND == "postgres":
         raise RuntimeError(
             "DATABASE_URL указывает на PostgreSQL, но runtime SQLite. "
@@ -188,6 +193,29 @@ def init_db() -> None:
                 new_value TEXT,
                 changed_at TEXT DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS policy_versions (
+                version_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_key TEXT NOT NULL,
+                source_revision INTEGER,
+                values_json TEXT NOT NULL,
+                actor TEXT DEFAULT '',
+                effective_rule TEXT NOT NULL DEFAULT 'next_approved_boundary',
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS policy_scope_state (
+                scope_key TEXT PRIMARY KEY,
+                desired_revision INTEGER NOT NULL DEFAULT 0,
+                applied_revision INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS policy_apply_results (
+                version_id INTEGER NOT NULL,
+                tenant_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                safe_error TEXT DEFAULT '',
+                applied_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (version_id, tenant_id)
+            );
             CREATE TABLE IF NOT EXISTS campaigns (
                 id INTEGER PRIMARY KEY,
                 started_at TEXT,
@@ -252,6 +280,18 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
     if "fail_count" not in cols_p:
         c.execute("ALTER TABLE profiles ADD COLUMN fail_count INTEGER DEFAULT 0")
     cols_g = _table_columns(c, "groups")
+    if "destination_revision" not in cols_g:
+        c.execute(
+            "ALTER TABLE groups ADD COLUMN destination_revision INTEGER NOT NULL DEFAULT 0"
+        )
+    if "destination_verified" not in cols_g:
+        c.execute(
+            "ALTER TABLE groups ADD COLUMN destination_verified INTEGER NOT NULL DEFAULT 0"
+        )
+        c.execute(
+            "UPDATE groups SET destination_verified=1 "
+            "WHERE TRIM(COALESCE(max_chat_id, '')) != ''"
+        )
     if "proxy" not in cols_g:
         c.execute("ALTER TABLE groups ADD COLUMN proxy TEXT DEFAULT ''")
         groups = c.execute("SELECT id FROM groups").fetchall()
@@ -305,10 +345,16 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
     from app.repositories.operations import OperationRepository
     from app.repositories.daily_plans import DailyPlanRepository
     from app.repositories.message_sets import MessageSetRepository
+    from app.repositories.profile_auth import AuthAttemptRepository
+    from app.repositories.automation_scope import AutomationScopeRepository
 
     OperationRepository.ensure_schema(c)
     DailyPlanRepository.ensure_schema(c)
     MessageSetRepository.ensure_schema(c)
+    AuthAttemptRepository.ensure_schema(c)
+    scope_repository = AutomationScopeRepository(c)
+    scope_repository.ensure_schema()
+    scope_repository.migrate_unambiguous_legacy_scopes()
     _install_integrity_triggers(c)
 
 

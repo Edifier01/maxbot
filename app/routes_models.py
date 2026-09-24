@@ -34,7 +34,43 @@ class ProfilePatchIn(BaseModel):
 
 
 class CodeIn(BaseModel):
-    code: str
+    code: str = Field(max_length=1024)
+    attempt_id: str | None = Field(default=None, max_length=128)
+    revision: int | None = Field(default=None, ge=0)
+    request_id: str | None = Field(default=None, max_length=128)
+
+
+class AuthAttemptStartIn(BaseModel):
+    group_id: int | None = Field(default=None, ge=1)
+    mode: Literal["session_or_login", "login", "session"] = "session_or_login"
+    request_id: str | None = Field(default=None, max_length=128)
+
+
+class AutomationScopeIn(BaseModel):
+    group_id: int = Field(ge=1)
+
+
+class AuthCodeIn(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
+    revision: int = Field(ge=0)
+    request_id: str | None = Field(default=None, max_length=128)
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str) -> str:
+        if not value.isascii() or not value.isdigit():
+            raise ValueError("OTP_FORMAT_INVALID")
+        return value
+
+
+class AuthPasswordIn(BaseModel):
+    password: str = Field(max_length=1024)
+    revision: int = Field(ge=0)
+    request_id: str | None = Field(default=None, max_length=128)
+
+
+class SessionDeleteIn(BaseModel):
+    confirm: Literal["DELETE_SESSION"]
 
 
 class GroupIn(BaseModel):
@@ -72,6 +108,19 @@ class GroupPatchIn(BaseModel):
         if iv not in (0, 1):
             raise ValueError("is_active должен быть 0 или 1")
         return iv
+
+
+class DestinationVerifyIn(BaseModel):
+    chat_id: str = Field(min_length=1, max_length=200)
+    revision: int = Field(ge=0)
+
+    @field_validator("chat_id")
+    @classmethod
+    def validate_chat_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or not normalized.isprintable():
+            raise ValueError("Укажите корректный ID назначения")
+        return normalized
 
 
 class SettingsIn(BaseModel):
@@ -274,5 +323,3 @@ class SettingsIn(BaseModel):
 
 class BulkProfilesIn(BaseModel):
     profiles: list[ProfileIn]
-
-

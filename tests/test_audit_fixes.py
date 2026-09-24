@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import os
 import sqlite3
 import subprocess
@@ -151,6 +152,7 @@ def test_docker_runtime_is_multistage_and_non_root():
     assert "pip wheel" in dockerfile
     assert "gcc" not in runtime
     assert "libffi-dev" not in runtime
+    assert "python -m pip uninstall --yes pip" in runtime
     assert "USER 10001:10001" in runtime
 
 
@@ -182,6 +184,28 @@ def test_request_log_adds_correlation_id_without_request_data(caplog):
     assert '"event": "request"' in caplog.text
     assert request_id in caplog.text
     assert "cookie" not in caplog.text.lower()
+
+
+def test_request_error_log_does_not_emit_nested_secret_traceback(caplog):
+    from starlette.requests import Request
+
+    from app.middleware import RequestLogMiddleware
+
+    scope = {"type": "http", "method": "GET", "path": "/api/fixture", "headers": []}
+    request = Request(scope)
+    middleware = RequestLogMiddleware(lambda _scope, _receive, _send: None)
+    secret = "proxy_password=fixture-private-value"
+
+    async def call_next(_request):
+        raise RuntimeError(f"nested connection failure: {secret}")
+
+    with caplog.at_level("ERROR", logger="maxsender.access"):
+        response = asyncio.run(middleware.dispatch(request, call_next))
+
+    assert response.status_code == 500
+    assert secret not in response.body.decode()
+    assert secret not in caplog.text
+    assert response.headers["X-Request-ID"] in caplog.text
 
 
 def test_deploy_migrates_existing_data_volume_ownership():
@@ -244,6 +268,98 @@ def test_webhook_allowlist_fails_closed_and_rejects_private_urls(monkeypatch):
     assert not webhook_url_allowed("https://127.0.0.1/event")
     with pytest.raises(ValueError, match="WEBHOOK_ALLOWED_HOSTS"):
         SettingsIn(webhook_url="https://169.254.169.254/latest/meta-data")
+
+
+def test_webhook_transport_rejects_private_dns_before_connect(monkeypatch):
+    from app import campaign_worker
+
+    monkeypatch.setattr(
+        campaign_worker.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", 443))
+        ],
+    )
+    connect = MagicMock()
+    monkeypatch.setattr(campaign_worker.socket, "create_connection", connect)
+
+    with pytest.raises(RuntimeError, match="webhook_destination_not_public"):
+        campaign_worker.http_post_json("https://hooks.example.com/event", {"ok": True})
+    connect.assert_not_called()
+
+
+def test_webhook_transport_rejects_redirect_and_oversized_response(monkeypatch):
+    from app import campaign_worker
+
+    class FakeResponse:
+        def __init__(self, status: int, body: bytes) -> None:
+            self.status = status
+            self.body = body
+
+        def read(self, _limit: int) -> bytes:
+            return self.body
+
+    class FakeConnection:
+        response = FakeResponse(302, b"")
+        last = None
+
+        def __init__(self, host, port, address, timeout) -> None:
+            self.args = (host, port, address, timeout)
+            self.request_args = None
+            FakeConnection.last = self
+
+        def request(self, *args, **kwargs) -> None:
+            self.request_args = (args, kwargs)
+
+        def getresponse(self) -> FakeResponse:
+            return self.response
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(campaign_worker, "_PinnedHTTPSConnection", FakeConnection)
+    with pytest.raises(RuntimeError, match="webhook_redirect_rejected"):
+        campaign_worker._post_json_to_address(
+            "https://hooks.example.com/event?x=1",
+            {"ok": True},
+            "198.51.100.10",
+            1,
+        )
+
+    FakeConnection.response = FakeResponse(
+        204, b"x" * (campaign_worker._MAX_HTTP_RESPONSE_BYTES + 1)
+    )
+    with pytest.raises(RuntimeError, match="webhook_response_too_large"):
+        campaign_worker._post_json_to_address(
+            "https://hooks.example.com/event",
+            {"ok": True},
+            "198.51.100.10",
+            1,
+        )
+
+    class SlowResponse:
+        status = 204
+
+        def read(self, _limit: int) -> bytes:
+            raise TimeoutError("fixture response timeout")
+
+    FakeConnection.response = SlowResponse()
+    with pytest.raises(TimeoutError, match="fixture response timeout"):
+        campaign_worker._post_json_to_address(
+            "https://hooks.example.com/event",
+            {"ok": True},
+            "198.51.100.11",
+            1,
+        )
+
+    FakeConnection.response = FakeResponse(204, b"")
+    monkeypatch.setattr(
+        campaign_worker,
+        "_public_addresses",
+        lambda _host, _port: ("198.51.100.12",),
+    )
+    campaign_worker.http_post_json("https://hooks.example.com/event", {"ok": True})
+    assert FakeConnection.last.args[2] == "198.51.100.12"
 
 
 def test_scheduler_tenant_scan_fails_closed(monkeypatch):

@@ -66,6 +66,44 @@ class AutomationScopeRepository:
             return ScopeMigrationManifest("BLOCKED", "WORK_GROUP_SELECTION_REQUIRED", None)
         return ScopeMigrationManifest("BLOCKED", "WORK_GROUP_SELECTION_REQUIRED", None)
 
+    def migrate_unambiguous_legacy_scopes(self) -> int:
+        """Upgrade only profiles with exactly one enabled legacy membership.
+
+        Existing scope rows are never rewritten: an explicit unselected or
+        revoked state is an operator decision and must survive restart or
+        schema migration. Profiles with multiple memberships stay without a
+        selected scope until an explicit choice is made.
+        """
+        self.ensure_schema()
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT gp.profile_id, MIN(gp.group_id) AS group_id
+                FROM group_profiles gp
+                LEFT JOIN profile_automation_scope s
+                  ON s.profile_id = gp.profile_id
+                WHERE gp.is_enabled=1 AND s.profile_id IS NULL
+                GROUP BY gp.profile_id
+                HAVING COUNT(*)=1
+                ORDER BY gp.profile_id
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        migrated = 0
+        for row in rows:
+            cursor = self.conn.execute(
+                """
+                INSERT OR IGNORE INTO profile_automation_scope(
+                    profile_id, automation_group_id, consent_state, revision
+                ) VALUES (?, ?, 'active', 1)
+                """,
+                (int(row["profile_id"]), int(row["group_id"])),
+            )
+            migrated += int(cursor.rowcount or 0)
+        self.conn.commit()
+        return migrated
+
     def scope_for(self, profile_id: int) -> sqlite3.Row:
         self.ensure_schema()
         row = self.conn.execute(
@@ -87,11 +125,7 @@ class AutomationScopeRepository:
     def select_work_group(self, profile_id: int, group_id: int) -> None:
         self.ensure_schema()
         if int(group_id) not in self.legacy_group_ids(profile_id):
-            exists = self.conn.execute(
-                "SELECT 1 FROM groups WHERE id=?", (int(group_id),)
-            ).fetchone()
-            if exists is None:
-                raise AutomationScopeError("WORK_GROUP_SELECTION_REQUIRED")
+            raise AutomationScopeError("WORK_GROUP_SELECTION_REQUIRED")
         self.conn.execute(
             "INSERT INTO profile_automation_scope(profile_id, automation_group_id, consent_state, revision) "
             "VALUES (?, ?, 'active', 1) "
@@ -138,15 +172,32 @@ class AutomationScopeRepository:
             raise AutomationScopeError("OBJECT_NOT_FOUND")
         self.conn.commit()
 
-    def verify_destination(self, group_id: int, chat_id: str) -> None:
+    def verify_destination(
+        self,
+        group_id: int,
+        chat_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> None:
         if not str(chat_id).strip():
             raise AutomationScopeError("DESTINATION_REVIEW_REQUIRED")
-        cur = self.conn.execute(
-            "UPDATE groups SET max_chat_id=?, destination_verified=1 WHERE id=?",
-            (str(chat_id).strip(), int(group_id)),
-        )
+        if expected_revision is None:
+            cur = self.conn.execute(
+                "UPDATE groups SET max_chat_id=?, destination_verified=1 WHERE id=?",
+                (str(chat_id).strip(), int(group_id)),
+            )
+        else:
+            cur = self.conn.execute(
+                "UPDATE groups SET max_chat_id=?, destination_verified=1 "
+                "WHERE id=? AND destination_revision=?",
+                (str(chat_id).strip(), int(group_id), int(expected_revision)),
+            )
         if cur.rowcount != 1:
-            raise AutomationScopeError("OBJECT_NOT_FOUND")
+            raise AutomationScopeError(
+                "DESTINATION_REVIEW_REQUIRED"
+                if expected_revision is not None
+                else "OBJECT_NOT_FOUND"
+            )
         self.conn.commit()
 
     def revoke_consent(self, profile_id: int) -> None:

@@ -26,6 +26,44 @@ class RouteResolutionError(RuntimeError):
         super().__init__(code)
 
 
+def legacy_route_migration_report(
+    catalog: ConnectionRepository,
+) -> list[dict[str, object]]:
+    """Report legacy direct routes without migrating, probing, or logging them.
+
+    Server mode must not silently discard ``profiles.proxy``.  The report is
+    intentionally actionable but credential-free: an operator must resolve the
+    legacy route explicitly before a catalog assignment can be created.
+    """
+    try:
+        rows = catalog.conn.execute(
+            "SELECT id, proxy FROM profiles WHERE proxy IS NOT NULL AND TRIM(proxy) <> ''"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+    report: list[dict[str, object]] = []
+    for row in rows:
+        profile_id = int(row["id"])
+        try:
+            assignment = catalog.assignment_for(profile_id)
+        except sqlite3.OperationalError:
+            assignment = None
+        report.append(
+            {
+                "profile_id": profile_id,
+                "status": "REVIEW_REQUIRED",
+                "reason": "LEGACY_DIRECT_ROUTE",
+                "assignment_present": assignment is not None,
+                "requires_explicit_resolution": True,
+                "writes": 0,
+                "probe_calls": 0,
+                "login_calls": 0,
+            }
+        )
+    return report
+
+
 def _snapshot(row: sqlite3.Row, *, source: str) -> RouteSnapshot:
     return RouteSnapshot(
         connection_id=int(row["id"]),

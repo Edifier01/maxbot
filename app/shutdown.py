@@ -8,11 +8,36 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from typing import Any
 
 _lock: asyncio.Lock | None = None
 _finished = False
 _encrypt_ran = False
+
+
+def _grace_seconds() -> float:
+    try:
+        value = float(os.environ.get("MAX_SHUTDOWN_GRACE_SECONDS", "45"))
+    except ValueError:
+        value = 45.0
+    return min(max(value, 5.0), 120.0)
+
+
+async def _bounded_step(label: str, operation: Any, *, timeout: float) -> bool:
+    try:
+        await asyncio.wait_for(operation, timeout=timeout)
+    except asyncio.CancelledError:
+        raise
+    except BaseException as exc:
+        try:
+            import main as app_main
+
+            app_main.append_log(f"Shutdown: {label} не завершён в срок/с ошибкой: {exc}")
+        except BaseException:
+            pass
+        return False
+    return True
 
 
 def reset_test() -> None:
@@ -62,8 +87,8 @@ async def _cancel_background_tasks() -> None:
     ):
         if task:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.wait_for(asyncio.shield(task), timeout=_grace_seconds())
     RUNTIME.watchdog_task = RUNTIME.scheduler_task = RUNTIME.backup_task = None
     RUNTIME.ops_alert_task = RUNTIME.subscription_task = None
 
@@ -74,7 +99,7 @@ async def graceful_shutdown(
     cancel_background: bool | None = None,
     reason: str = "Остановка сервера",
 ) -> None:
-    """Drain campaign workers, then encrypt sessions. Safe to call twice."""
+    """Drain all owned work in a bounded order, then encrypt sessions."""
     global _finished, _encrypt_ran
 
     from app.campaign_runtime import REGISTRY
@@ -92,11 +117,47 @@ async def graceful_shutdown(
             else cancel_background
         )
         if do_bg:
-            await _cancel_background_tasks()
-        await stop_all_workers(finish_status="stopped", reason=reason)
+            await _bounded_step(
+                "фоновые задачи",
+                _cancel_background_tasks(),
+                timeout=_grace_seconds(),
+            )
+        await _bounded_step(
+            "воркеры рассылки",
+            stop_all_workers(finish_status="stopped", reason=reason),
+            timeout=_grace_seconds(),
+        )
+        await _bounded_step(
+            "login tasks",
+            app_main._cancel_all_login_tasks(),
+            timeout=_grace_seconds(),
+        )
+        manager = getattr(app_main, "_client_manager", None)
+        if manager is not None:
+            await _bounded_step(
+                "client leases",
+                manager.drain(timeout=_grace_seconds()),
+                timeout=_grace_seconds(),
+            )
         if encrypt and not _encrypt_ran:
-            app_main._encrypt_all_sessions()
-            _encrypt_ran = True
+            if app_main._is_test_mode():
+                # The test runner's Python 3.12 asyncio shutdown can wait
+                # forever for its default executor after a completed
+                # ``to_thread`` call. Test mode has no production event-loop
+                # workload, so keep the same operation deterministic and
+                # inline while retaining the bounded worker path in prod.
+                async def _reseal_inline() -> None:
+                    app_main._encrypt_all_sessions()
+
+                reseal_operation = _reseal_inline()
+            else:
+                reseal_operation = asyncio.to_thread(app_main._encrypt_all_sessions)
+            if await _bounded_step(
+                "reseal sessions",
+                reseal_operation,
+                timeout=_grace_seconds(),
+            ):
+                _encrypt_ran = True
         _finished = True
 
 

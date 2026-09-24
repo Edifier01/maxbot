@@ -48,6 +48,154 @@ def test_server_mode_patch_group_keeps_proxy(tmp_path, monkeypatch):
         assert cleared["proxy"] == ""
 
 
+def test_changing_group_link_invalidates_cached_destination(tmp_path, monkeypatch):
+    m = _setup_local(tmp_path, monkeypatch)
+    from app.routes_groups import patch_group
+    from app.routes_models import GroupPatchIn
+
+    with m._conn() as connection:
+        cursor = connection.execute(
+            "INSERT INTO groups "
+            "(name, invite_link, max_chat_id, destination_verified) "
+            "VALUES (?, ?, ?, 1)",
+            ("G1", "https://max.example/old", "chat-old"),
+        )
+        group_id = int(cursor.lastrowid)
+
+    row = asyncio.run(
+        patch_group(group_id, GroupPatchIn(invite_link="https://max.example/new"))
+    )
+    assert row["invite_link"] == "https://max.example/new"
+    assert row["max_chat_id"] == ""
+    assert row["destination_verified"] == 0
+    assert row["destination_revision"] == 1
+
+
+def test_destination_change_is_blocked_while_manual_test_is_in_progress(
+    tmp_path, monkeypatch
+):
+    m = _setup_local(tmp_path, monkeypatch)
+    from app.routes_campaign import CampaignCommandCoordinator
+    from app.routes_groups import patch_group
+    from app.routes_models import GroupPatchIn
+
+    with m._conn() as connection:
+        group_id = int(
+            connection.execute(
+                "INSERT INTO groups "
+                "(name, invite_link, max_chat_id, destination_verified) "
+                "VALUES (?, ?, ?, 1)",
+                ("G1", "https://max.example/old", "chat-old"),
+            ).lastrowid
+        )
+        coordinator = CampaignCommandCoordinator(connection, scope="local")
+        assert coordinator.begin_test("manual-test-route-race").state == "testing"
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(
+            patch_group(
+                group_id,
+                GroupPatchIn(invite_link="https://max.example/new"),
+            )
+        )
+
+    assert caught.value.status_code == 409
+    with m._conn() as connection:
+        group = connection.execute(
+            "SELECT invite_link, max_chat_id, destination_verified, "
+            "destination_revision FROM groups WHERE id=?",
+            (group_id,),
+        ).fetchone()
+    assert tuple(group) == ("https://max.example/old", "chat-old", 1, 0)
+
+
+def test_destination_confirmation_is_blocked_while_manual_test_is_in_progress(
+    tmp_path, monkeypatch
+):
+    m = _setup_local(tmp_path, monkeypatch)
+    from app.routes_campaign import CampaignCommandCoordinator
+    from app.routes_groups import verify_group_destination
+    from app.routes_models import DestinationVerifyIn
+
+    with m._conn() as connection:
+        group_id = int(
+            connection.execute(
+                "INSERT INTO groups "
+                "(name, invite_link, max_chat_id, destination_verified) "
+                "VALUES (?, ?, ?, 1)",
+                ("G1", "https://max.example/old", "chat-old"),
+            ).lastrowid
+        )
+        coordinator = CampaignCommandCoordinator(connection, scope="local")
+        assert coordinator.begin_test("manual-test-confirmation-race").state == "testing"
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(
+            verify_group_destination(
+                group_id,
+                DestinationVerifyIn(chat_id="chat-new", revision=0),
+            )
+        )
+
+    assert caught.value.status_code == 409
+    with m._conn() as connection:
+        group = connection.execute(
+            "SELECT invite_link, max_chat_id, destination_verified, "
+            "destination_revision FROM groups WHERE id=?",
+            (group_id,),
+        ).fetchone()
+    assert tuple(group) == ("https://max.example/old", "chat-old", 1, 0)
+
+
+def test_destination_confirmation_is_bound_to_current_link_revision(
+    tmp_path, monkeypatch
+):
+    m = _setup_local(tmp_path, monkeypatch)
+    from app.routes_groups import patch_group, verify_group_destination
+    from app.routes_models import DestinationVerifyIn, GroupPatchIn
+
+    with m._conn() as connection:
+        group_id = int(
+            connection.execute(
+                "INSERT INTO groups (name, invite_link) VALUES (?, ?)",
+                ("G1", "https://max.example/a"),
+            ).lastrowid
+        )
+
+    confirmed = asyncio.run(
+        verify_group_destination(
+            group_id, DestinationVerifyIn(chat_id="chat-a", revision=0)
+        )
+    )
+    assert confirmed["max_chat_id"] == "chat-a"
+    assert confirmed["destination_verified"] == 1
+    assert confirmed["destination_revision"] == 0
+
+    awaitable = patch_group(
+        group_id, GroupPatchIn(invite_link="https://max.example/b")
+    )
+    changed = asyncio.run(awaitable)
+    assert changed["destination_revision"] == 1
+    assert changed["destination_verified"] == 0
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(
+            verify_group_destination(
+                group_id, DestinationVerifyIn(chat_id="chat-stale", revision=0)
+            )
+        )
+    assert caught.value.status_code == 409
+    assert caught.value.detail == "DESTINATION_REVIEW_REQUIRED"
+
+    confirmed_new = asyncio.run(
+        verify_group_destination(
+            group_id, DestinationVerifyIn(chat_id="chat-b", revision=1)
+        )
+    )
+    assert confirmed_new["max_chat_id"] == "chat-b"
+    assert confirmed_new["destination_revision"] == 1
+
+
 def _setup_local(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_TEST", "1")
     monkeypatch.setenv("MAX_SERVER_MODE", "0")

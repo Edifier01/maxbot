@@ -4,26 +4,51 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import http.client
+import ipaddress
 import json
 import os
 import random
 import sqlite3
+import socket
+import ssl
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 
 from app.config import webhook_url_allowed
 from app.runtime import main
 from app.campaign_runtime import REGISTRY, RUNTIME
+from app.campaign_queue import MessageBagIntegrityError
 from app.campaign_send import (
     SendTracker,
     recover_inflight_operations,
     send_with_retry,
     sleep_send_delay,
 )
+
+
+class MigrationReviewRequired(RuntimeError):
+    """Legacy budget history is contradictory and cannot receive a fresh target."""
+
+    def __init__(self, findings: tuple[dict[str, object], ...]) -> None:
+        self.findings = findings
+        super().__init__("MIGRATION_REVIEW_REQUIRED")
+
+
+def legacy_budget_migration_report() -> tuple[dict[str, object], ...]:
+    """Return the credential-free legacy budget gate for the current day."""
+    from app.services.legacy_daily_budget import inspect_legacy_daily_budgets
+
+    business_date = main._local_today().isoformat()
+    with main._conn() as connection:
+        return tuple(
+            finding.as_dict()
+            for finding in inspect_legacy_daily_budgets(connection, business_date)
+        )
 
 
 def worker_shutdown(reason: str) -> None:
@@ -81,8 +106,26 @@ def materialize_daily_plans() -> int:
     from app.repositories.daily_plans import DailyPlanRepository
     from app.repositories.message_sets import MessageSetRepository
     from app.services.daily_plans import DailyPlanService, LibraryItem
+    from app.services.legacy_daily_budget import inspect_legacy_daily_budgets
 
     plan_connection, plan_scope = _daily_plan_storage()
+    plan_repository = DailyPlanRepository(plan_connection)
+    business_date = main._local_today().isoformat()
+    legacy_findings = inspect_legacy_daily_budgets(plan_connection, business_date)
+    review_findings = tuple(
+        finding.as_dict()
+        for finding in legacy_findings
+        if finding.status == "MIGRATION_REVIEW_REQUIRED"
+    )
+    if review_findings:
+        raise MigrationReviewRequired(review_findings)
+    # A new business date expires only unclaimed historical slots. Unknown or
+    # accepted outcomes stay occupied and are never converted into catch-up work.
+    plan_repository.expire_before(plan_scope, business_date)
+    accepted_by_profile = {
+        finding.profile_id: int(finding.accepted_today or 0)
+        for finding in legacy_findings
+    }
     library_connection, library_scope = main._message_library_source_storage()
     message_sets = MessageSetRepository(library_connection)
     version = message_sets.current(library_scope)
@@ -96,12 +139,11 @@ def materialize_daily_plans() -> int:
         )
         for row in message_sets.items(library_scope, str(version["version_id"]))
     )
-    service = DailyPlanService(DailyPlanRepository(plan_connection))
+    service = DailyPlanService(plan_repository)
     selected: dict[int, tuple[Any, Any]] = {}
     for group in main._active_groups():
         for profile in main._active_profiles_for_group(int(group["id"])):
             selected.setdefault(int(profile["id"]), (profile, group))
-    business_date = main._local_today().isoformat()
     materialized = 0
     for profile, group in selected.values():
         role = str(profile["day_role"] or "active") if "day_role" in profile.keys() else "active"
@@ -115,6 +157,7 @@ def materialize_daily_plans() -> int:
             work_group_id=int(group["id"]),
             library_items=library_items,
             mode=main._message_pick_mode(),
+            accepted_count=accepted_by_profile.get(int(profile["id"]), 0),
         )
         materialized += 1
     return materialized
@@ -175,16 +218,98 @@ def finish_campaign(status: str, reason: str = "") -> None:
     RUNTIME.current_campaign_id = None
 
 
-def http_post_json(url: str, payload: dict[str, Any], timeout: float = 15) -> None:
+_MAX_HTTP_RESPONSE_BYTES = 64 * 1024
+
+
+def _public_addresses(host: str, port: int) -> tuple[str, ...]:
+    """Resolve once and reject any non-public destination before connecting."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise RuntimeError("webhook_dns_resolution_failed") from exc
+
+    addresses: list[str] = []
+    for _family, _socktype, _proto, _canonname, sockaddr in infos:
+        address = str(sockaddr[0])
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if not parsed.is_global:
+            raise RuntimeError("webhook_destination_not_public")
+        if address not in addresses:
+            addresses.append(address)
+    if not addresses:
+        raise RuntimeError("webhook_dns_resolution_failed")
+    return tuple(addresses)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that keeps TLS SNI while pinning the TCP address."""
+
+    def __init__(self, host: str, port: int, address: str, timeout: float) -> None:
+        super().__init__(host, port=port, timeout=timeout, context=ssl.create_default_context())
+        self._destination_address = address
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._destination_address, self.port), self.timeout
+        )
+        if self._tunnel_host:
+            self._tunnel()
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+
+
+def _post_json_to_address(
+    url: str,
+    payload: dict[str, Any],
+    address: str,
+    timeout: float,
+) -> None:
+    parsed = urlsplit(url)
+    host = parsed.hostname
+    if parsed.scheme != "https" or not host:
+        raise RuntimeError("webhook_https_required")
+    port = parsed.port or 443
+    target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json", "User-Agent": "MAX-Sender/1.4"},
-        method="POST",
-    )
-    with urlopen(req, timeout=timeout) as resp:
-        resp.read()
+    connection = _PinnedHTTPSConnection(host, port, address, timeout)
+    try:
+        connection.request(
+            "POST",
+            target,
+            body=data,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "MAX-Sender/1.4",
+                "Content-Length": str(len(data)),
+            },
+        )
+        response = connection.getresponse()
+        if 300 <= response.status < 400:
+            raise RuntimeError("webhook_redirect_rejected")
+        if not 200 <= response.status < 300:
+            raise RuntimeError(f"webhook_http_{response.status}")
+        if len(response.read(_MAX_HTTP_RESPONSE_BYTES + 1)) > _MAX_HTTP_RESPONSE_BYTES:
+            raise RuntimeError("webhook_response_too_large")
+    finally:
+        connection.close()
+
+
+def http_post_json(url: str, payload: dict[str, Any], timeout: float = 15) -> None:
+    """POST bounded JSON without redirects or DNS-rebinding egress."""
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise RuntimeError("webhook_https_required")
+    addresses = _public_addresses(parsed.hostname, parsed.port or 443)
+    last_error: Exception | None = None
+    for address in addresses:
+        try:
+            _post_json_to_address(url, payload, address, timeout)
+            return
+        except (OSError, RuntimeError) as exc:
+            last_error = exc
+    raise RuntimeError("webhook_request_failed") from last_error
 
 
 def telegram_credentials() -> tuple[str, str]:
@@ -392,6 +517,8 @@ def _daily_eligible_assignments() -> tuple[tuple[int, int], ...]:
             continue
         for profile in main._active_profiles_for_group(group_id):
             profile_id = int(profile["id"])
+            if not main._automation_scope_allows_external_action(profile_id, group_id):
+                continue
             if main._is_circuit_open(profile_id):
                 continue
             if main._is_in_cooldown(profile):
@@ -427,6 +554,34 @@ def _daily_wait_state(connection: sqlite3.Connection, scope: str) -> str:
     return "DAILY_DONE"
 
 
+def _cancel_daily_slots_for_revoked_scopes(
+    connection: sqlite3.Connection, scope: str
+) -> int:
+    """Fence queued personal slots after persisted consent revocation."""
+    table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='profile_automation_scope'"
+    ).fetchone()
+    if table is None:
+        return 0
+    revoked = connection.execute(
+        "SELECT profile_id FROM profile_automation_scope "
+        "WHERE consent_state != 'active'"
+    ).fetchall()
+    if not revoked:
+        return 0
+    from app.repositories.daily_plans import DailyPlanRepository
+    from app.services.daily_plans import DailyPlanService
+
+    service = DailyPlanService(DailyPlanRepository(connection))
+    return sum(
+        service.cancel_queued_for_profile(
+            scope, int(row["profile_id"]), "CONSENT_REVOKED"
+        )
+        for row in revoked
+    )
+
+
 def _claim_daily_job_sync() -> dict[str, Any] | str | None:
     """Claim one existing personal slot; ``None`` keeps legacy mode available."""
 
@@ -436,6 +591,7 @@ def _claim_daily_job_sync() -> dict[str, Any] | str | None:
     from app.services.daily_plans import DailyPlanService, WaitDecision
 
     connection, scope = _daily_plan_storage()
+    _cancel_daily_slots_for_revoked_scopes(connection, scope)
     service = DailyPlanService(DailyPlanRepository(connection))
     decision = service.claim_next_slot(
         scope,
@@ -659,7 +815,11 @@ async def poolworker_loop(worker_id: int) -> None:
             return
         if await main._wait_if_outside_send_window():
             continue
-        job = await claim_next_job()
+        try:
+            job = await claim_next_job()
+        except MessageBagIntegrityError as exc:
+            worker_shutdown(f"Остановлено: повреждена legacy-колода ({exc})")
+            return
         if job == "STOP":
             main.append_log(f"Воркер пула #{worker_id} остановлен")
             return
@@ -884,6 +1044,7 @@ async def start_worker(
     record_campaign: bool = True,
     scheduled_for: str | None = None,
     control_generation: int | None = None,
+    preflight: bool = True,
 ) -> bool:
     """Запуск воркера / пула без сброса индексов прогресса."""
     from app.tenant import clear_context, get_tenant_id, restore_context, snapshot_context
@@ -925,7 +1086,8 @@ async def start_worker(
                     "Восстановлены незавершённые операции отправки: "
                     + ", ".join(recovered_operations)
                 )
-            await main._preflight_group_proxies()
+            if preflight:
+                await main._preflight_group_proxies()
             if not _campaign_control_allows_claim(control_generation):
                 return False
             with main._conn() as c:

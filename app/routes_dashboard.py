@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from app.runtime import main as m
+from app.services.errors import (
+    classify_exception,
+    classify_persisted_error,
+    sanitize_log_line,
+)
 from app.tenant import redact_cabinet_row
 
 router = APIRouter(tags=["dashboard"])
@@ -15,7 +22,7 @@ router = APIRouter(tags=["dashboard"])
 @router.post("/api/backup")
 async def api_backup_now():
 
-    path = m.backup_database()
+    path = await asyncio.to_thread(m.backup_database)
     if not path:
         raise HTTPException(500, "Не удалось создать резервную копию")
     return {"ok": True, "file": path.name}
@@ -48,13 +55,25 @@ async def get_log():
                 rows = c.execute(
                     "SELECT msg FROM app_log ORDER BY id DESC LIMIT 200"
                 ).fetchall()
-            return {"lines": list(reversed([r["msg"] for r in rows]))}
+            return {
+                "lines": [
+                    sanitize_log_line(r["msg"]) for r in reversed(rows)
+                ]
+            }
         except Exception as exc:
             import logging
 
-            logging.getLogger(__name__).exception("Failed to read tenant log")
-            raise HTTPException(503, "Журнал временно недоступен") from exc
-    return {"lines": m._log[-200:]}
+            info = classify_exception(
+                exc, source="storage", stage="log", outcome="rejected"
+            )
+            logging.getLogger(__name__).error(
+                "tenant log read failed code=%s source=%s stage=%s",
+                info.code,
+                info.source,
+                info.stage,
+            )
+            raise HTTPException(503, detail=asdict(info)) from None
+    return {"lines": [sanitize_log_line(line) for line in m._log[-200:]]}
 
 
 @router.get("/api/dashboard")
@@ -74,10 +93,31 @@ async def dashboard():
                 """
                 SELECT p.*,
                        GROUP_CONCAT(g.name, ', ') AS group_names,
-                       MIN(g.id) AS primary_group_id
+                       COUNT(DISTINCT gp.group_id) AS linked_group_count,
+                       pas.automation_group_id,
+                       pas.consent_state AS automation_scope_state,
+                       CASE
+                         WHEN pas.profile_id IS NOT NULL THEN
+                           CASE
+                             WHEN pas.consent_state='active'
+                              AND pas.automation_group_id IS NOT NULL
+                              AND EXISTS (
+                                SELECT 1
+                                FROM group_profiles selected_gp
+                                WHERE selected_gp.profile_id=p.id
+                                  AND selected_gp.group_id=pas.automation_group_id
+                                  AND selected_gp.is_enabled=1
+                              )
+                             THEN pas.automation_group_id
+                             ELSE NULL
+                           END
+                         WHEN COUNT(DISTINCT gp.group_id)=1 THEN MIN(g.id)
+                         ELSE NULL
+                       END AS primary_group_id
                 FROM profiles p
                 JOIN group_profiles gp ON gp.profile_id = p.id AND gp.is_enabled=1
                 JOIN groups g ON g.id = gp.group_id
+                LEFT JOIN profile_automation_scope pas ON pas.profile_id = p.id
                 GROUP BY p.id
                 ORDER BY
                   CASE p.status
@@ -135,8 +175,16 @@ async def dashboard():
     except HTTPException:
         raise
     except Exception as exc:
-        logging.getLogger(__name__).exception("dashboard failed")
-        raise HTTPException(500, f"Сводка недоступна: {exc}") from exc
+        info = classify_exception(
+            exc, source="storage", stage="dashboard", outcome="rejected"
+        )
+        logging.getLogger(__name__).error(
+            "dashboard failed code=%s source=%s stage=%s",
+            info.code,
+            info.source,
+            info.stage,
+        )
+        raise HTTPException(500, detail=asdict(info)) from None
 
 
 @router.get("/api/send_log")
@@ -190,6 +238,16 @@ async def get_send_log(
     for row in rows:
         item = dict(row)
         item["sent_at"] = item.pop("sent_at_utc3")
+        raw_error = str(item.get("error") or "")
+        if raw_error:
+            info = classify_persisted_error(
+                raw_error, source="max", stage="send", outcome="rejected"
+            )
+            item["error"] = info.safe_message
+            item["error_code"] = info.code
+            item["error_source"] = info.source
+            item["error_stage"] = info.stage
+            item["error_action"] = info.recommended_action
         items.append(redact_cabinet_row(item))
     return {
         "items": items,
@@ -199,5 +257,3 @@ async def get_send_log(
         "q": q,
         "status": status,
     }
-
-

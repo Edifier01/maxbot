@@ -23,6 +23,7 @@ function matchesPath(pattern, url) {
 const test = base.extend({
   diagnostics: async ({ page, baseURL }, use, testInfo) => {
     const expectedResponses = [];
+    const expectedFailedRequests = [];
     const expectedConsoleErrors = [];
     const consoleErrors = [];
     const pageErrors = [];
@@ -36,6 +37,9 @@ const test = base.extend({
       },
       allowConsoleError(pattern) {
         expectedConsoleErrors.push(pattern);
+      },
+      allowFailedRequest(path) {
+        expectedFailedRequests.push(path);
       },
     };
 
@@ -53,6 +57,8 @@ const test = base.extend({
       }
     });
     page.on('requestfailed', (request) => {
+      const expected = expectedFailedRequests.some((path) => matchesPath(path, request.url()));
+      if (expected) return;
       failedRequests.push({
         method: request.method(),
         url: request.url(),
@@ -88,6 +94,7 @@ const test = base.extend({
         path: String(path),
         statuses,
       })),
+      expectedFailedRequests: expectedFailedRequests.map(String),
     };
     await testInfo.attach('browser-diagnostics.json', {
       body: Buffer.from(JSON.stringify(report, null, 2)),

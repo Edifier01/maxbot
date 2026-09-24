@@ -7,22 +7,32 @@ import random
 import sqlite3
 
 
+class MessageBagIntegrityError(RuntimeError):
+    """The persisted legacy bag is not a valid immutable selection state."""
+
+
 def _main():
     import main as m
 
     return m
 
 
-def _get_message_bag(c: sqlite3.Connection) -> list[int]:
+def _get_message_bag(c: sqlite3.Connection, n: int | None = None) -> list[int]:
     row = c.execute("SELECT message_bag FROM queue_state WHERE id=1").fetchone()
     raw = (row["message_bag"] if row else None) or "[]"
     try:
         data = json.loads(raw)
-        if isinstance(data, list):
-            return [int(x) for x in data]
-    except (TypeError, ValueError, json.JSONDecodeError):
-        pass
-    return []
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise MessageBagIntegrityError("legacy message bag is not valid JSON") from exc
+    if not isinstance(data, list):
+        raise MessageBagIntegrityError("legacy message bag must be a JSON list")
+    if any(isinstance(item, bool) or not isinstance(item, int) for item in data):
+        raise MessageBagIntegrityError("legacy message bag contains a non-integer item")
+    if len(set(data)) != len(data):
+        raise MessageBagIntegrityError("legacy message bag contains duplicate items")
+    if n is not None and any(item < 0 or item >= n for item in data):
+        raise MessageBagIntegrityError("legacy message bag contains an out-of-range item")
+    return data
 
 
 def _set_message_bag(c: sqlite3.Connection, bag: list[int]) -> None:
@@ -68,7 +78,7 @@ def _ensure_message_bag(c: sqlite3.Connection, n: int) -> list[int]:
         return []
     if n <= 0:
         return []
-    bag = _get_message_bag(c)
+    bag = _get_message_bag(c, n)
     if bag:
         return bag
     goal = m._campaign_goal()

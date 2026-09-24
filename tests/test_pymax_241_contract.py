@@ -23,6 +23,16 @@ def test_exact_pymax_241_contract() -> None:
     assert get_type_hints(Client.send_message)["return"] is Message
 
 
+def test_pymax_241_reaction_signature_matches_the_gateway_contract() -> None:
+    assert iscoroutinefunction(Client.add_reaction)
+    assert tuple(signature(Client.add_reaction).parameters) == (
+        "self",
+        "chat_id",
+        "message_id",
+        "reaction",
+    )
+
+
 def test_runtime_policy_is_fixed_and_quiet() -> None:
     info = inspect_pymax_runtime()
     extra = build_extra_config(proxy=None, identity=None)

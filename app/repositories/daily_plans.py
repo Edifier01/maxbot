@@ -355,6 +355,24 @@ class DailyPlanRepository:
             )
         return self.get_slot(slot_id)
 
+    def cancel_queued_for_profile(
+        self, scope: str, profile_id: int, reason: str
+    ) -> int:
+        """Cancel only not-yet-claimed slots fenced by a local policy."""
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE profile_message_slots
+                SET status='cancelled', failure_reason=?, updated_at=?
+                WHERE scope=? AND status='queued' AND plan_id IN (
+                    SELECT plan_id FROM profile_daily_plans
+                    WHERE scope=? AND profile_id=? AND status='active'
+                )
+                """,
+                (str(reason)[:500], _now(), scope, scope, int(profile_id)),
+            )
+            return int(cursor.rowcount or 0)
+
     def expire_before(self, scope: str, business_date: str) -> int:
         with self._transaction() as connection:
             cursor = connection.execute(
