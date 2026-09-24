@@ -31,10 +31,13 @@ if grep -Eq '(^|/)session[.]db$' <<<"$restore_listing"; then
 fi
 
 echo "Проверка auth snapshot и control volume до восстановления…"
-docker compose run --rm -T --no-deps \
+docker compose run --rm -T --no-deps --user root \
   -v "$(cd "$SRC" && pwd):/backup:ro" \
   --entrypoint python \
-  app -m app.backup_guard preflight-restore /backup/auth-state.json
+  app -m app.backup_guard validate-auth-snapshot /backup/auth-state.json
+docker compose run --rm -T --no-deps \
+  --entrypoint python \
+  app -m app.backup_guard preflight-control -
 
 echo "Остановка app и celery…"
 docker compose stop app celery-worker 2>/dev/null || docker compose stop app

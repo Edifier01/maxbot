@@ -143,7 +143,11 @@ def test_volume_backup_wires_plaintext_gate_and_auth_snapshot_before_success():
 
 def test_volume_restore_rotates_auth_before_restarting_services():
     script = (ROOT / "scripts" / "restore-volumes.sh").read_text(encoding="utf-8")
-    assert script.index("app.backup_guard preflight-restore") < script.index("docker compose stop app celery-worker")
+    root_reader = script.index("--user root", script.index("Проверка auth snapshot"))
+    validate_snapshot = script.index("app.backup_guard validate-auth-snapshot")
+    preflight_control = script.index("app.backup_guard preflight-control")
+    assert root_reader < validate_snapshot < preflight_control < script.index("docker compose stop app celery-worker")
+    assert "app.backup_guard preflight-control" in script[preflight_control:]
     assert script.index("app.backup_guard rotate-auth") > script.index("if docker compose exec -T postgres pg_restore")
     assert script.index("app.backup_guard rotate-auth") < script.index("docker compose up -d")
     assert script.index("app.backup_guard rotate-auth") < script.index("shutil.rmtree(outgoing)")

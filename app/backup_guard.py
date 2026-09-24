@@ -71,6 +71,16 @@ def rotate_auth_after_restore(source: Path, revision: str) -> float:
 def preflight_restore(source: Path) -> None:
     """Validate restore auth input and control-volume access before data changes."""
     _snapshot_epoch(source)
+    preflight_control()
+
+
+def validate_auth_snapshot(source: Path) -> None:
+    """Validate a snapshot when the backup directory is readable only by root."""
+    _snapshot_epoch(source)
+
+
+def preflight_control() -> None:
+    """Prove the application UID can read and write its control volume."""
     current_epoch = auth_epoch.auth_epoch_file()
     if current_epoch is None:
         raise UnsafeBackup("server auth epoch path is unavailable")
@@ -92,7 +102,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "command",
         choices=(
-            "check-tree", "check-archive", "export-auth", "preflight-restore", "rotate-auth"
+            "check-tree",
+            "check-archive",
+            "export-auth",
+            "preflight-restore",
+            "rotate-auth",
+            "validate-auth-snapshot",
+            "preflight-control",
         ),
     )
     parser.add_argument("path", type=Path)
@@ -107,6 +123,10 @@ def main(argv: list[str] | None = None) -> int:
             export_auth_state(args.path)
         elif args.command == "preflight-restore":
             preflight_restore(args.path)
+        elif args.command == "validate-auth-snapshot":
+            validate_auth_snapshot(args.path)
+        elif args.command == "preflight-control":
+            preflight_control()
         else:
             rotate_auth_after_restore(args.path, args.revision)
     except (UnsafeBackup, auth_epoch.AuthEpochInvalid, OSError, ValueError) as exc:
