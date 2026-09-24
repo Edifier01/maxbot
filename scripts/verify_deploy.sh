@@ -29,7 +29,10 @@ import json, sys, urllib.request
 r = urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=10)
 d = json.loads(r.read())
 print(json.dumps(d, ensure_ascii=False))
-sys.exit(0 if d.get('db_ok') is True else 1)
+ok = d.get('db_ok') is True and (
+    d.get('redis_configured') is not True or d.get('redis_ok') is True
+)
+sys.exit(0 if ok else 1)
 " 2>/dev/null); then
     health_ok=1
     break

@@ -212,12 +212,13 @@ def test_deploy_migrates_existing_data_volume_ownership():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    for path in (root / "scripts" / "deploy.sh", root / ".github" / "workflows" / "deploy.yml"):
-        text = path.read_text(encoding="utf-8")
-        assert "--user root" in text
-        assert "--entrypoint chown app -R 10001:10001 /app/data" in text
-        assert "--entrypoint chown app -R 10001:10001 /app/control" in text
-
+    deploy_sh = (root / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    deploy_workflow = (root / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+    assert "--user root" in deploy_sh
+    assert "--entrypoint chown app -R 10001:10001 /app/data" in deploy_sh
+    assert "--entrypoint chown app -R 10001:10001 /app/control" in deploy_sh
+    assert "bash scripts/deploy.sh" in deploy_workflow
+    assert "--entrypoint chown" not in deploy_workflow
 
 @pytest.mark.skipif(os.name != "posix", reason="production lock uses POSIX flock")
 def test_second_server_instance_fails_closed_on_shared_volume(tmp_path, monkeypatch):

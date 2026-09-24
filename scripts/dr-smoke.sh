@@ -21,6 +21,7 @@ bash scripts/backup-volumes.sh "$backup_dir"
 
 docker compose exec -T postgres psql -U maxsender -d maxsender -c "UPDATE dr_smoke SET value='after';"
 docker compose run --rm -T --no-deps --entrypoint sh app -c "printf after > /app/data/dr-smoke/value"
+docker compose stop postgres
 bash scripts/restore-volumes.sh --yes "$backup_dir"
 
 test "$(docker compose exec -T postgres psql -U maxsender -d maxsender -At -c 'SELECT value FROM dr_smoke')" = before

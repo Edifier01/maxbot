@@ -85,7 +85,7 @@ conditions.
 
 ### Pre-deploy checklist
 
-- [ ] CI зелёный (`server-smoke`, `compose-config`, `server-e2e`)
+- [ ] CI зелёный (`server-smoke`, `compose-config`, `dependency-audit`, `backup-restore-smoke`, `server-e2e`)
 - [ ] `.env` без `change-me*`
 - [ ] `bash scripts/backup-volumes.sh` (перед каждым prod deploy)
 - [ ] recovery hold включён до restore/deploy; release остаётся отдельным шагом
@@ -113,7 +113,7 @@ hold only after production readiness and canary scope are documented.
 
 1. `docker compose config -q`
 2. Статус сервисов (`docker compose ps`)
-3. `/api/health` внутри `app` (`db_ok: true`)
+3. Авторизованный `/api/health` внутри `app` (`db_ok: true` и, если Redis настроен, `redis_ok: true`)
 4. HTTPS через Caddy (если `DOMAIN` не example.com)
 5. Celery worker ping (если `USE_CELERY=1`)
 
@@ -130,9 +130,7 @@ does not establish the underlying platform permission.
 
 ### Rollback
 
-Проверьте совместимость предыдущего образа с текущей схемой и сохранёнными
-сессиями. Если нужно восстановить данные, используйте согласованный бэкап
-PostgreSQL и `max_server_data` с recovery hold по процедуре ниже.
+SQL migrations — forward-only. Откат на предыдущий SHA безопасен только если предыдущее приложение явно совместимо с уже применённой схемой и сохранёнными сессиями. Иначе нужен соответствующий pre-deploy backup PostgreSQL + `max_server_data`; не запускайте старый код поверх новой схемы по умолчанию.
 
 ```bash
 cd /opt/maxsender
@@ -145,12 +143,7 @@ bash scripts/restore-volumes.sh ./backups/<stamp>
 
 ### GitHub Actions deploy
 
-Workflow `.github/workflows/deploy.yml` запускается только вручную
-(`workflow_dispatch`). Workflow теперь передаёт `CANDIDATE_SHA` через
-`appleboy/ssh-action.with.envs`; перед production всё ещё нужен staging прогон,
-подтверждающий checkout именно выбранного SHA, backup, Compose и health.
-Deploy chown-ит `/app/control` для app UID 10001. Локальная правка workflow не
-является свидетельством успешного VPS deploy.
+Workflow `.github/workflows/deploy.yml` запускается вручную (`workflow_dispatch`), проверяет exact candidate SHA полным release gate и передаёт `CANDIDATE_SHA` по SSH. Перед подключением требует `DEPLOY_HOST_FINGERPRINT`; на сервере вызывает общий `scripts/deploy.sh`, который включает backup, recovery hold, ownership и HTTPS readiness. Локальная правка workflow не является свидетельством успешного VPS deploy.
 
 ---
 

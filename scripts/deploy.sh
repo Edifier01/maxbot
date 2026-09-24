@@ -36,6 +36,15 @@ if ((${#missing[@]})); then
   exit 1
 fi
 
+if [[ "${CHECK_HTTPS:-1}" != "1" ]]; then
+  echo "Production deploy requires CHECK_HTTPS=1" >&2
+  exit 1
+fi
+if [[ "$DOMAIN" == *example.com* ]]; then
+  echo "Production deploy requires a real DOMAIN, not example.com" >&2
+  exit 1
+fi
+
 echo "Деплой MAX Sender → https://${DOMAIN}"
 release_sha="$(git rev-parse HEAD)"
 bash scripts/set-recovery-hold.sh "deploy-$release_sha" deployment
@@ -82,7 +91,7 @@ fi
 echo "Ожидание старта контейнеров…"
 sleep 8
 
-CHECK_HTTPS=0 bash scripts/verify_deploy.sh || {
+bash scripts/verify_deploy.sh || {
   echo "Проверка не прошла. Логи: docker compose logs --tail=80 app"
   exit 1
 }
@@ -90,5 +99,4 @@ CHECK_HTTPS=0 bash scripts/verify_deploy.sh || {
 echo
 echo "Панель:  https://${DOMAIN}/auth.html"
 echo "Админ:   https://${DOMAIN}/admin.html  (логин: ${ADMIN_EMAIL})"
-echo "Полная проверка (HTTPS): bash scripts/verify_deploy.sh"
 echo "Логи:    docker compose logs -f app"
