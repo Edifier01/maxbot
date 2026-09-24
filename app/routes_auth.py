@@ -173,6 +173,21 @@ async def logout(request: Request):
     if jti:
         await asyncio.to_thread(db_pg.revoke_token, jti, auth.token_expires_at(payload))
         auth.invalidate_session_cache(jti)
+    if payload.get("imp"):
+        backup_token = (request.cookies.get("max_admin_token") or "").strip()
+        if backup_token:
+            try:
+                backup_payload = auth.decode_token(backup_token)
+            except Exception:
+                backup_payload = None
+            if (backup_payload and not backup_payload.get("imp")
+                    and backup_payload.get("sub") == payload.get("sub")):
+                backup_jti = backup_payload.get("jti")
+                if backup_jti:
+                    await asyncio.to_thread(
+                        db_pg.revoke_token, backup_jti, auth.token_expires_at(backup_payload)
+                    )
+                    auth.invalidate_session_cache(backup_jti)
     response = JSONResponse(content={"ok": True})
     clear_auth_cookie(response, request)
     clear_admin_backup_cookie(response, request)

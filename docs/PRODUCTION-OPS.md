@@ -2,13 +2,24 @@
 
 Runbook для VPS после `bootstrap-vps.sh` и первого `deploy.sh`.
 
+> Статус на 2026-09-24: production web stack развернут с SHA
+> `2e355d41fdbe805e72a61cf95606e2c5a71d550a`, DB health зелёный, recovery hold
+> активен и удерживает все MAX-действия. Точный GitHub CI/deploy прошёл;
+> **NO-GO** остаётся только для снятия hold и реальных MAX-действий до сверки
+> VPS authorization record/scope и закрытия release/canary gates. Текущие
+> блокеры и порядок закрытия описаны в
+> [аудите](audit/PROJECT-AUDIT-2026-09-24.md) и
+> [плане запуска](PRODUCTION-LAUNCH-PLAN-2026-09-24.md). Примеры ниже —
+> целевые процедуры после исправлений и проверки на изолированном стенде.
+
 ## D-1 — Deploy verify
 
 ### Platform authorization record
 
-`MAX_PLATFORM_AUTHORIZATION_FILE` is optional configuration for the bounded
-platform-action authorization record. The runtime fails closed when the path is
-unset, missing, malformed, expired, or does not include the requested action.
+Compose sets `MAX_PLATFORM_AUTHORIZATION_FILE` to
+`/app/authorization/platform-authorization.json` and mounts the host directory
+`MAX_PLATFORM_AUTHORIZATION_DIR` read-only. The runtime fails closed when the
+record is missing, malformed, expired, or does not include the requested action.
 The JSON contains only a non-secret approval reference, declared transport,
 action scope, and validity window; it is not proof that the underlying contract
 or permission exists. A reviewer must verify that underlying authorization
@@ -25,18 +36,31 @@ guarded MAX adapter call are held; the health response reports
 automatically removed by startup, health checks, or restore completion.
 
 Release is a separate operator action after the restored revision and
-platform authorization have been reviewed:
+platform authorization have been reviewed. `release-recovery-hold.py` is
+copied into the app image, and deploy prepares `/app/control` ownership for
+UID 10001. Staging must still exercise the expected/mismatched revision path
+and evidence write; do not remove the hold manually.
+
+Both `scripts/deploy.sh` and the GitHub deploy workflow now create
+`deploy-<40-char-SHA>` in `max_server_control` before backup or stopping
+services. Hold creation is atomic and refuses to overwrite an existing hold;
+the deployment leaves it active. After the release record and canary target
+are approved, release only the exact revision and retain a non-secret change
+reference in evidence:
 
 ```bash
-.venv/bin/python scripts/release-recovery-hold.py \
-  --expected-revision restore-20260920-120000 \
-  --authorization-reference OPS-CHANGE-1234
+docker compose exec -T app python /app/scripts/release-recovery-hold.py \
+  --expected-revision "deploy-<40-char-SHA>" \
+  --authorization-reference "<change-id>"
+REQUIRE_MAX_ACTIONS=1 bash scripts/verify_deploy.sh
 ```
 
-The reference is a non-secret change/approval identifier. The command appends
-release evidence before atomically removing the hold and never starts a
-worker. `REQUIRE_MAX_ACTIONS=1 bash scripts/verify_deploy.sh` additionally
-fails unless the health response says that the recovery gate is released.
+The runtime readiness state now checks both the recovery hold and the
+authorization record's send scope, user-session transport and expiry.
+`REQUIRE_MAX_ACTIONS=1 bash scripts/verify_deploy.sh` fails if either the hold
+is active or MAX actions are not authorized. Run this final check only after
+the operator has explicitly released the reviewed hold; ordinary deploy
+verification can complete with the hold active.
 
 ### PyMax 2.4.1 lifecycle boundary
 
@@ -65,6 +89,7 @@ conditions.
 - [ ] `.env` без `change-me*`
 - [ ] `bash scripts/backup-volumes.sh` (перед каждым prod deploy)
 - [ ] recovery hold включён до restore/deploy; release остаётся отдельным шагом
+- [ ] кодовые исправления A02–A07/A09–A12 прошли exact-SHA CI/review; release gates A08/A13 закрыты
 - [ ] DNS A-запись → IP VPS
 
 ### Deploy
@@ -74,9 +99,15 @@ bash scripts/deploy.sh          # build + up + health
 bash scripts/verify_deploy.sh   # полная проверка
 ```
 
+The deploy command enables a recovery hold before taking the backup; the
+revision is `deploy-$(git rev-parse HEAD)`. The GitHub workflow uses the exact
+selected `CANDIDATE_SHA`. In both paths, review and explicitly release that
+hold only after production readiness and canary scope are documented.
+
 Образ запускает приложение как UID/GID `10001`. `deploy.sh` после сборки
-однократно выравнивает ownership существующего `max_server_data` через
-короткий root-контейнер и затем запускает постоянные сервисы без root.
+однократно выравнивает ownership существующих `max_server_data` и
+`max_server_control` volumes через короткий root-контейнер и затем запускает
+постоянные сервисы без root.
 
 `verify_deploy.sh` проверяет:
 
@@ -86,9 +117,10 @@ bash scripts/verify_deploy.sh   # полная проверка
 4. HTTPS через Caddy (если `DOMAIN` не example.com)
 5. Celery worker ping (если `USE_CELERY=1`)
 
-With `REQUIRE_MAX_ACTIONS=1`, it also requires
-`max_external_actions: authorized` and `recovery_hold: false`; normal health
-readiness remains usable while external actions are held.
+`REQUIRE_MAX_ACTIONS=1` requires
+`max_external_actions: authorized` and `recovery_hold: false`; the health state
+also checks the configured authorization record. This is a technical gate and
+does not establish the underlying platform permission.
 
 Переменные:
 
@@ -97,6 +129,10 @@ readiness remains usable while external actions are held.
 | `CHECK_HTTPS` | `1` | `0` — пропустить curl к DOMAIN |
 
 ### Rollback
+
+Проверьте совместимость предыдущего образа с текущей схемой и сохранёнными
+сессиями. Если нужно восстановить данные, используйте согласованный бэкап
+PostgreSQL и `max_server_data` с recovery hold по процедуре ниже.
 
 ```bash
 cd /opt/maxsender
@@ -109,7 +145,12 @@ bash scripts/restore-volumes.sh ./backups/<stamp>
 
 ### GitHub Actions deploy
 
-Workflow `.github/workflows/deploy.yml` запускается только вручную (`workflow_dispatch`), проверяет и деплоит immutable `github.sha`, делает backup при наличии PostgreSQL volume/data, затем запускает `docker compose up -d` (`--profile celery` when `USE_CELERY=1`) и проверяет health с `db_ok`.
+Workflow `.github/workflows/deploy.yml` запускается только вручную
+(`workflow_dispatch`). Workflow теперь передаёт `CANDIDATE_SHA` через
+`appleboy/ssh-action.with.envs`; перед production всё ещё нужен staging прогон,
+подтверждающий checkout именно выбранного SHA, backup, Compose и health.
+Deploy chown-ит `/app/control` для app UID 10001. Локальная правка workflow не
+является свидетельством успешного VPS deploy.
 
 ---
 
@@ -161,6 +202,14 @@ Unit-тесты: `tests/test_celery_worker.py`.
 | `max_server_data` | SQLite tenant DB, sessions, vault salt/key | compose volume |
 | `max_server_pg` | users, tenants, JWT revoke | PostgreSQL 16 |
 | `max_server_redis` | опционально | Celery broker state |
+| `max_server_control` | recovery hold, auth epoch, release evidence | отдельный compose volume; backup переносит только минимальный `auth-state.json` с epoch, не переносит hold/release evidence |
+
+Backup сохраняет auth epoch в `auth-state.json`, проверяет data tree и готовый
+архив на plaintext `session.db` и прекращает операцию при его обнаружении.
+Restore сравнивает epoch snapshot с целевым control volume, продвигает его и
+создаёт recovery hold до замены данных; hold не снимается автоматически.
+Cross-host backup/restore rehearsal остаётся обязательным перед эксплуатацией.
+Все backup-каталоги секретны: они содержат vault key и зашифрованные сессии.
 
 **Критично:** `max_server_data` — ключ шифрования сессий. Без него сессии не расшифровать.
 
@@ -170,14 +219,35 @@ Unit-тесты: `tests/test_celery_worker.py`.
 
 Fresh install: `initdb.d` монтирует только `schema_pg.sql` (таблица `schema_migrations`). Все SQL из `migrations/*.sql` применяет Python runner (`db_pg._apply_pending_migrations`) при старте приложения. Новые миграции добавляйте только в `migrations/` — **не** в `docker-entrypoint-initdb.d`.
 
+Для существующих SQLite tenant DB перед обновлением проверьте копию базы. Новая
+версия автоматически чинит устаревшее состояние `destination_verified=0` при
+непустом `max_chat_id`; эта комбинация не создаётся текущим UI/API. Старый
+`groups.proxy=''` с прокси у связанных профилей может быть как прерванным
+legacy backfill, так и намеренно очищенным значением, поэтому просмотрите
+кандидаты вручную и сохраните решение владельца:
+
+```sql
+SELECT id, name, max_chat_id
+FROM groups
+WHERE destination_verified=0 AND TRIM(COALESCE(max_chat_id, '')) <> '';
+
+SELECT g.id, g.name, p.id AS profile_id, p.proxy
+FROM groups g
+JOIN group_profiles gp ON gp.group_id=g.id AND gp.is_enabled=1
+JOIN profiles p ON p.id=gp.profile_id
+WHERE TRIM(COALESCE(g.proxy, ''))=''
+  AND TRIM(COALESCE(p.proxy, '')) <> ''
+ORDER BY g.id, gp.order_index, p.id;
+```
+
 ### Создание бэкапа
 
 ```bash
 bash scripts/backup-volumes.sh
-# → ./backups/YYYYMMDD-HHMMSS/{pg.dump,data.tar.gz,README.txt}
+# → ./backups/YYYYMMDD-HHMMSS/{pg.dump,data.tar.gz,auth-state.json,README.txt}
 ```
 
-Backup uses a short maintenance window: it records which app/celery services are running, stops writers, creates the PostgreSQL dump, checkpoints every SQLite WAL, archives `max_server_data`, verifies both archives, and restarts only the services that were running. An EXIT/INT/TERM trap also attempts restart after failure. This makes the PostgreSQL + SQLite pair consistent relative to application writes. The script sets `umask 077` and `chmod 700` on the destination. Treat backup directories as secret (vault material).
+Backup uses a short maintenance window: it records which app/celery services are running, stops writers, creates the PostgreSQL dump, checkpoints every SQLite WAL, saves the JWT auth epoch, archives `max_server_data`, rejects plaintext sessions and validates both archives, then restarts only the services that were running. An EXIT/INT/TERM trap also attempts restart after failure. This makes PostgreSQL + SQLite consistent relative to application writes. The script sets `umask 077` and `chmod 700` on the destination. Treat backup directories as secret (vault material).
 
 Cron (ежедневно, 03:00):
 
@@ -207,48 +277,13 @@ success, `.outgoing-restore` is removed, the stack is started, and
 `verify_deploy.sh` runs. An interrupted swap also leaves `.outgoing-restore` —
 retry will not proceed while that directory exists.
 
-Do not use the legacy data-only snippet below for a production restore; it does
-not provision the external control hold. Use `restore-volumes.sh` instead.
+### Восстановление одного хранилища
 
-### Ручной PG-only restore
-
-```bash
-docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner --exit-on-error --single-transaction \
-  < backups/<stamp>/pg.dump
-```
-
-### Ручной data-only restore
-
-```bash
-docker compose stop app celery-worker
-docker compose run --rm -T --no-deps \
-  -v "$(pwd)/backups/<stamp>:/backup:ro" \
-  --entrypoint python \
-  app -c 'import pathlib, shutil, tarfile
-root = pathlib.Path("/app/data")
-incoming = root / ".incoming-restore"
-outgoing = root / ".outgoing-restore"
-if outgoing.exists():
-    raise SystemExit("leftover .outgoing-restore; inspect before retry")
-if incoming.exists():
-    shutil.rmtree(incoming)
-incoming.mkdir()
-with tarfile.open("/backup/data.tar.gz") as archive:
-    archive.extractall(incoming, filter="data")
-if not any(incoming.iterdir()):
-    shutil.rmtree(incoming)
-    raise SystemExit("empty extract")
-outgoing.mkdir()
-for child in list(root.iterdir()):
-    if child.name in (".incoming-restore", ".outgoing-restore"):
-        continue
-    child.rename(outgoing / child.name)
-for child in list(incoming.iterdir()):
-    child.rename(root / child.name)
-incoming.rmdir()
-shutil.rmtree(outgoing)'
-docker compose up -d
-```
+Отдельные PG-only и data-only команды исключены из runbook: данные PostgreSQL
+и SQLite связаны, а ручная подмена тома обходит создание recovery hold. Для
+рабочего восстановления используйте только `scripts/restore-volumes.sh` и
+проверяйте результат по процедуре выше. Исключения требуют отдельного плана
+восстановления и проверки согласованности данных.
 
 ---
 
@@ -285,7 +320,10 @@ curl -s -H "Authorization: Bearer $INTERNAL_SERVICE_TOKEN" https://$DOMAIN/metri
 
 ### WebSocket status
 
-`WS /ws/status` — server: handshake cookie `max_token` + первое сообщение `{"type":"auth"}` (JSON `token` только если cookie нет). Desktop: `{"type":"auth","pin":"..."}`. Query `?token=` не используется.
+`WS /ws/status` — server mode: same-origin handshake с cookie `max_token` и
+первое сообщение `{"type":"auth"}`; JSON-поле `token` не используется.
+Локальный режим: первое сообщение `{"type":"auth","pin":"..."}`.
+Query `?token=` не используется.
 
 ### Telegram ops (server mode)
 

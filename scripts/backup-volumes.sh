@@ -15,6 +15,8 @@ echo "Backup → $DEST"
 
 running_services="$(docker compose ps --status running --services 2>/dev/null || true)"
 restart_services=()
+archive_started=0
+backup_complete=0
 if grep -qx "app" <<<"$running_services"; then
   restart_services+=(app)
 fi
@@ -25,6 +27,9 @@ fi
 restart_after_backup() {
   rc=$?
   trap - EXIT INT TERM
+  if ((archive_started)) && (( ! backup_complete )); then
+    rm -f "$DEST/data.tar.gz"
+  fi
   if ((${#restart_services[@]})); then
     echo "  Restarting previously running services: ${restart_services[*]}"
     docker compose start "${restart_services[@]}" || rc=1
@@ -53,8 +58,17 @@ for db in Path("/app/data").rglob("app.db"):
 '
 echo "  WAL checkpoint done"
 
+echo "  Checking for plaintext sessions…"
+docker compose run --rm -T --no-deps --entrypoint python \
+  app -m app.backup_guard check-tree /app/data
+
+echo "  Saving JWT revocation state…"
+docker compose run --rm -T --no-deps --entrypoint python \
+  app -m app.backup_guard export-auth - > "$DEST/auth-state.json"
+
 echo "  max_server_data volume…"
 # App image has tar; compose has no alpine service. -T keeps the archive binary-clean.
+archive_started=1
 docker compose run --rm -T --no-deps --entrypoint tar \
   app czf - -C /app/data . > "$DEST/data.tar.gz"
 
@@ -85,5 +99,15 @@ if [[ -z "$listing" ]]; then
   echo "ERROR: data.tar.gz has no tar members (empty archive)" >&2
   exit 1
 fi
+if grep -Eq '(^|/)session[.]db$' <<<"$listing"; then
+  echo "ERROR: data.tar.gz contains plaintext session.db; discard this backup" >&2
+  rm -f "$DEST/data.tar.gz"
+  exit 1
+fi
+docker compose run --rm -T --no-deps --user root \
+  -v "$(cd "$DEST" && pwd):/backup:ro" \
+  --entrypoint python \
+  app -m app.backup_guard check-archive /backup/data.tar.gz
 
-echo "Done: $DEST (pg.dump + data.tar.gz)"
+backup_complete=1
+echo "Done: $DEST (pg.dump + data.tar.gz + auth-state.json)"

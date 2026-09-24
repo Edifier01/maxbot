@@ -1,5 +1,11 @@
 # MAXBOT release gate
 
+> Документ содержит evidence для указанных ниже SHA и dirty worktree на дату
+> записи. При аудите документации 2026-09-24 текущий HEAD был
+> `b2f82b739910f4c440c59efbf0d2e191ab744009`; полный набор release
+> проверок для него здесь не зафиксирован. Исторические PASS и вердикт
+> `FIX/PARTIAL` ниже не являются новым допуском этого HEAD к production.
+
 Candidate runtime/test commit:
 `473eb404f374400323e9a397acb20e2818ed7637`.
 
@@ -141,3 +147,44 @@ suite passed `693` with `19` PostgreSQL skips; PostgreSQL server E2E separately
 passed `4`. Git commit/push, deployment and live provider qualification were not
 performed. This continuation is local evidence only, not the required
 independent exact-SHA review.
+
+## 2026-09-24 audit-fix continuation (dirty worktree)
+
+The user confirmed that MAX permissions exist outside the repository. This
+owner statement supersedes the earlier assumption that no permission had been
+obtained, but is not stored as a contract or authorization record in Git. The
+current tree implements audit fixes A02–A07 and A09–A12: workflow SHA handoff,
+read-only authorization mount and fail-closed readiness, image/control
+permissions for release hold, backup/restore JWT epoch and plaintext-session
+guards, current JWT role/tenant checks, impersonation logout revocation, and
+PG/SQLite migration fixes. Windows SQLite test fixtures now close handles; the
+WSL launcher test is skipped on Windows.
+
+Fresh exact current-worktree result with CI environment variables and no
+`DATABASE_URL`: `716 passed, 20 skipped` in `32.51s`. The directly affected
+Windows set passed `30` with one WSL-only skip. The three recovery-hold deploy
+guard tests pass. This is not a commit-bound run.
+PostgreSQL skipif/E2E modules, Linux backup/restore smoke, browser matrix,
+workflow staging, exact-image scan, the 365 normative cases, T30-C02 and manual
+a11y/secret-history reviews remain unverified. Local deploy scripts and the
+GitHub workflow create an atomic, non-overwriting `deploy-<SHA>` recovery hold
+before backups and leave it active after deploy.
+
+## 2026-09-24 exact-SHA CI and production rollout
+
+Candidate `2e355d41fdbe805e72a61cf95606e2c5a71d550a` passed PR CI run
+`35963846344` and production deploy workflow run `35964438596`. The exact-SHA
+deploy verify passed SQLite, PostgreSQL modules/E2E, dependency audit, Compose,
+production image build, backup/restore DR smoke, and browser E2E. Production
+backup completed before app replacement. The app, PostgreSQL, and Redis then
+reported healthy; final `/api/health` reported `db_ok=true`,
+`max_external_actions=held`, and `recovery_hold=true`. Recovery hold revision:
+`deploy-2e355d41fdbe805e72a61cf95606e2c5a71d550a`.
+
+This is a successful production web rollout with MAX actions fenced. The image
+digest was not recorded by the workflow. The underlying VPS authorization
+record/scope, staging qualification, 365 normative cases, T30-C02, exact-image
+CVE scan, secret-history owner review, manual accessibility review, and live
+MAX canary remain open. No real MAX login, join, or send was run. Verdict stays
+`FIX / PARTIAL` / **NO-GO to release the recovery hold or enable live MAX
+actions**.

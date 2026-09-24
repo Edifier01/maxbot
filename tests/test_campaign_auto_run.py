@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -20,6 +21,17 @@ def m(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_TEST", "1")
     monkeypatch.setenv("MAX_SERVER_MODE", "0")
     monkeypatch.setenv("MAX_DATA", str(tmp_path / "data"))
+    authorization = tmp_path / "platform-authorization.json"
+    now = datetime.now(UTC)
+    authorization.write_text(json.dumps({
+        "schema_version": 1,
+        "reference": "campaign-test-fixture",
+        "transport": "authorized_user_session",
+        "allowed_actions": ["send"],
+        "valid_from": (now - timedelta(days=1)).isoformat(),
+        "valid_until": (now + timedelta(days=1)).isoformat(),
+    }), encoding="utf-8")
+    monkeypatch.setenv("MAX_PLATFORM_AUTHORIZATION_FILE", str(authorization))
     import app.sqlite_backend as sqlite_backend
     import app.config as config
     import main as main_mod
@@ -243,6 +255,16 @@ def test_campaign_preview_is_read_only_and_returns_revision(m):
         assert c.execute("SELECT COUNT(*) FROM profile_daily_plans").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM daily_cycles").fetchone()[0] == 0
     assert after_link == before_link
+
+
+def test_campaign_preview_reports_missing_platform_authorization(m, monkeypatch):
+    from app.routes_campaign import campaign_preview
+
+    monkeypatch.delenv("MAX_PLATFORM_AUTHORIZATION_FILE")
+    response = asyncio.run(campaign_preview())
+    assert response["ok"] is False
+    assert "max_authorization_record_missing" in response["blockers"]
+    assert response["selection"]["external_actions"] == "record_missing"
 
 
 def test_campaign_preview_reports_window_shortfall_without_mutation(m, monkeypatch):

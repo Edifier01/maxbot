@@ -69,7 +69,7 @@ def token_is_current(payload: dict[str, Any]) -> bool:
     return issued_at is not None and issued_at >= epoch
 
 
-def write_epoch(authorization_reference: str) -> float:
+def write_epoch(authorization_reference: str, *, minimum_epoch: float = 0.0) -> float:
     reference = authorization_reference.strip()
     if not reference or len(reference) > 200 or not reference.isprintable():
         raise ValueError("authorization reference must be non-empty and printable")
@@ -77,7 +77,9 @@ def write_epoch(authorization_reference: str) -> float:
     if path is None:
         raise RuntimeError("MAX_SERVER_MODE=1 is required for administrator recovery")
     path.parent.mkdir(parents=True, exist_ok=True)
-    epoch = time.time() + 1.0
+    if not math.isfinite(minimum_epoch) or minimum_epoch < 0:
+        raise ValueError("invalid minimum auth epoch")
+    epoch = max(time.time(), current_epoch(), minimum_epoch) + 1.0
     payload = {
         "schema_version": 1,
         "epoch": epoch,

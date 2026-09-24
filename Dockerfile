@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir /wheels/* \
     && rm -rf /wheels \
     && groupadd --gid 10001 maxsender \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin maxsender \
-    && mkdir -p /app/data \
+    && mkdir -p /app/data /app/control /app/scripts \
     && chown -R 10001:10001 /app
 
 COPY --chown=10001:10001 main.py antiban_core.py celery_worker.py ./
@@ -28,6 +28,7 @@ COPY --chown=10001:10001 schema_pg.sql ./
 COPY --chown=10001:10001 migrations ./migrations
 COPY --chown=10001:10001 static ./static
 COPY --chown=10001:10001 app ./app
+COPY --chown=10001:10001 scripts/release-recovery-hold.py ./scripts/
 
 ENV MAX_HOST=0.0.0.0
 ENV MAX_PORT=8765

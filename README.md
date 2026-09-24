@@ -4,17 +4,23 @@
 статические страницы и SQLite/PostgreSQL runtime. Каталогов `desktop/` и
 `server/` в поддерживаемой структуре нет.
 
+Карта рабочих инструкций и исторических материалов: [`docs/README.md`](docs/README.md).
+
 ## Локальный запуск без MAX-действий
 
-Для Python 3.12 используйте из корня проекта:
+Установите зависимости для Python 3.12 из корня проекта:
 
 ```bash
-.venv/bin/python -m app.main --no-browser
+python -m pip install -r requirements.lock -r requirements-server.lock
+python -m app.main --no-browser
 ```
 
-На Windows локальный launcher `run.bat` запускает Docker Compose, а не
-production MAX-квалификацию. Автоматические тесты используют только фиктивные
-данные и fake/mocked boundaries; они не выполняют SMS, login, send, join,
+На Windows используйте `py -3.12` вместо `python`, если так настроен Python
+Launcher. Если создано локальное виртуальное окружение, запускайте команды
+через `.venv\Scripts\python.exe` в PowerShell. `run.bat` запускает Docker
+Compose, для которого нужен заполненный `.env`. Автоматические тесты
+используют только фиктивные данные и fake/mocked boundaries; они не выполняют
+SMS, login, send, join,
 probe, history, read или reaction.
 
 ## Docker Compose server mode
@@ -56,11 +62,14 @@ health с `db_ok: true`; неуспешные попытки завершают�
 ## Проверки
 
 ```bash
-.venv/bin/python -m pytest tests/ -q
-.venv/bin/python -m compileall -q main.py antiban_core.py celery_worker.py app tests static
-docker compose config -q
+python -m pytest tests/ -q
+python -m compileall -q main.py antiban_core.py celery_worker.py app tests static
 ```
 
-Полный suite, Docker daemon, PostgreSQL/Redis, rendered browser и production
-verification должны быть отмечены фактическими exit-кодами и не заменяются
-документом о готовности.
+Для pytest установите также `requirements-dev.txt`. Основной suite запускайте
+с `MAX_TEST=1`, `MAX_SERVER_MODE=1` и тестовым `JWT_SECRET`, без `DATABASE_URL`;
+PostgreSQL-модули запускаются отдельным процессом с тестовой базой. Для
+проверки Compose нужны тестовые обязательные переменные из
+`.github/workflows/ci.yml`. Браузерный fixture и команда
+`npm run browser:e2e` также описаны в CI. Эти локальные проверки не являются
+подтверждением готовности production-развёртывания.

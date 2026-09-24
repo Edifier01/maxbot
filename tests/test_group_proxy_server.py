@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import sqlite3
 
 import pytest
 from fastapi import HTTPException
@@ -211,6 +212,78 @@ def _setup_local(tmp_path, monkeypatch):
     m._refresh_data_paths()
     m.init_db()
     return m
+
+
+def test_schema_backfills_roll_back_together_on_interruption(tmp_path, monkeypatch):
+    m = _setup_local(tmp_path, monkeypatch)
+    import app.sqlite_backend as sqlite_backend
+
+    with m._conn() as connection:
+        profile_id = connection.execute(
+            "INSERT INTO profiles (phone, proxy) VALUES (?, ?)",
+            ("+79990000001", "socks5://proxy.example:1080"),
+        ).lastrowid
+        group_id = connection.execute(
+            "INSERT INTO groups (name, invite_link) VALUES (?, ?)",
+            ("legacy", "https://max.ru/join/legacy"),
+        ).lastrowid
+        connection.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (?, ?, 1)",
+            (group_id, profile_id),
+        )
+        for column in ("destination_verified", "destination_revision", "proxy"):
+            connection.execute(f"ALTER TABLE groups DROP COLUMN {column}")
+        connection.execute("UPDATE groups SET max_chat_id='chat-legacy'")
+
+    class FailOnBackfill:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+
+        def execute(self, sql, *args):
+            if "UPDATE groups SET destination_verified=1" in sql:
+                raise sqlite3.OperationalError("simulated interruption during backfill")
+            return self.wrapped.execute(sql, *args)
+
+        def executescript(self, sql):
+            return self.wrapped.executescript(sql)
+
+    with m._conn() as connection:
+        with pytest.raises(sqlite3.OperationalError, match="simulated interruption"):
+            sqlite_backend._migrate_schema(FailOnBackfill(connection))
+
+        columns = sqlite_backend._table_columns(connection, "groups")
+        assert "destination_revision" not in columns
+        assert "destination_verified" not in columns
+        assert "proxy" not in columns
+
+        sqlite_backend._migrate_schema(connection)
+        row = connection.execute(
+            "SELECT destination_verified, proxy FROM groups WHERE id=?", (group_id,)
+        ).fetchone()
+        assert row["destination_verified"] == 1
+        assert row["proxy"] == "socks5://proxy.example:1080"
+
+
+def test_schema_repairs_legacy_destination_column_with_incomplete_backfill(
+    tmp_path, monkeypatch
+):
+    m = _setup_local(tmp_path, monkeypatch)
+    import app.sqlite_backend as sqlite_backend
+
+    with m._conn() as connection:
+        group_id = connection.execute(
+            "INSERT INTO groups (name, invite_link, max_chat_id, destination_verified) "
+            "VALUES (?, ?, ?, 0)",
+            ("interrupted-legacy", "https://max.ru/join/legacy", "chat-legacy"),
+        ).lastrowid
+
+        sqlite_backend._migrate_group_destination_and_proxy(connection)
+
+        row = connection.execute(
+            "SELECT destination_verified FROM groups WHERE id=?", (group_id,)
+        ).fetchone()
+        assert row["destination_verified"] == 1
 
 
 def test_campaign_start_server_mode_empty_proxy_400(tmp_path, monkeypatch):

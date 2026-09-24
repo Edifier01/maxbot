@@ -21,6 +21,24 @@ if [[ "$ASSUME_YES" != "1" ]]; then
   [[ "$ans" == "y" || "$ans" == "Y" ]] || exit 0
 fi
 
+if ! restore_listing=$(tar -tzf "$SRC/data.tar.gz"); then
+  echo "invalid data.tar.gz" >&2
+  exit 1
+fi
+if grep -Eq '(^|/)session[.]db$' <<<"$restore_listing"; then
+  echo "backup contains plaintext session.db; restore refused" >&2
+  exit 1
+fi
+
+echo "Проверка auth snapshot и control volume до восстановления…"
+docker compose run --rm -T --no-deps --user root \
+  -v "$(cd "$SRC" && pwd):/backup:ro" \
+  --entrypoint python \
+  app -m app.backup_guard validate-auth-snapshot /backup/auth-state.json
+docker compose run --rm -T --no-deps \
+  --entrypoint python \
+  app -m app.backup_guard preflight-control -
+
 echo "Остановка app и celery…"
 docker compose stop app celery-worker 2>/dev/null || docker compose stop app
 
@@ -91,6 +109,11 @@ echo "Восстановление PostgreSQL…"
 if docker compose exec -T postgres pg_restore -U maxsender -d maxsender --clean --if-exists --no-owner \
   --exit-on-error --single-transaction \
   < "$SRC/pg.dump"; then
+  echo "Rotating JWT epoch for restored data…"
+  docker compose run --rm -T --no-deps --user root \
+    -v "$(cd "$SRC" && pwd):/backup:ro" \
+    --entrypoint python \
+    app -m app.backup_guard rotate-auth /backup/auth-state.json --revision "$RESTORE_REVISION"
   echo "pg_restore OK — removing .outgoing-restore"
   docker compose run --rm -T --no-deps --entrypoint python app -c 'import pathlib, shutil
 outgoing = pathlib.Path("/app/data/.outgoing-restore")

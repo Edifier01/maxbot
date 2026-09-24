@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 import importlib
 import random
 import sqlite3
@@ -376,7 +377,7 @@ def test_ordinary_login_faults_reseal_same_saved_session_without_sms_or_fresh_lo
         session_dir = m._session_dir(profile_id)
         session_dir.mkdir(parents=True, exist_ok=True)
         session_db = session_dir / "session.db"
-        with sqlite3.connect(session_db) as connection:
+        with closing(sqlite3.connect(session_db)) as connection, connection:
             connection.execute(
                 "CREATE TABLE sessions ("
                 "token TEXT NOT NULL PRIMARY KEY, device_id TEXT NOT NULL, "
@@ -401,7 +402,7 @@ def test_ordinary_login_faults_reseal_same_saved_session_without_sms_or_fresh_lo
         def session_identity() -> tuple[object, ...]:
             m._decrypt_session(profile_id)
             try:
-                with sqlite3.connect(session_db) as connection:
+                with closing(sqlite3.connect(session_db)) as connection, connection:
                     return connection.execute(
                         "SELECT token, device_id, phone, mt_instance_id, "
                         "user_agent FROM sessions"
@@ -490,7 +491,7 @@ def test_ordinary_login_tolerates_benign_tls_disconnect_and_reseals_session(
         session_dir = m._session_dir(profile_id)
         session_dir.mkdir(parents=True, exist_ok=True)
         session_db = session_dir / "session.db"
-        with sqlite3.connect(session_db) as connection:
+        with closing(sqlite3.connect(session_db)) as connection, connection:
             connection.execute(
                 "CREATE TABLE sessions (token TEXT NOT NULL PRIMARY KEY, "
                 "device_id TEXT NOT NULL, phone TEXT NOT NULL, "
@@ -541,7 +542,7 @@ def test_ordinary_login_tolerates_benign_tls_disconnect_and_reseals_session(
         assert encrypted.is_file()
         m._decrypt_session(profile_id)
         try:
-            with sqlite3.connect(session_db) as connection:
+            with closing(sqlite3.connect(session_db)) as connection, connection:
                 identity = connection.execute(
                     "SELECT token, device_id, phone, mt_instance_id "
                     "FROM sessions"

@@ -139,7 +139,8 @@ def _apply_pending_migrations() -> None:
             cur.execute(sql)
             cur.execute(
                 "INSERT INTO schema_migrations (version, checksum) VALUES (%s, %s) "
-                "ON CONFLICT DO NOTHING",
+                "ON CONFLICT (version) DO UPDATE SET checksum = EXCLUDED.checksum "
+                "WHERE schema_migrations.checksum IS NULL",
                 (version, checksum),
             )
 

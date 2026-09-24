@@ -5,6 +5,12 @@
 **Feature:** FEATURE-RESIDUALS-2026  
 **Related:** ADR 006 (vault), remember-me persistent login
 
+**Current implementation note (2026-09-24):** The decision to use cookie-only
+user JWTs still applies. Two transitional details below are historical:
+server-mode WebSocket authentication now requires the handshake cookie and
+ignores JSON `token`; login/register responses no longer include a JWT field.
+See `app/routes_monitor.py` and `app/routes_auth.py`.
+
 ## Context
 
 User JWTs were accepted from either `Authorization: Bearer` or the HttpOnly `max_token` cookie. The frontend stored the JWT in JavaScript (`localStorage` / memory) and sent it as Bearer. That keeps a long-lived credential reachable to XSS. Impersonation returned a JSON token and did not set a cookie, so the admin UI also had to hold JWTs in JS to enter and exit impersonation.
