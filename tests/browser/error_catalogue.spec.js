@@ -305,6 +305,8 @@ test.describe('structured error catalogue', () => {
 
   test('admin and impersonation surfaces invoke every normalized action token safely', async ({ page, diagnostics }, testInfo) => {
     test.skip(testInfo.project.name !== '390x844', 'role action invocation is bound to one viewport');
+    // This intentionally reloads both surfaces for every catalogue action.
+    test.setTimeout(120_000);
     diagnostics.allowFailedRequest('/');
     diagnostics.allowResponse('/api/auth/restore-session', [401]);
     diagnostics.allowConsoleError(/status of 401/);
