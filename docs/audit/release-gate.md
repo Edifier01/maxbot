@@ -167,8 +167,24 @@ guard tests pass. This is not a commit-bound run.
 PostgreSQL skipif/E2E modules, Linux backup/restore smoke, browser matrix,
 workflow staging, exact-image scan, the 365 normative cases, T30-C02 and manual
 a11y/secret-history reviews remain unverified. Local deploy scripts and the
-GitHub workflow now create an atomic, non-overwriting `deploy-<SHA>` recovery
-hold before backups and leave it active after deploy. Exact-SHA workflow,
-server qualification, and live provider qualification remain unverified. The
-release verdict stays `FIX / PARTIAL` / production `NO-GO`; no production
-deploy or real MAX action was performed.
+GitHub workflow create an atomic, non-overwriting `deploy-<SHA>` recovery hold
+before backups and leave it active after deploy.
+
+## 2026-09-24 exact-SHA CI and production rollout
+
+Candidate `2e355d41fdbe805e72a61cf95606e2c5a71d550a` passed PR CI run
+`35963846344` and production deploy workflow run `35964438596`. The exact-SHA
+deploy verify passed SQLite, PostgreSQL modules/E2E, dependency audit, Compose,
+production image build, backup/restore DR smoke, and browser E2E. Production
+backup completed before app replacement. The app, PostgreSQL, and Redis then
+reported healthy; final `/api/health` reported `db_ok=true`,
+`max_external_actions=held`, and `recovery_hold=true`. Recovery hold revision:
+`deploy-2e355d41fdbe805e72a61cf95606e2c5a71d550a`.
+
+This is a successful production web rollout with MAX actions fenced. The image
+digest was not recorded by the workflow. The underlying VPS authorization
+record/scope, staging qualification, 365 normative cases, T30-C02, exact-image
+CVE scan, secret-history owner review, manual accessibility review, and live
+MAX canary remain open. No real MAX login, join, or send was run. Verdict stays
+`FIX / PARTIAL` / **NO-GO to release the recovery hold or enable live MAX
+actions**.

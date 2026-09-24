@@ -2,8 +2,11 @@
 
 Дата плана: 2026-09-24. Цель: веб-панель и кампании с реальными действиями в
 MAX на одном VPS. Основа — [аудит текущей ревизии](audit/PROJECT-AUDIT-2026-09-24.md).
-Текущий статус **NO-GO для production release**: локальные исправления пока
-не имеют точного release SHA, независимого CI/review и staging evidence.
+Текущий статус: веб-сервис развернут в production на точном SHA
+`2e355d41fdbe805e72a61cf95606e2c5a71d550a`; health подтверждает БД и
+постоянный recovery hold. Статус **NO-GO для снятия hold и реальных MAX-действий**:
+scope authorization record на VPS, staging evidence, нормативные приёмочные и
+операционные проверки ещё не закрыты.
 Пользователь 2026-09-24 сообщил, что необходимые MAX-разрешения уже имеются;
 их договорный scope и установленный на VPS authorization record локально не
 проверялись. Каждая фаза завершается артефактом, проверяемым на
@@ -141,9 +144,11 @@ production.
 
 ## Текущее ближайшее действие
 
-Локальные пункты 1.1–1.9 исправлены и тесты пройдены; далее опубликовать
-candidate SHA, получить exact-SHA GitHub workflow evidence и пройти deploy
-workflow с активным recovery hold. С staging evidence и остальными release
-gates фазы 2 по-прежнему работать до снятия hold. Пользователь подтвердил
-наличие разрешения MAX; его scope и установленный VPS authorization record
-нужно сверить до live-canary.
+Локальные пункты 1.1–1.9 исправлены, точный SHA прошёл GitHub CI, а production
+web rollout и резервная копия завершились успешно. Следующее действие — сверить
+VPS authorization record и документированный scope, затем закрыть staging,
+365 нормативных кейсов, T30-C02, image CVE/secret-history и ручной a11y review.
+Recovery hold не снимать до отдельного bounded canary с известными аккаунтом,
+группой/адресатами, сообщением и stop conditions. Пользователь подтвердил
+наличие разрешения MAX, но его scope и технический VPS record здесь не
+проверены.

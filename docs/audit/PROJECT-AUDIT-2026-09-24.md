@@ -7,6 +7,8 @@
 незафиксированными изменениями документации. Это не проверка собранного образа
 по точному SHA и не разрешение на запуск. Исправления и порядок получения
 доказательств приведены в [плане запуска](../PRODUCTION-LAUNCH-PLAN-2026-09-24.md).
+После этой исходной проверки сервис был развернут на точном candidate SHA под
+recovery hold; актуальные rollout evidence приведены в статусе исправлений ниже.
 
 Проверка охватила FastAPI и UI, JWT/tenant, кампании и границу MAX, SQLite и
 PostgreSQL, шифрование сессий, миграции, Compose/Docker/Caddy, CI/deploy,
@@ -58,13 +60,14 @@ backup/restore, документацию и тестовые ворота. Вы�
 
 ## Статус исправлений — 2026-09-24
 
-После исходного аудита изменения сделаны в локальном незакоммиченном дереве.
-Они не привязаны к release SHA и не развёрнуты. A02–A07 и A09–A12 исправлены
-в коде/configuration и покрыты новыми или обновлёнными regression tests. A08
-и A13 остаются открытыми release gates; VPS staging, полное Linux backup/restore,
-PostgreSQL CI и точный image scan не проводились. A01 разрешение подтверждено
-пользователем как имеющееся вне репозитория; технический record/scope на VPS
-этим локально не проверен.
+После исходного аудита A02–A07 и A09–A12 исправлены в коде/configuration и
+покрыты regression tests. Candidate SHA `2e355d41fdbe805e72a61cf95606e2c5a71d550a`
+прошёл exact-SHA GitHub CI, включая Linux/PostgreSQL/E2E, browser, Compose,
+dependency audit и backup/restore DR smoke. Этот SHA развернут в production.
+A08 и A13 остаются открытыми release gates; VPS staging, 365 нормативных
+кейсов, T30-C02, точный image CVE scan и ручные reviews не завершены. A01
+разрешение подтверждено пользователем как имеющееся вне репозитория; технический
+record/scope на VPS этим локально не проверен.
 
 Свежая локальная проверка `.venv` Python 3.12.14 с CI env vars и без
 `DATABASE_URL` прошла: **716 passed, 20 skipped** за 32.51 с. Шесть SQLite
@@ -74,10 +77,13 @@ fixture handles теперь явно закрываются; WSL-only shell int
 recovery hold deploy guard покрыт тремя regression tests. PostgreSQL
 integration, browser CI и DR smoke не запускались на точной release-ревизии.
 
-Реальный MAX login/send/join, production data, deploy и restore не запускались.
-Deploy entrypoints теперь атомарно включают persistent recovery hold до
-backup; GitHub deploy exact-SHA workflow остаётся следующим обязательным
-проверочным шагом.
+GitHub deploy run `35964438596` завершился успешно на указанном SHA. Backup
+создан до пересоздания приложения; PostgreSQL, Redis и app перешли в healthy.
+Итоговый `/api/health`: `db_ok=true`, `max_external_actions=held`,
+`recovery_hold=true`. Это production rollout web stack, оставленный под
+защитным hold. Реальные MAX login/send/join и обработка production data через
+MAX не выполнялись; authorization record/scope, image digest и live-canary
+пока не квалифицированы.
 
 ## Что уже есть в проекте
 
@@ -94,7 +100,7 @@ backup; GitHub deploy exact-SHA workflow остаётся следующим о�
   зависимости, браузерный fixture и DR smoke. Fixture работает с fake MAX;
   это корректная граница безопасности, но не live-доказательство.
 
-## Проверки этой ревизии и пределы
+## Исходные проверки baseline (до исправлений)
 
 | Проверка | Результат |
 | --- | --- |

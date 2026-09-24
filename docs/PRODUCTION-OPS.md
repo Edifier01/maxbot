@@ -2,9 +2,12 @@
 
 Runbook для VPS после `bootstrap-vps.sh` и первого `deploy.sh`.
 
-> Статус на 2026-09-24: пользователь подтвердил наличие MAX-разрешений.
-> **NO-GO** сохраняется до exact-SHA CI/review, staging/DR и release evidence.
-> Текущие блокеры и порядок закрытия описаны в
+> Статус на 2026-09-24: production web stack развернут с SHA
+> `2e355d41fdbe805e72a61cf95606e2c5a71d550a`, DB health зелёный, recovery hold
+> активен и удерживает все MAX-действия. Точный GitHub CI/deploy прошёл;
+> **NO-GO** остаётся только для снятия hold и реальных MAX-действий до сверки
+> VPS authorization record/scope и закрытия release/canary gates. Текущие
+> блокеры и порядок закрытия описаны в
 > [аудите](audit/PROJECT-AUDIT-2026-09-24.md) и
 > [плане запуска](PRODUCTION-LAUNCH-PLAN-2026-09-24.md). Примеры ниже —
 > целевые процедуры после исправлений и проверки на изолированном стенде.
