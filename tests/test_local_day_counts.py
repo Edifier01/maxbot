@@ -4,13 +4,16 @@ import asyncio
 from datetime import date
 
 
-def test_send_counts_use_configured_local_day(tmp_path, monkeypatch):
+def test_send_counts_use_moscow_local_day(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_TEST", "1")
     monkeypatch.setenv("MAX_SERVER_MODE", "0")
 
     import main as m
+    import app.routes_dashboard as dashboard_routes
     from app.routes_dashboard import dashboard
 
+    monkeypatch.setattr(dashboard_routes, "m", m)
+    monkeypatch.setattr(m, "_is_server_mode", lambda: False)
     monkeypatch.setattr(m, "ROOT", tmp_path)
     m.reset_test_runtime()
     m._refresh_data_paths()
@@ -55,3 +58,22 @@ def test_send_counts_use_configured_local_day(tmp_path, monkeypatch):
     result = asyncio.run(dashboard())
     assert result["sent_today"] == 3
     assert result["failed_today"] == 2
+
+
+def test_local_day_utc_bounds_ignore_non_moscow_legacy_offset(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAX_TEST", "1")
+    monkeypatch.setenv("MAX_SERVER_MODE", "0")
+
+    import main as m
+
+    monkeypatch.setattr(m, "ROOT", tmp_path)
+    m.reset_test_runtime()
+    m._refresh_data_paths()
+    m.init_db()
+    m.set_setting("timezone_offset_hours", "-8")
+    monkeypatch.setattr(m, "_local_today", lambda: date(2026, 8, 26))
+
+    assert m._local_day_utc_bounds() == (
+        "2026-08-25 21:00:00",
+        "2026-08-26 21:00:00",
+    )

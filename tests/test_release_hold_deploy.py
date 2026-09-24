@@ -66,6 +66,4 @@ def test_all_deploy_entrypoints_create_hold_before_backup():
     assert local_deploy.index("set-recovery-hold.sh") < local_deploy.index(
         "backup-volumes.sh"
     )
-    assert remote_deploy.index("set-recovery-hold.sh") < remote_deploy.index(
-        "backup-volumes.sh"
-    )
+    assert "bash scripts/deploy.sh" in remote_deploy

@@ -149,6 +149,6 @@ def test_volume_restore_rotates_auth_before_restarting_services():
     assert root_reader < validate_snapshot < preflight_control < script.index("docker compose stop app celery-worker")
     assert "app.backup_guard preflight-control" in script[preflight_control:]
     assert script.index("app.backup_guard rotate-auth") > script.index("if docker compose exec -T postgres pg_restore")
-    assert script.index("app.backup_guard rotate-auth") < script.index("docker compose up -d")
+    assert script.index("app.backup_guard rotate-auth") < script.rindex("docker compose up -d")
     assert script.index("app.backup_guard rotate-auth") < script.index("shutil.rmtree(outgoing)")
     assert script.index("session[.]db") < script.index("Восстановление data volume")

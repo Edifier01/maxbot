@@ -45,7 +45,7 @@ def test_cancel_after_send_persists_sent_without_requeue(tmp_path, monkeypatch):
             );
             CREATE TABLE groups (
                 id INTEGER PRIMARY KEY, name TEXT, max_chat_id TEXT,
-                invite_link TEXT DEFAULT ''
+                invite_link TEXT DEFAULT '', proxy TEXT DEFAULT ''
             );
             CREATE TABLE queue_state (
                 id INTEGER PRIMARY KEY, running INTEGER,
@@ -55,11 +55,13 @@ def test_cancel_after_send_persists_sent_without_requeue(tmp_path, monkeypatch):
             CREATE TABLE send_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 profile_id INTEGER, group_id INTEGER, message_idx INTEGER,
-                status TEXT, error TEXT, sent_text TEXT
+                status TEXT, error TEXT, sent_text TEXT, sent_at TEXT,
+                operation_id TEXT
             );
             CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
             INSERT INTO profiles (id, phone, status) VALUES (7, '+79990007777', 'active');
-            INSERT INTO groups (id, name, max_chat_id) VALUES (1, 'g', '42');
+            INSERT INTO groups (id, name, max_chat_id, proxy)
+                VALUES (1, 'g', '42', 'socks5://127.0.0.1:1080');
             INSERT INTO queue_state (id, running) VALUES (1, 0);
             INSERT INTO settings (key, value) VALUES
                 ('human_presence_enabled', '0'), ('human_texts_enabled', '0');
@@ -71,19 +73,33 @@ def test_cancel_after_send_persists_sent_without_requeue(tmp_path, monkeypatch):
         profile = c.execute("SELECT * FROM profiles WHERE id=7").fetchone()
         group = c.execute("SELECT * FROM groups WHERE id=1").fetchone()
 
+    with tenant_scope(tenant_id=2, role="user"):
+        with m._conn() as c:
+            from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+            weekly = WeeklyScheduleRepository(c)
+            weekly.ensure_schema()
+            weekly.assign_profile(7, 1)
+            c.execute(
+                "UPDATE profile_send_schedules SET send_weekday=? WHERE profile_id=7",
+                (m._local_today().weekday(),),
+            )
+
     sent_messages = []
 
     class FakeClient:
-        async def get_chat(self, chat_id):
-            return chat_id
+        async def check_destination(self, *, chat_id):
+            return None
 
         async def send_message(self, *, chat_id, text):
             sent_messages.append((chat_id, text))
+            return type("Ack", (), {"message_id": "fixture-message-id"})()
 
     async def with_fake_client(_profile_id, _phone, fn, **_kwargs):
         return await fn(FakeClient())
 
     monkeypatch.setattr(m, "_with_client", with_fake_client)
+    monkeypatch.setattr(m, "_max_gateway", lambda _client: FakeClient())
     monkeypatch.setattr(m, "append_log", lambda _message: None)
 
     persist_send_outcome = campaign_send._persist_send_outcome
@@ -113,7 +129,7 @@ def test_cancel_after_send_persists_sent_without_requeue(tmp_path, monkeypatch):
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(run_send())
-    campaign_worker._maybe_return_to_bag(0, tracker)
+    campaign_worker._restore_claim({"mi": 0, "queue_before": None}, tracker)
     with tenant_scope(tenant_id=2, role="user"):
         with m._conn() as c:
             sent_statuses = [row[0] for row in c.execute("SELECT status FROM send_log")]

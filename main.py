@@ -348,22 +348,9 @@ def _pool_size() -> int:
     return 1
 
 
-def _timezone_offset_hours() -> float:
-    try:
-        offset = float(
-            get_setting("timezone_offset_hours") or DEFAULTS["timezone_offset_hours"]
-        )
-    except Exception:
-        try:
-            offset = float(DEFAULTS.get("timezone_offset_hours", "3"))
-        except ValueError:
-            offset = 3.0
-    return max(-12.0, min(14.0, offset))
-
-
 def _local_now() -> datetime:
-    """Текущее «локальное» время с учётом timezone_offset_hours (по умолчанию UTC+3)."""
-    return antiban_core.local_now(_timezone_offset_hours())
+    """Текущее московское время; внутренние временные метки хранятся в UTC."""
+    return antiban_core.local_now(LOCAL_UTC_OFFSET.total_seconds() / 3600)
 
 
 def _local_today() -> date:
@@ -372,8 +359,9 @@ def _local_today() -> date:
 
 def _local_day_utc_bounds() -> tuple[str, str]:
     day = _local_today()
-    local_tz = timezone(timedelta(hours=_timezone_offset_hours()))
-    start = datetime(day.year, day.month, day.day, tzinfo=local_tz).astimezone(timezone.utc)
+    start = datetime(day.year, day.month, day.day, tzinfo=LOCAL_TIMEZONE).astimezone(
+        timezone.utc
+    )
     fmt = "%Y-%m-%d %H:%M:%S"
     return start.strftime(fmt), (start + timedelta(days=1)).strftime(fmt)
 
@@ -3153,12 +3141,13 @@ def _daily_capacity_progress() -> dict[str, Any]:
     today = _local_today()
     week_start = monday_of(today).isoformat()
     week_end = (monday_of(today) + timedelta(days=7)).isoformat()
-    local_tz = timezone(timedelta(hours=_timezone_offset_hours()))
     week_start_utc = datetime.combine(
-        monday_of(today), datetime.min.time(), tzinfo=local_tz
+        monday_of(today), datetime.min.time(), tzinfo=LOCAL_TIMEZONE
     ).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     week_end_utc = datetime.combine(
-        monday_of(today) + timedelta(days=7), datetime.min.time(), tzinfo=local_tz
+        monday_of(today) + timedelta(days=7),
+        datetime.min.time(),
+        tzinfo=LOCAL_TIMEZONE,
     ).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     repository = WeeklyScheduleRepository(_conn())
     schedules = _conn().execute(
