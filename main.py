@@ -348,13 +348,34 @@ def _pool_size() -> int:
     return 1
 
 
+def _timezone_offset_hours() -> float:
+    try:
+        offset = float(
+            get_setting("timezone_offset_hours") or DEFAULTS["timezone_offset_hours"]
+        )
+    except Exception:
+        try:
+            offset = float(DEFAULTS.get("timezone_offset_hours", "3"))
+        except ValueError:
+            offset = 3.0
+    return max(-12.0, min(14.0, offset))
+
+
 def _local_now() -> datetime:
-    """Naive wall clock in the product's fixed UTC+3 operating timezone."""
-    return datetime.now(LOCAL_TIMEZONE).replace(tzinfo=None)
+    """Текущее «локальное» время с учётом timezone_offset_hours (по умолчанию UTC+3)."""
+    return antiban_core.local_now(_timezone_offset_hours())
 
 
 def _local_today() -> date:
     return _local_now().date()
+
+
+def _local_day_utc_bounds() -> tuple[str, str]:
+    day = _local_today()
+    local_tz = timezone(timedelta(hours=_timezone_offset_hours()))
+    start = datetime(day.year, day.month, day.day, tzinfo=local_tz).astimezone(timezone.utc)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return start.strftime(fmt), (start + timedelta(days=1)).strftime(fmt)
 
 
 def _load_antiban_state() -> None:
@@ -2913,15 +2934,15 @@ def _iter_unique_active_profiles():
 
 
 def _group_sends_today(profile_id: int, group_id: int) -> int:
-    today = _local_today().isoformat()
+    start_utc, end_utc = _local_day_utc_bounds()
     with _conn() as c:
         row = c.execute(
             """
             SELECT COUNT(*) n FROM send_log
             WHERE profile_id=? AND group_id=? AND status='sent'
-              AND date(sent_at, '+3 hours')=?
+              AND sent_at>=? AND sent_at<?
             """,
-            (profile_id, group_id, today),
+            (profile_id, group_id, start_utc, end_utc),
         ).fetchone()
     return int(row["n"] if row else 0)
 
@@ -3132,14 +3153,21 @@ def _daily_capacity_progress() -> dict[str, Any]:
     today = _local_today()
     week_start = monday_of(today).isoformat()
     week_end = (monday_of(today) + timedelta(days=7)).isoformat()
+    local_tz = timezone(timedelta(hours=_timezone_offset_hours()))
+    week_start_utc = datetime.combine(
+        monday_of(today), datetime.min.time(), tzinfo=local_tz
+    ).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    week_end_utc = datetime.combine(
+        monday_of(today) + timedelta(days=7), datetime.min.time(), tzinfo=local_tz
+    ).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     repository = WeeklyScheduleRepository(_conn())
     schedules = _conn().execute(
         "SELECT profile_id, send_weekday FROM profile_send_schedules"
     ).fetchall()
     sent = _conn().execute(
         "SELECT COUNT(DISTINCT profile_id) AS n FROM send_log WHERE status='sent' "
-        "AND date(sent_at, '+3 hours')>=? AND date(sent_at, '+3 hours')<?",
-        (week_start, week_end),
+        "AND sent_at>=? AND sent_at<?",
+        (week_start_utc, week_end_utc),
     ).fetchone()
     scheduled_today = sum(
         1 for row in schedules if int(row["send_weekday"]) == today.weekday()

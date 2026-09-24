@@ -83,6 +83,7 @@ async def dashboard():
     import logging
 
     try:
+        start_utc, end_utc = m._local_day_utc_bounds()
         with m._conn() as c:
             counts = c.execute(
                 "SELECT status, COUNT(*) n FROM profiles "
@@ -134,13 +135,13 @@ async def dashboard():
             today = m._local_today().isoformat()
             sent_today = c.execute(
                 "SELECT COUNT(*) n FROM send_log "
-                "WHERE date(sent_at, '+3 hours')=? AND status='sent'",
-                (today,),
+                "WHERE sent_at>=? AND sent_at<? AND status='sent'",
+                (start_utc, end_utc),
             ).fetchone()["n"]
             failed_today = c.execute(
                 "SELECT COUNT(*) n FROM send_log "
-                "WHERE date(sent_at, '+3 hours')=? AND status='failed'",
-                (today,),
+                "WHERE sent_at>=? AND sent_at<? AND status='failed'",
+                (start_utc, end_utc),
             ).fetchone()["n"]
             qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
         items = []
