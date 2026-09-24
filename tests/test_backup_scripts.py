@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -10,6 +11,32 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _find_posix_bash() -> str | None:
+    candidates = []
+    if os.name == "nt":
+        candidates.extend(
+            [
+                Path(os.environ.get("ProgramFiles", "C:/Program Files"))
+                / "Git" / "bin" / "bash.exe",
+                Path(os.environ.get("ProgramFiles", "C:/Program Files"))
+                / "Git" / "usr" / "bin" / "bash.exe",
+            ]
+        )
+    found = shutil.which("bash")
+    if found:
+        candidates.append(Path(found))
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        if os.name == "nt" and candidate.parent.name.casefold() == "system32":
+            continue  # Windows' bash.exe is a WSL launcher, not a POSIX shell.
+        return str(candidate)
+    return None
+
+
+_POSIX_BASH = _find_posix_bash()
 
 
 def _run_verify_deploy_with_stubbed_health(tmp_path: Path, *, success_on: int | None):
@@ -40,15 +67,15 @@ exit 0
         encoding="utf-8",
     )
     docker.chmod(0o755)
-    sleep = bin_dir / "sleep"
-    sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    sleep.chmod(0o755)
+    bash_env = tmp_path / "bash-env"
+    bash_env.write_text("sleep() { return 0; }\n", encoding="utf-8")
 
     env = os.environ.copy()
     env.update(
         {
-            "PATH": f"{bin_dir}:{env['PATH']}",
+            "PATH": os.pathsep.join((str(bin_dir), env["PATH"])),
             "VERIFY_STUB_STATE": str(state),
+            "BASH_ENV": str(bash_env),
             "DOMAIN": "example.com",
             "CHECK_HTTPS": "0",
             "USE_CELERY": "0",
@@ -59,7 +86,7 @@ exit 0
     else:
         env.pop("VERIFY_STUB_SUCCESS_ON", None)
     result = subprocess.run(
-        ["bash", str(ROOT / "scripts" / "verify_deploy.sh")],
+        [_POSIX_BASH, str(ROOT / "scripts" / "verify_deploy.sh")],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -70,7 +97,12 @@ exit 0
     return result, int(state.read_text(encoding="ascii"))
 
 
-@pytest.mark.skipif((ROOT / ".env").exists(), reason="refuse to source a workspace .env")
+@pytest.mark.skipif(
+    (ROOT / ".env").exists(), reason="refuse to source a workspace .env"
+)
+@pytest.mark.skipif(
+    _POSIX_BASH is None, reason="requires a POSIX bash executable (Git Bash or Linux)"
+)
 def test_verify_deploy_requires_actual_health_success_not_nonempty_json(tmp_path: Path):
     failed, failed_attempts = _run_verify_deploy_with_stubbed_health(
         tmp_path / "failed", success_on=None
@@ -124,7 +156,7 @@ def test_backup_umask_and_wal_checkpoint():
     assert 'chmod 700 "$DEST"' in backup
     assert backup.index("mkdir") < backup.index('chmod 700 "$DEST"')
     assert "PRAGMA wal_checkpoint(TRUNCATE)" in backup
-    assert backup.index("wal_checkpoint") < backup.index("data.tar.gz")
+    assert backup.index("wal_checkpoint") < backup.index("app czf - -C /app/data")
     assert "docker compose stop celery-worker app" in backup
     assert "trap restart_after_backup EXIT INT TERM" in backup
     assert "docker compose start" in backup

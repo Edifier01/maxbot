@@ -216,6 +216,7 @@ def test_deploy_migrates_existing_data_volume_ownership():
         text = path.read_text(encoding="utf-8")
         assert "--user root" in text
         assert "--entrypoint chown app -R 10001:10001 /app/data" in text
+        assert "--entrypoint chown app -R 10001:10001 /app/control" in text
 
 
 @pytest.mark.skipif(os.name != "posix", reason="production lock uses POSIX flock")

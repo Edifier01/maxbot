@@ -1,5 +1,10 @@
 # FINAL PRODUCTION READINESS AUDIT — MAX Sender / maxbot
 
+> Исторический аудит состояния на август 2026 года. Описанные ниже пути,
+> workflow и дефекты не обязательно относятся к текущему HEAD. Для текущих
+> инструкций см. `README.md`, `docs/PRODUCTION-OPS.md` и
+> `docs/audit/release-gate.md`.
+
 **Date:** 2026-08-21  
 **Auditor role:** independent Principal / Security / SRE / QA (this session)  
 **Workspace:** repository root = server tree (`C:\Users\Admin\Documents\Projects\server`)  
@@ -27,9 +32,9 @@ Wave-5 regression: **255 passed, 20 skipped**. The only initially failing
 legacy unit test was updated to isolate the newly added subscription lookup;
 the confirmed full rerun is green.
 
-Parallel investigation agents used (parent synthesized independently): [Repo map](f1ebe5d9-714d-4ae2-846e-210a7d3c52e1), [Appsec](24ac7773-cb38-4291-8d84-58878e9af301), [Data/workers](fdd757ca-b4fd-4c7b-9e60-d7cccb4c93e7), [CI/deploy](44ea9d16-d79f-42fd-90d8-466f708811b0), [Git/secrets](e106b2fa-fe9b-48a2-8463-95376aa3e7ec).
+Parallel investigation agents used (parent synthesized independently): Repo map (`f1ebe5d9-714d-4ae2-846e-210a7d3c52e1`), Appsec (`24ac7773-cb38-4291-8d84-58878e9af301`), Data/workers (`fdd757ca-b4fd-4c7b-9e60-d7cccb4c93e7`), CI/deploy (`44ea9d16-d79f-42fd-90d8-466f708811b0`), Git/secrets (`e106b2fa-fe9b-48a2-8463-95376aa3e7ec`).
 
-Addendum after specialist handoffs (same session, still no product code changes): verified F-P1-06 / F-P1-07 / F-P1-08. [Appsec](24ac7773-cb38-4291-8d84-58878e9af301) also proposed registration-open and vault-key-on-volume as P1; those stay P2 / accepted ADR 006 (product + documented threat model). Rejected CI YAML dummy JWT strings and the HOW-IT-WORKS Russian placeholder as production secrets.
+Addendum after specialist handoffs (same session, still no product code changes): verified F-P1-06 / F-P1-07 / F-P1-08. Appsec (`24ac7773-cb38-4291-8d84-58878e9af301`) also proposed registration-open and vault-key-on-volume as P1; those stay P2 / accepted ADR 006 (product + documented threat model). Rejected CI YAML dummy JWT strings and the HOW-IT-WORKS Russian placeholder as production secrets.
 
 ---
 

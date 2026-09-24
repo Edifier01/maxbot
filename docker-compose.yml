@@ -27,6 +27,7 @@ services:
       ADMIN_EMAIL: "${ADMIN_EMAIL:?задайте ADMIN_EMAIL в .env}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:?задайте ADMIN_PASSWORD в .env}"
       INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?задайте INTERNAL_SERVICE_TOKEN в .env}"
+      MAX_PLATFORM_AUTHORIZATION_FILE: "/app/authorization/platform-authorization.json"
       WEBHOOK_ALLOWED_HOSTS: "${WEBHOOK_ALLOWED_HOSTS:-}"
       TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
       REGISTRATION_OPEN: "${REGISTRATION_OPEN:-0}"
@@ -35,6 +36,7 @@ services:
     volumes:
       - max_server_data:/app/data
       - max_server_control:/app/control
+      - ${MAX_PLATFORM_AUTHORIZATION_DIR:-./authorization}:/app/authorization:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -116,9 +118,11 @@ services:
       USE_CELERY: "1"
       DATABASE_URL: "postgresql://maxsender:${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}@postgres:5432/maxsender"
       INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:?задайте INTERNAL_SERVICE_TOKEN в .env}"
+      MAX_PLATFORM_AUTHORIZATION_FILE: "/app/authorization/platform-authorization.json"
     volumes:
       - max_server_data:/app/data
       - max_server_control:/app/control
+      - ${MAX_PLATFORM_AUTHORIZATION_DIR:-./authorization}:/app/authorization:ro
     depends_on:
       app:
         condition: service_healthy

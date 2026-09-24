@@ -330,7 +330,7 @@ def test_health_missing_token_stays_thin(monkeypatch):
             "max_external_actions",
             "recovery_hold",
         }
-        assert body["max_external_actions"] == "authorized"
+        assert body["max_external_actions"] == "record_missing"
         assert body["recovery_hold"] is False
 
     asyncio.run(run())

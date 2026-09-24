@@ -1,5 +1,9 @@
 # Codebase Audit — MAX Sender Server
 
+> Исторический снимок от 2026-08-07. Количество файлов, пути, команды и выводы
+> ниже не являются текущей инструкцией. См. `README.md`, `agent.md` и
+> `docs/audit/release-gate.md` перед работой с текущим деревом.
+
 **Mode:** `/audit-project` phase 1  
 **Target:** `C:\Users\Maga\Documents\Projects\server`  
 **Generated:** 2026-08-07  

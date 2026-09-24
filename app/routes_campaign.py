@@ -856,6 +856,7 @@ async def campaign_preview():
         code
         for code, active in (
             ("recovery_hold_active", hold_active),
+            (f"max_authorization_{hold_state}", hold_state != "authorized" and not hold_active),
             ("migration_review_required", bool(migration_review)),
         )
         if active

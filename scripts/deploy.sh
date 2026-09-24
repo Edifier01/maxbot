@@ -37,6 +37,8 @@ if ((${#missing[@]})); then
 fi
 
 echo "Деплой MAX Sender → https://${DOMAIN}"
+release_sha="$(git rev-parse HEAD)"
+bash scripts/set-recovery-hold.sh "deploy-$release_sha" deployment
 pg_vol=$(docker volume ls -q | grep -E '(^|_)max_server_pg$' || true)
 pg_ctr=$(docker compose ps -a -q postgres 2>/dev/null || true)
 if [[ -n "$pg_vol" || -n "$pg_ctr" ]]; then
@@ -64,12 +66,16 @@ if [[ "${USE_CELERY:-0}" == "1" || "${USE_CELERY:-0}" == "true" ]]; then
   docker compose --profile celery build app celery-worker
   docker compose --profile celery run --rm -T --no-deps --user root \
     --entrypoint chown app -R 10001:10001 /app/data
+  docker compose --profile celery run --rm -T --no-deps --user root \
+    --entrypoint chown app -R 10001:10001 /app/control
   docker compose --profile celery up -d
 else
   docker compose pull redis caddy postgres 2>/dev/null || true
   docker compose build app
   docker compose run --rm -T --no-deps --user root \
     --entrypoint chown app -R 10001:10001 /app/data
+  docker compose run --rm -T --no-deps --user root \
+    --entrypoint chown app -R 10001:10001 /app/control
   docker compose up -d
 fi
 

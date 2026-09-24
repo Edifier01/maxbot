@@ -190,6 +190,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: CANDIDATE_SHA
           script_stop: true
           command_timeout: 30m
           script: |
@@ -219,6 +220,7 @@ jobs:
             # shellcheck disable=SC1091
             source .env
             set +a
+            bash scripts/set-recovery-hold.sh "deploy-$SHA" deployment
             pg_vol=$(docker volume ls -q | grep -E '(^|_)max_server_pg$' || true)
             pg_ctr=$(docker compose ps -a -q postgres 2>/dev/null || true)
             if [[ -n "$pg_vol" || -n "$pg_ctr" ]]; then
@@ -246,12 +248,16 @@ jobs:
               docker compose --profile celery build app celery-worker
               docker compose --profile celery run --rm -T --no-deps --user root \
                 --entrypoint chown app -R 10001:10001 /app/data
+              docker compose --profile celery run --rm -T --no-deps --user root \
+                --entrypoint chown app -R 10001:10001 /app/control
               docker compose --profile celery up -d
             else
               docker compose pull redis caddy postgres 2>/dev/null || true
               docker compose build app
               docker compose run --rm -T --no-deps --user root \
                 --entrypoint chown app -R 10001:10001 /app/data
+              docker compose run --rm -T --no-deps --user root \
+                --entrypoint chown app -R 10001:10001 /app/control
               docker compose up -d
             fi
             CHECK_HTTPS=0 bash scripts/verify_deploy.sh

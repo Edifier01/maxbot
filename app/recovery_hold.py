@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Literal
 
-from app.config import recovery_hold_file
+from app.config import platform_authorization_file, recovery_hold_file
+from app.platform_policy import (
+    MaxAction,
+    MaxTransport,
+    PlatformAuthorizationHold,
+    load_authorization_record,
+    require_action,
+)
 
 
 _MAX_TEXT = 200
@@ -81,12 +88,24 @@ def require_external_actions_released() -> None:
 
 
 def external_actions_status() -> tuple[str, bool]:
-    """Return health-safe state without exposing record contents."""
+    """Return health-safe authorization state without exposing record contents."""
     path = recovery_hold_file()
-    if path is None:
-        return "authorized", False
+    if path is not None:
+        try:
+            hold = load_recovery_hold(path)
+        except RecoveryHoldActive:
+            return "held", True
+        if hold is not None:
+            return "held", True
+    authorization_path = platform_authorization_file()
+    if authorization_path is None:
+        return "record_missing", False
     try:
-        hold = load_recovery_hold(path)
-    except RecoveryHoldActive:
-        return "held", True
-    return ("held", True) if hold is not None else ("authorized", False)
+        now = datetime.now(UTC)
+        record = load_authorization_record(authorization_path, now=now)
+        require_action(record, MaxAction.SEND, MaxTransport.AUTHORIZED_USER_SESSION, now=now)
+    except PlatformAuthorizationHold as exc:
+        return str(exc), False
+    except OSError:
+        return "record_unreadable", False
+    return "authorized", False

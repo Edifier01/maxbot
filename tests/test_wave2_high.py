@@ -128,16 +128,19 @@ def test_proxy_error_redacts_credentials(monkeypatch):
     assert "secret" not in error
 
 
-def test_cached_validate_rechecks_revocation_without_revalidating_user():
+def test_cached_validate_rechecks_revocation_and_current_user():
     auth.clear_session_cache()
     payload = {"jti": "j1", "sub": "1", "tenant_id": 1, "tv": 0}
     with patch("app.auth.validate_token_session", return_value=None) as validate, patch(
         "app.auth.db_pg.is_token_revoked", return_value=False
-    ) as check_revocation:
+    ) as check_revocation, patch(
+        "app.auth.db_pg.get_user_by_id", return_value={"id": 1}
+    ) as current_user:
         assert auth.cached_validate_token_session(payload) is None
         assert auth.cached_validate_token_session(payload) is None
         validate.assert_called_once()
         check_revocation.assert_called_once_with("j1")
+        current_user.assert_called_once_with(1)
 
 
 def test_invalidate_session_cache_forces_revalidate():

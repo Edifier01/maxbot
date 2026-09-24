@@ -70,6 +70,19 @@ def create_token(
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
+def _account_claims_current(user: dict[str, Any], payload: dict[str, Any]) -> bool:
+    if "role" in user and user["role"] != payload.get("role"):
+        return False
+    if payload.get("imp"):
+        return (
+            ("tenant_id" not in user or user["tenant_id"] is None)
+            and payload.get("role") == "admin"
+            and payload.get("imp_by") == int(payload["sub"])
+            and payload.get("tenant_id") is not None
+        )
+    return "tenant_id" not in user or user["tenant_id"] == payload.get("tenant_id")
+
+
 def validate_token_session(payload: dict[str, Any]) -> str | None:
     """Return error detail if session invalid, else None."""
     try:
@@ -81,8 +94,11 @@ def validate_token_session(payload: dict[str, Any]) -> str | None:
     if jti and db_pg.is_token_revoked(jti):
         return "Сессия отозвана"
     user_id = int(payload["sub"])
-    if not db_pg.get_user_by_id(user_id):
+    user = db_pg.get_user_by_id(user_id)
+    if not user:
         return "Пользователь не найден"
+    if not _account_claims_current(user, payload):
+        return "Сессия отозвана"
     tenant_id = payload.get("tenant_id")
     if tenant_id is not None:
         tenant = db_pg.get_tenant(tenant_id)
@@ -108,6 +124,14 @@ def cached_validate_token_session(payload: dict[str, Any]) -> str | None:
             if db_pg.is_token_revoked(jti):
                 _session_cache.pop(jti, None)
                 return "Сессия отозвана"
+            if hit[1] is None:
+                user = db_pg.get_user_by_id(int(payload["sub"]))
+                if not user:
+                    _session_cache.pop(jti, None)
+                    return "Пользователь не найден"
+                if not _account_claims_current(user, payload):
+                    _session_cache.pop(jti, None)
+                    return "Сессия отозвана"
             return hit[1]
     result = validate_token_session(payload)
     if jti:

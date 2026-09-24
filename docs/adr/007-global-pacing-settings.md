@@ -5,6 +5,10 @@
 **Feature:** FEATURE-UX-OPS-2026  
 **Related:** ADR 001 (tenant worker isolation), ADR 002 (pacing at scale), ADR 005 (per-tenant worker pool)
 
+**Current implementation note (2026-09-24):** The allowlisted settings copy
+remains relevant. Historical references below to tuning `worker_pool_size`
+describe an earlier API; the current runtime fixes it at 1 (see ADR 005).
+
 ## Context
 
 Admin «Настройки рассылки» (`PUT /api/settings` as a non-impersonating admin) is bound by `ServerAuthMiddleware` to `use_global_data=True` and therefore writes **global** SQLite (`data/global/app.db`). Campaign workers run in tenant scope (ADR 001) and read **tenant** SQLite (`data/tenants/{id}/app.db`). Tenant DBs are seeded from `DEFAULTS` on `init_db`. The admin tab was a placebo: saving delays/limits never changed what workers used.

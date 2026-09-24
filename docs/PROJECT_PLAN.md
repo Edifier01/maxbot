@@ -1,5 +1,10 @@
 # Project Plan — MAX Sender Server
 
+> Исторический план продукта. Отметки milestones и оценки размера файлов
+> относятся к прежнему состоянию проекта. Текущий код и команды описаны в
+> `README.md`, `docs/HOW-IT-WORKS.md` и `.github/workflows/ci.yml`; текущее
+> решение о выпуске — в `docs/audit/release-gate.md`.
+
 ## Product Vision
 
 Multi-tenant SaaS для controlled массовой рассылки в мессенджере MAX: учреждения регистрируются, получают подписку, управляют аккаунтами MAX, группами и кампаниями через веб-панель на VPS.
@@ -88,7 +93,7 @@ Before production deploy:
 | Неофициальный MAX API | Anti-ban pacing, warmup, circuit breaker; campaign-specialist review |
 | Monolith `main.py` ~2845 строк | Scoped changes; Feature Plan for further extract (ADR 003) |
 | Hybrid PG + SQLite | Tenant paths documented; backup both volume + PG |
-| Desktop/server code duplication | `check_core_sync.py`; mirror fixes when shared |
+| Один runtime с локальным и server mode | Проверять обе конфигурации и tenant scope в одном дереве |
 | Account bans | Campaign safeguards; no removal without approval |
 
 ## Out Of Scope
@@ -97,4 +102,4 @@ Before production deploy:
 - Mobile app
 - Frontend build step (React/Vue)
 - Kubernetes / serverless
-- Desktop version (отдельный проект в monorepo)
+- Отдельное desktop-приложение (в этом репозитории его нет)

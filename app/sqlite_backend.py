@@ -266,6 +266,58 @@ def _table_columns(c: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
+def _migrate_group_destination_and_proxy(c: sqlite3.Connection) -> None:
+    """Keep each legacy group-column backfill atomic with its schema change."""
+    savepoint = "maxbot_group_destination_proxy"
+    c.execute(f"SAVEPOINT {savepoint}")
+    try:
+        cols_g = _table_columns(c, "groups")
+        if "destination_revision" not in cols_g:
+            c.execute(
+                "ALTER TABLE groups ADD COLUMN destination_revision "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+        if "destination_verified" not in cols_g:
+            c.execute(
+                "ALTER TABLE groups ADD COLUMN destination_verified "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+        # This invariant also repairs databases where an earlier startup added
+        # the column but stopped before its legacy backfill. Application routes
+        # clear max_chat_id whenever verification is revoked or the link changes.
+        c.execute(
+            "UPDATE groups SET destination_verified=1 "
+            "WHERE destination_verified=0 "
+            "AND TRIM(COALESCE(max_chat_id, '')) != ''"
+        )
+        if "proxy" not in cols_g:
+            c.execute("ALTER TABLE groups ADD COLUMN proxy TEXT DEFAULT ''")
+            groups = c.execute("SELECT id FROM groups").fetchall()
+            for group in groups:
+                row = c.execute(
+                    """
+                    SELECT p.proxy FROM profiles p
+                    JOIN group_profiles gp ON gp.profile_id = p.id
+                    WHERE gp.group_id=? AND gp.is_enabled=1
+                      AND p.proxy IS NOT NULL AND TRIM(p.proxy) != ''
+                    ORDER BY gp.order_index, p.id LIMIT 1
+                    """,
+                    (group["id"],),
+                ).fetchone()
+                if row and row["proxy"]:
+                    c.execute(
+                        "UPDATE groups SET proxy=? WHERE id=?",
+                        (row["proxy"].strip(), group["id"]),
+                    )
+    except BaseException:
+        with contextlib.suppress(sqlite3.Error):
+            c.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+        with contextlib.suppress(sqlite3.Error):
+            c.execute(f"RELEASE SAVEPOINT {savepoint}")
+        raise
+    c.execute(f"RELEASE SAVEPOINT {savepoint}")
+
+
 def _migrate_schema(c: sqlite3.Connection) -> None:
     # profiles.status is unconstrained TEXT (no CHECK); new values (e.g. banned) need no DDL.
     cols_p = _table_columns(c, "profiles")
@@ -279,38 +331,7 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
         c.execute("ALTER TABLE profiles ADD COLUMN proxy TEXT DEFAULT ''")
     if "fail_count" not in cols_p:
         c.execute("ALTER TABLE profiles ADD COLUMN fail_count INTEGER DEFAULT 0")
-    cols_g = _table_columns(c, "groups")
-    if "destination_revision" not in cols_g:
-        c.execute(
-            "ALTER TABLE groups ADD COLUMN destination_revision INTEGER NOT NULL DEFAULT 0"
-        )
-    if "destination_verified" not in cols_g:
-        c.execute(
-            "ALTER TABLE groups ADD COLUMN destination_verified INTEGER NOT NULL DEFAULT 0"
-        )
-        c.execute(
-            "UPDATE groups SET destination_verified=1 "
-            "WHERE TRIM(COALESCE(max_chat_id, '')) != ''"
-        )
-    if "proxy" not in cols_g:
-        c.execute("ALTER TABLE groups ADD COLUMN proxy TEXT DEFAULT ''")
-        groups = c.execute("SELECT id FROM groups").fetchall()
-        for g in groups:
-            row = c.execute(
-                """
-                SELECT p.proxy FROM profiles p
-                JOIN group_profiles gp ON gp.profile_id = p.id
-                WHERE gp.group_id=? AND gp.is_enabled=1
-                  AND p.proxy IS NOT NULL AND TRIM(p.proxy) != ''
-                ORDER BY gp.order_index, p.id LIMIT 1
-                """,
-                (g["id"],),
-            ).fetchone()
-            if row and row["proxy"]:
-                c.execute(
-                    "UPDATE groups SET proxy=? WHERE id=?",
-                    (row["proxy"].strip(), g["id"]),
-                )
+    _migrate_group_destination_and_proxy(c)
     cols_q = _table_columns(c, "queue_state")
     if "message_bag" not in cols_q:
         c.execute("ALTER TABLE queue_state ADD COLUMN message_bag TEXT DEFAULT '[]'")
