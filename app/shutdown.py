@@ -84,6 +84,7 @@ async def _cancel_background_tasks() -> None:
         RUNTIME.backup_task,
         RUNTIME.ops_alert_task,
         RUNTIME.subscription_task,
+        RUNTIME.onboarding_cleanup_task,
     ):
         if task:
             task.cancel()
@@ -91,6 +92,7 @@ async def _cancel_background_tasks() -> None:
                 await asyncio.wait_for(asyncio.shield(task), timeout=_grace_seconds())
     RUNTIME.watchdog_task = RUNTIME.scheduler_task = RUNTIME.backup_task = None
     RUNTIME.ops_alert_task = RUNTIME.subscription_task = None
+    RUNTIME.onboarding_cleanup_task = None
 
 
 async def graceful_shutdown(
@@ -132,6 +134,14 @@ async def graceful_shutdown(
             app_main._cancel_all_login_tasks(),
             timeout=_grace_seconds(),
         )
+        if app_main._is_server_mode():
+            from app.routes_onboarding import cancel_all_onboarding_auth
+
+            await _bounded_step(
+                "onboarding auth tasks",
+                cancel_all_onboarding_auth(),
+                timeout=_grace_seconds(),
+            )
         manager = getattr(app_main, "_client_manager", None)
         if manager is not None:
             await _bounded_step(

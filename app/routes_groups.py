@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException
 
 import antiban_core
+from app import db_pg
+from app.config import is_server_mode
 from app.routes_models import (
     BulkProfilesIn,
     DestinationVerifyIn,
@@ -21,6 +24,22 @@ from app.tenant import is_cabinet_user, redact_cabinet_row
 router = APIRouter(tags=["groups"])
 
 _CABINET_DENIED = "Недоступно в личном кабинете"
+
+
+def _revoke_onboarding_invite(conn, group_id: int) -> str | None:
+    if not is_server_mode():
+        return None
+    from app.repositories.onboarding import OnboardingRepository
+
+    repo = OnboardingRepository(conn)
+    invite = repo.get_active_invite(group_id)
+    if invite is None:
+        return None
+    repo.revoke_invite(
+        group_id,
+        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+    return str(invite["token_hash"])
 
 
 def _safe_group_view(row: dict) -> dict:
@@ -228,9 +247,12 @@ async def patch_group(group_id: int, body: GroupPatchIn):
         raise HTTPException(403, _CABINET_DENIED)
     if "max_chat_id" in data:
         data.pop("max_chat_id")
+    revoked_invite_hash = None
     with m._conn() as c:
         if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
             raise HTTPException(404, "Группа не найдена")
+        if "invite_link" in data or data.get("is_active") == 0:
+            revoked_invite_hash = _revoke_onboarding_invite(c, int(group_id))
         if "name" in data and data["name"] is not None:
             c.execute(
                 "UPDATE groups SET name=? WHERE id=?",
@@ -265,6 +287,8 @@ async def patch_group(group_id: int, body: GroupPatchIn):
                 (int(data["is_active"]), group_id),
             )
         row = c.execute("SELECT * FROM groups WHERE id=?", (group_id,)).fetchone()
+    if revoked_invite_hash:
+        db_pg.delete_onboarding_invite_locator(revoked_invite_hash)
     return _safe_group_view(dict(row))
 
 
@@ -277,9 +301,10 @@ async def verify_group_destination(group_id: int, body: DestinationVerifyIn):
         AutomationScopeRepository,
     )
 
+    revoked_invite_hash = None
     with m._conn() as c:
         row = c.execute(
-            "SELECT invite_link FROM groups WHERE id=?", (int(group_id),)
+            "SELECT invite_link, max_chat_id FROM groups WHERE id=?", (int(group_id),)
         ).fetchone()
         if row is None:
             raise HTTPException(404, "Группа не найдена")
@@ -294,9 +319,13 @@ async def verify_group_destination(group_id: int, body: DestinationVerifyIn):
         except AutomationScopeError as exc:
             status = 404 if exc.code == "OBJECT_NOT_FOUND" else 409
             raise HTTPException(status, exc.code) from exc
+        if str(row["max_chat_id"] or "").strip() != body.chat_id:
+            revoked_invite_hash = _revoke_onboarding_invite(c, int(group_id))
         confirmed = c.execute(
             "SELECT * FROM groups WHERE id=?", (int(group_id),)
         ).fetchone()
+    if revoked_invite_hash:
+        db_pg.delete_onboarding_invite_locator(revoked_invite_hash)
     return _safe_group_view(dict(confirmed))
 
 
@@ -323,11 +352,26 @@ async def add_group_profile(group_id: int, body: ProfileIn):
             ).fetchone()
             if linked:
                 raise HTTPException(400, "Этот номер уже в группе")
+            if body.full_name.strip():
+                from app.repositories.onboarding import normalize_full_name
+
+                try:
+                    full_name = normalize_full_name(body.full_name)
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
+                c.execute("UPDATE profiles SET full_name=? WHERE id=?", (full_name, pid))
         else:
+            from app.repositories.onboarding import normalize_full_name
+
+            try:
+                full_name = normalize_full_name(body.full_name) if body.full_name.strip() else ""
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
             cur = c.execute(
-                "INSERT INTO profiles (phone, label, status) VALUES (?, ?, ?)",
+                "INSERT INTO profiles (phone, full_name, label, status) VALUES (?, ?, ?, ?)",
                 (
                     phone,
+                    full_name,
                     body.label.strip(),
                     m.ProfileStatus.PENDING,
                 ),
@@ -354,7 +398,7 @@ async def add_group_profile(group_id: int, body: ProfileIn):
 @router.post("/api/groups/{group_id}/profiles/bulk")
 async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
 
-    """Импорт phone,label. Пропускает уже существующие в группе."""
+    """Импорт phone,label или phone,full_name,label."""
     m._require_worker_idle()
     if is_cabinet_user():
         raise HTTPException(403, _CABINET_DENIED)
@@ -392,11 +436,20 @@ async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
                     if linked:
                         skipped.append(phone)
                         continue
+                    if (item.full_name or "").strip():
+                        from app.repositories.onboarding import normalize_full_name
+
+                        full_name = normalize_full_name(item.full_name)
+                        c.execute("UPDATE profiles SET full_name=? WHERE id=?", (full_name, pid))
                 else:
+                    from app.repositories.onboarding import normalize_full_name
+
+                    full_name = normalize_full_name(item.full_name) if (item.full_name or "").strip() else ""
                     cur = c.execute(
-                        "INSERT INTO profiles (phone, label, status) VALUES (?, ?, ?)",
+                        "INSERT INTO profiles (phone, full_name, label, status) VALUES (?, ?, ?, ?)",
                         (
                             phone,
+                            full_name,
                             (item.label or "").strip(),
                             m.ProfileStatus.PENDING,
                         ),
@@ -446,9 +499,11 @@ async def delete_group(group_id: int):
 
     m._require_worker_idle()
     orphan_profiles: list[int] = []
+    invite_hash = None
     with m._conn() as c:
         if not c.execute("SELECT 1 FROM groups WHERE id=?", (group_id,)).fetchone():
             raise HTTPException(404, "Группа не найдена")
+        invite_hash = _revoke_onboarding_invite(c, int(group_id))
         pids = [
             r["profile_id"]
             for r in c.execute(
@@ -476,6 +531,8 @@ async def delete_group(group_id: int):
                 "SELECT 1 FROM group_profiles WHERE profile_id=? LIMIT 1", (pid,)
             ).fetchone()
         ]
+    if invite_hash:
+        db_pg.delete_onboarding_invite_locator(invite_hash)
     for pid in orphan_profiles:
         await _cleanup_profile_runtime(pid)
         try:

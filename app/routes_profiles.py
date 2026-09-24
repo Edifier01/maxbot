@@ -83,13 +83,13 @@ async def list_profiles(offset: int = 0, limit: int = 50, q: str = ""):
     with m._conn() as c:
         if q:
             rows = c.execute(
-                f"SELECT p.* {base} AND (p.phone LIKE ? OR p.label LIKE ?) "
+                f"SELECT p.* {base} AND (p.phone LIKE ? OR p.label LIKE ? OR p.full_name LIKE ?) "
                 "ORDER BY p.id LIMIT ? OFFSET ?",
-                (f"%{q}%", f"%{q}%", limit, offset),
+                (f"%{q}%", f"%{q}%", f"%{q}%", limit, offset),
             ).fetchall()
             total = c.execute(
-                f"SELECT COUNT(*) n {base} AND (p.phone LIKE ? OR p.label LIKE ?)",
-                (f"%{q}%", f"%{q}%"),
+                f"SELECT COUNT(*) n {base} AND (p.phone LIKE ? OR p.label LIKE ? OR p.full_name LIKE ?)",
+                (f"%{q}%", f"%{q}%", f"%{q}%"),
             ).fetchone()["n"]
         else:
             rows = c.execute(
@@ -256,6 +256,15 @@ async def patch_profile(profile_id: int, body: ProfilePatchIn):
                 "UPDATE profiles SET label=? WHERE id=?",
                 (str(data["label"] or "").strip(), profile_id),
             )
+        if "full_name" in data:
+            from app.repositories.onboarding import normalize_full_name
+
+            raw_name = str(data["full_name"] or "").strip()
+            try:
+                full_name = normalize_full_name(raw_name) if raw_name else ""
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            c.execute("UPDATE profiles SET full_name=? WHERE id=?", (full_name, profile_id))
         p2 = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
     return m._profile_auth_view(p2)
 

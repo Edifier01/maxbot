@@ -12,6 +12,7 @@ from app.config import webhook_url_allowed
 
 class ProfileIn(BaseModel):
     phone: str
+    full_name: str = ""
     label: str = ""
     proxy: str = ""
 
@@ -22,6 +23,7 @@ class ProfileIn(BaseModel):
 
 
 class ProfilePatchIn(BaseModel):
+    full_name: str | None = Field(default=None, max_length=180)
     label: str | None = None
     proxy: str | None = None
 

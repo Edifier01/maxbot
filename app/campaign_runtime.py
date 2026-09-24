@@ -67,6 +67,7 @@ class _AppRuntime:
     backup_task: asyncio.Task[Any] | None = None
     subscription_task: asyncio.Task[Any] | None = None
     ops_alert_task: asyncio.Task[Any] | None = None
+    onboarding_cleanup_task: asyncio.Task[Any] | None = None
     shutting_down: bool = False
 
     def reset_test(self) -> None:
@@ -76,6 +77,7 @@ class _AppRuntime:
         self.backup_task = None
         self.subscription_task = None
         self.ops_alert_task = None
+        self.onboarding_cleanup_task = None
         self.shutting_down = False
 
 
@@ -143,6 +145,7 @@ _APP_ATTRS = frozenset(
         "backup_task",
         "subscription_task",
         "ops_alert_task",
+        "onboarding_cleanup_task",
         "shutting_down",
     }
 )

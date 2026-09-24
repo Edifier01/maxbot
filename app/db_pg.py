@@ -208,6 +208,49 @@ def get_tenant(tenant_id: int) -> dict[str, Any] | None:
         return cur.fetchone()
 
 
+def register_onboarding_invite(
+    token_hash: str, tenant_id: int, expires_at: str | datetime
+) -> None:
+    """Add a hash-only public invite locator for one tenant database."""
+    digest = str(token_hash).strip().lower()
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise ValueError("onboarding_invite_hash_invalid")
+    if int(tenant_id) < 1:
+        raise ValueError("onboarding_tenant_invalid")
+    expiry = expires_at
+    if isinstance(expiry, str):
+        expiry = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+    if expiry.tzinfo is None or expiry.utcoffset() is None:
+        raise ValueError("onboarding_invite_expiry_must_be_aware")
+    with _cursor(transaction=True) as cur:
+        cur.execute(
+            "INSERT INTO onboarding_invite_tenants (token_hash, tenant_id, expires_at) "
+            "VALUES (%s, %s, %s)",
+            (digest, int(tenant_id), expiry),
+        )
+
+
+def get_onboarding_invite_tenant(token_hash: str) -> int | None:
+    digest = str(token_hash).strip().lower()
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT tenant_id FROM onboarding_invite_tenants "
+            "WHERE token_hash=%s AND expires_at > NOW()",
+            (digest,),
+        )
+        row = cur.fetchone()
+    return int(row["tenant_id"]) if row else None
+
+
+def delete_onboarding_invite_locator(token_hash: str) -> bool:
+    digest = str(token_hash).strip().lower()
+    with _cursor(transaction=True) as cur:
+        cur.execute(
+            "DELETE FROM onboarding_invite_tenants WHERE token_hash=%s", (digest,)
+        )
+        return bool(getattr(cur, "rowcount", 0))
+
+
 def get_tenant_token_version(tenant_id: int) -> int:
     tenant = get_tenant(tenant_id)
     if not tenant:

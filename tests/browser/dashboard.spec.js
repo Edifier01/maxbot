@@ -798,9 +798,9 @@ test.describe('dashboard surface', () => {
     await expect.poll(() => state.bulkCalls).toBe(1);
     expect(state.body).toEqual({
       profiles: [
-        { phone: '+70000000001', label: 'Школа; 🚀' },
-        { phone: '+70000000002', label: '{"value":"a|b"}' },
-        { phone: '+70000000003', label: 'Школа; 🚀' },
+        { phone: '+70000000001', full_name: '', label: 'Школа; 🚀' },
+        { phone: '+70000000002', full_name: '', label: '{"value":"a|b"}' },
+        { phone: '+70000000003', full_name: '', label: 'Школа; 🚀' },
       ],
     });
 

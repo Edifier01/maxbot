@@ -26,6 +26,21 @@ from app.tenant import clear_context, set_context
 access_logger = logging.getLogger("maxsender.access")
 
 
+class UvicornInvitePathRedactor(logging.Filter):
+    """Keep Uvicorn access auditing while redacting invite bearer tokens."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 4:
+            path = str(args[2])
+            if path.startswith("/join/"):
+                record.args = (*args[:2], "/join/[redacted]", *args[3:])
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(UvicornInvitePathRedactor())
+
+
 async def _send_ingress_error(send, status: int, detail: str) -> None:
     body = json.dumps({"detail": detail}, ensure_ascii=False).encode("utf-8")
     await send(
@@ -167,7 +182,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
                     {
                         "event": "request_error",
                         "method": request.method,
-                        "path": request.url.path,
+                        "path": _safe_log_path(request.url.path),
                         "request_id": request_id,
                         "error_code": error.code,
                     }
@@ -184,7 +199,7 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
                 {
                     "event": "request",
                     "method": request.method,
-                    "path": request.url.path,
+                    "path": _safe_log_path(request.url.path),
                     "status": response.status_code,
                     "duration_ms": round((time.perf_counter() - started) * 1000, 1),
                     "request_id": request_id,
@@ -192,6 +207,11 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             )
         )
         return response
+
+
+def _safe_log_path(path: str) -> str:
+    """Invite tokens are bearer credentials and must never enter access logs."""
+    return "/join/[redacted]" if path.startswith("/join/") else path
 
 
 class AuthRateLimitMiddleware(BaseHTTPMiddleware):
@@ -234,6 +254,8 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
     PUBLIC_PREFIXES = (
         "/static",
         "/api/health",
+        "/api/public/onboarding/",
+        "/join/",
         "/ws/",
     )
     PUBLIC_EXACT = {
@@ -241,6 +263,7 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         "/auth.html",
         "/admin.html",
         "/favicon.ico",
+        "/join",
         "/api/auth/login",
         "/api/auth/restore-session",
         "/api/auth/exit-impersonation",
@@ -288,8 +311,17 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Требуется service token"},
             )
 
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _same_origin_request(
-            request
+        invite_parts = path.strip("/").split("/")
+        owner_invite_mutation = (
+            len(invite_parts) == 4
+            and invite_parts[:2] == ["api", "groups"]
+            and invite_parts[2].isdigit()
+            and invite_parts[3] == "onboarding-invite"
+        )
+        unsafe_method = request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        if unsafe_method and (
+            not _same_origin_request(request)
+            or (owner_invite_mutation and not request.headers.get("Origin"))
         ):
             return JSONResponse(
                 status_code=403,
@@ -299,7 +331,12 @@ class ServerAuthMiddleware(BaseHTTPMiddleware):
         if path in self.PUBLIC_EXACT or any(
             path.startswith(p) for p in self.PUBLIC_PREFIXES
         ):
-            return await call_next(request)
+            response = await call_next(request)
+            if path == "/join" or path.startswith("/join/") or path.startswith("/api/public/onboarding/"):
+                response.headers["Cache-Control"] = "no-store, private"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Referrer-Policy"] = "no-referrer"
+            return response
 
         if (
             service_bearer

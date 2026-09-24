@@ -20,6 +20,7 @@ from app.routes_groups import router as groups_router
 from app.routes_messages import router as messages_router
 from app.routes_message_sets import router as message_sets_router
 from app.routes_monitor import router as monitor_router
+from app.routes_onboarding import router as onboarding_router
 from app.routes_pages import router as pages_router
 from app.routes_profiles import router as profiles_router
 from app.routes_settings import router as settings_router
@@ -33,6 +34,7 @@ def register_panel(app) -> None:
     app.include_router(vault_router)
     app.include_router(profiles_router)
     app.include_router(groups_router)
+    app.include_router(onboarding_router)
     app.include_router(connections_router)
     app.include_router(diagnostics_router)
     app.include_router(messages_router)

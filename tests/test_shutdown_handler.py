@@ -1,8 +1,8 @@
-import asyncio
 """SIGTERM handler sets RUNTIME.shutting_down without AttributeError."""
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 
 

@@ -320,6 +320,9 @@ def _migrate_group_destination_and_proxy(c: sqlite3.Connection) -> None:
 
 def _migrate_schema(c: sqlite3.Connection) -> None:
     # profiles.status is unconstrained TEXT (no CHECK); new values (e.g. banned) need no DDL.
+    from app.repositories.onboarding import OnboardingRepository
+
+    OnboardingRepository(c).ensure_schema()
     cols_p = _table_columns(c, "profiles")
     if "daily_limit" not in cols_p:
         c.execute("ALTER TABLE profiles ADD COLUMN daily_limit INTEGER")

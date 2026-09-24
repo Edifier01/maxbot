@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Подключение к группе</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.45 system-ui, sans-serif; color: #18202b; background: #f4f6f8; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: start center; padding: 24px 14px; box-sizing: border-box; }
+    main { width: min(100%, 480px); margin-top: 5vh; padding: 26px; box-sizing: border-box; background: white; border: 1px solid #e1e6ec; border-radius: 16px; box-shadow: 0 12px 32px #10203312; }
+    h1 { font-size: 1.45rem; margin: 0 0 8px; } p { color: #526071; }
+    label { display: block; font-weight: 600; margin: 18px 0 6px; }
+    input[type=text], input[type=tel] { width: 100%; box-sizing: border-box; border: 1px solid #b9c3ce; border-radius: 9px; padding: 12px; font: inherit; }
+    .consent { display: flex; align-items: start; gap: 10px; font-weight: 400; }
+    button { border: 0; border-radius: 9px; padding: 12px 16px; width: 100%; margin-top: 20px; background: #1769d2; color: white; font: inherit; font-weight: 700; }
+    button:disabled { opacity: .55; } [hidden] { display: none !important; } #message { min-height: 1.5em; color: #9c2b2b; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Подключение к группе MAX</h1>
+    <p id="group"></p>
+    <form id="startForm">
+      <label for="fullName">ФИО</label>
+      <input id="fullName" name="full_name" type="text" maxlength="180" autocomplete="name" required>
+      <label for="phone">Телефон аккаунта MAX</label>
+      <input id="phone" name="phone" type="tel" autocomplete="tel" required>
+      <label class="consent"><input id="consent" type="checkbox" required><span>Согласен на обработку данных для подключения к группе.</span></label>
+      <button type="submit">Продолжить</button>
+    </form>
+    <section id="next" hidden>
+      <p id="stepText">Данные сохранены. Запрашиваем код MAX…</p>
+      <p id="phoneHint"></p>
+      <form id="codeForm" hidden><label for="code">Код из MAX</label><input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" required><button>Подтвердить код</button></form>
+      <form id="passwordForm" hidden><label for="password">Облачный пароль MAX</label><input id="password" type="password" autocomplete="current-password" required><button>Подтвердить пароль</button></form>
+      <section id="membership" hidden><p>Войдите в эту группу в приложении MAX, затем нажмите «Проверить членство».</p><a id="maxLink" target="_blank" rel="noreferrer noopener">Открыть приглашение MAX</a><button id="checkMembership" type="button">Проверить членство</button></section>
+      <form id="nameForm" hidden><label for="confirmedName">ФИО профиля</label><input id="confirmedName" type="text" maxlength="180" required><p>Подтвердите ФИО существующего профиля.</p><button>Подтвердить ФИО</button></form>
+    </section>
+    <p id="message" role="status" aria-live="polite"></p>
+  </main>
+  <script src="/static/js/join.js" defer></script>
+</body>
+</html>

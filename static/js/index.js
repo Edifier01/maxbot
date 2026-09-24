@@ -839,6 +839,21 @@ let openGroupId = null;
         saveGroupProxy(groupId);
       } else if (action === 'verify-group-destination') {
         withLoading(btn, () => verifyGroupDestination(groupId));
+      } else if (action === 'onboarding-invite') {
+        withLoading(btn, () => manageOnboardingInvite(groupId));
+      } else if (action === 'onboarding-invite-create') {
+        withLoading(btn, () => manageOnboardingInvite(groupId, 'create'));
+      } else if (action === 'onboarding-invite-rotate') {
+        withLoading(btn, () => manageOnboardingInvite(groupId, 'rotate'));
+      } else if (action === 'onboarding-invite-revoke') {
+        withLoading(btn, () => manageOnboardingInvite(groupId, 'revoke'));
+      } else if (action === 'onboarding-invite-copy') {
+        navigator.clipboard.writeText(btn.dataset.url || '').then(
+          () => toast('Ссылка скопирована', 'success'),
+          () => toast('Не удалось скопировать ссылку', 'error'),
+        );
+      } else if (action === 'save-profile-name') {
+        withLoading(btn, () => saveProfileName(btn.dataset.profileId));
       } else if (action === 'login-from-phone') {
         withLoading(btn, () => loginFromPhone(groupId, true));
       } else if (action === 'import-csv') {
@@ -871,7 +886,7 @@ let openGroupId = null;
     });
     groupsSection.addEventListener('input', (e) => {
       const t = e.target;
-      if (t.id && (t.id.startsWith('phone-') || t.id.startsWith('label-'))) {
+      if (t.id && (t.id.startsWith('phone-') || t.id.startsWith('full-name-') || t.id.startsWith('profileFullName-') || t.id.startsWith('label-'))) {
         draftInputs[t.id] = t.value;
       }
     });
@@ -1447,7 +1462,7 @@ let openGroupId = null;
               : '';
           return `
         <div class="dash-card">
-          <div class="phone">${esc(p.phone)}${p.label ? ' · ' + esc(p.label) : ''}</div>
+          <div class="phone">${p.full_name ? esc(p.full_name) + ' · ' : ''}${esc(p.phone)}${p.label ? ' · ' + esc(p.label) : ''}</div>
           <div class="meta">
             <span class="status-${p.status}">${esc(statusRu(p.status))}</span>
             ${p.circuit_open ? ' · <span class="auth-error">автопауза</span>' : ''}
@@ -2104,7 +2119,7 @@ let openGroupId = null;
     }
 
     function saveDrafts() {
-      document.querySelectorAll('#groupsList input[id^="phone-"], #groupsList input[id^="label-"], #groupsList textarea[id^="groupProxy-"]').forEach(el => {
+      document.querySelectorAll('#groupsList input[id^="phone-"], #groupsList input[id^="full-name-"], #groupsList input[id^="profileFullName-"], #groupsList input[id^="label-"], #groupsList textarea[id^="groupProxy-"]').forEach(el => {
         draftInputs[el.id] = el.value;
       });
     }
@@ -2210,6 +2225,7 @@ let openGroupId = null;
     async function loginFromPhone(groupId, fresh = true) {
       try {
         const phoneRaw = document.getElementById('phone-' + groupId)?.value || '';
+        const full_name = document.getElementById('full-name-' + groupId)?.value || '';
         const label = document.getElementById('label-' + groupId)?.value || '';
         if (!phoneRaw.trim()) return toast('Введите номер телефона', 'error');
         const phone = normalizePhone(phoneRaw);
@@ -2220,7 +2236,7 @@ let openGroupId = null;
           const r = await api(`/groups/${groupId}/profiles`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone, label }),
+            body: JSON.stringify({ phone, full_name, label }),
           });
           profile = { id: r.id, phone };
         }
@@ -2287,6 +2303,72 @@ let openGroupId = null;
         refreshCampaignOverview();
       } catch (e) {
         toast(e.message || 'Не удалось подтвердить назначение', 'error');
+      }
+    }
+
+    async function manageOnboardingInvite(groupId, action = 'load') {
+      let host = document.getElementById(`onboardingInvite-${groupId}`);
+      if (!host) {
+        openGroupId = Number(groupId);
+        await loadGroups(true);
+        host = document.getElementById(`onboardingInvite-${groupId}`);
+      }
+      if (!host) return;
+      try {
+        let invite;
+        if (action === 'create' || action === 'rotate') {
+          const maxUsesInput = document.getElementById(`onboardingMaxUses-${groupId}`);
+          const maxUses = maxUsesInput && maxUsesInput.value ? Number(maxUsesInput.value) : null;
+          invite = await api(`/groups/${groupId}/onboarding-invite`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ expires_days: 7, max_uses: maxUses }),
+          });
+        } else if (action === 'revoke') {
+          await api(`/groups/${groupId}/onboarding-invite`, { method: 'DELETE' });
+          invite = { active: false };
+        } else {
+          invite = await api(`/groups/${groupId}/onboarding-invite`);
+        }
+        if (!invite.active) {
+          host.innerHTML = `<div style="display:grid;gap:.45rem;max-width:620px">
+            <strong>Приглашение пользователей</strong>
+            <label for="onboardingMaxUses-${groupId}">Лимит подключений (необязательно)</label>
+            <input id="onboardingMaxUses-${groupId}" type="number" min="1" max="10000" step="1" placeholder="Без лимита" style="max-width:180px">
+            <button type="button" class="small" data-action="onboarding-invite-create" data-group-id="${groupId}">Создать ссылку · 7 дней</button>
+          </div>`;
+          return;
+        }
+        host.innerHTML = `<div style="display:grid;gap:.45rem;max-width:620px">
+          <strong>Ссылка для подключения аккаунтов</strong>
+          <a href="${esc(invite.url)}" target="_blank" rel="noreferrer noopener">${esc(invite.url)}</a>
+          <span>Подключено: ${Number(invite.uses_count || 0)}${invite.max_uses ? ` / ${Number(invite.max_uses)}` : ''}</span>
+          <span>Истекает: ${esc(String(invite.expires_at || '').replace('T', ' ').slice(0, 16))}</span>
+          <label for="onboardingMaxUses-${groupId}">Новый лимит при замене</label>
+          <input id="onboardingMaxUses-${groupId}" type="number" min="1" max="10000" step="1" value="${invite.max_uses ? Number(invite.max_uses) : ''}" placeholder="Без лимита" style="max-width:180px">
+          <span class="row">
+            <button type="button" class="small" data-action="onboarding-invite-copy" data-url="${esc(invite.url)}">Скопировать</button>
+            <button type="button" class="small" data-action="onboarding-invite-rotate" data-group-id="${groupId}">Заменить</button>
+            <button type="button" class="small danger" data-action="onboarding-invite-revoke" data-group-id="${groupId}">Отозвать</button>
+          </span>
+        </div>`;
+      } catch (error) {
+        host.textContent = error.message || 'Не удалось загрузить ссылку';
+      }
+    }
+
+    async function saveProfileName(profileId) {
+      const input = document.getElementById(`profileFullName-${profileId}`);
+      if (!input) return;
+      try {
+        await api(`/profiles/${profileId}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ full_name: input.value }),
+        });
+        toast('ФИО сохранено', 'success');
+        loadGroups(true);
+        loadDashboard();
+      } catch (error) {
+        toast(error.message || 'Не удалось сохранить ФИО', 'error');
       }
     }
 
@@ -2363,10 +2445,11 @@ let openGroupId = null;
             <td data-label="ID">${p.id}</td>
             <td data-label="Телефон">
               <div class="phone-cell">
-                <span class="phone-num">${esc(p.phone)}${p.label ? ' ('+esc(p.label)+')' : ''}</span>
+                <span class="phone-num">${p.full_name ? esc(p.full_name) + ' · ' : ''}${esc(p.phone)}${p.label ? ' ('+esc(p.label)+')' : ''}</span>
                 ${phoneBadges(p)}
               </div>
             </td>
+            <td data-label="ФИО"><div class="row" style="margin:0"><input id="profileFullName-${p.id}" value="${esc(p.full_name || '')}" aria-label="ФИО профиля" maxlength="180"><button type="button" class="small" data-action="save-profile-name" data-profile-id="${p.id}">Сохранить</button></div></td>
             <td data-label="Статус">
               <span class="status-${p.status}">${esc(statusRu(p.status))}</span>
               ${authLabel(p) ? `<div class="auth-wait">${esc(authLabel(p))}</div>` : ''}
@@ -2375,7 +2458,7 @@ let openGroupId = null;
             <td data-label="День">${p.send_weekday == null ? '—' : ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][p.send_weekday]}</td>
             <td data-label="Прокси">${esc(p.proxy_label || 'не назначен')}</td>
             <td data-label="Действия">${profileActions(p, g.id)}</td>
-          </tr>`).join('') : `<tr><td colspan="6" class="hint">Профилей нет — ${isUserRole() ? 'добавьте номер' : 'добавьте номер или импортируйте CSV'}</td></tr>`) : '';
+          </tr>`).join('') : `<tr><td colspan="7" class="hint">Профилей нет — ${isUserRole() ? 'добавьте номер' : 'добавьте номер или импортируйте CSV'}</td></tr>`) : '';
         const groupActive = g.is_active == null || Number(g.is_active) !== 0;
         return `
           <div class="group-card">
@@ -2389,6 +2472,7 @@ let openGroupId = null;
                 <summary>Ещё</summary>
                 <div>
                   ${!isUserRole() ? `<button type="button" class="small" data-action="toggle-group-active" data-group-id="${g.id}" data-active="${groupActive ? 0 : 1}">${groupActive ? 'Включить группу' : 'Отключить группу'}</button>` : ''}
+                  ${_serverMode && destinationReady && groupActive ? `<button type="button" class="small" data-action="onboarding-invite" data-group-id="${g.id}">Ссылка подключения</button>` : ''}
                   <button type="button" class="small danger" data-action="delete-group" data-group-id="${g.id}">Удалить группу</button>
                 </div>
               </details>
@@ -2396,6 +2480,7 @@ let openGroupId = null;
             ${open ? `
             <div class="group-body">
               ${destinationReview}
+              ${_serverMode ? `<section class="onboarding-invite-panel" aria-label="Приглашение пользователей"><strong>Приглашение пользователей</strong>${!groupActive ? '<p class="hint">Включите группу, чтобы создать ссылку.</p>' : (!destinationReady ? '<p class="hint">Сначала подтвердите ID чата MAX. После этого появится ссылка для подключения аккаунтов.</p>' : `<div id="onboardingInvite-${g.id}" class="hint" aria-live="polite">Откройте меню «Ещё» → «Ссылка подключения».</div>`)}</section>` : ''}
               ${!isUserRole() ? `<div class="row" style="margin-bottom:.75rem">
                 <small class="muted">Назначены: ${esc((g.proxy_labels || []).join(', ') || 'нет прокси')}</small>
                 <textarea id="groupProxy-${g.id}" rows="2" placeholder="Вставьте список прокси для замены; адреса и учётные данные не показываются" aria-label="Новый список прокси группы" style="max-width:360px;min-height:2.4rem"></textarea>
@@ -2403,13 +2488,14 @@ let openGroupId = null;
               </div>` : ''}
               <div class="table-wrap group-table-wrap">
               <table>
-                <thead><tr><th>ID</th><th>Телефон</th><th>Статус</th><th>День отправки</th><th>Прокси</th><th>Действия</th></tr></thead>
+                <thead><tr><th>ID</th><th>Телефон</th><th>ФИО</th><th>Статус</th><th>День отправки</th><th>Прокси</th><th>Действия</th></tr></thead>
                 <tbody>${body}</tbody>
               </table>
               </div>
               ${profilePageControls(g.id, total)}
               <div class="row" style="margin-top:.75rem">
                 <input id="phone-${g.id}" placeholder="+79991234567…" aria-label="Телефон">
+                <input id="full-name-${g.id}" placeholder="ФИО…" aria-label="ФИО" style="max-width:180px">
                 <input id="label-${g.id}" placeholder="Метка…" aria-label="Метка" style="max-width:120px">
                 <button type="button" class="primary" data-action="login-from-phone" data-group-id="${g.id}">Войти</button>
                 ${isUserRole() ? '' : `<button type="button" class="small" data-action="import-csv">Импорт CSV</button>`}
@@ -2651,12 +2737,13 @@ let openGroupId = null;
       const profiles = [];
       for (const fields of rows) {
         const phone = String(fields[0] || '').trim();
-        const label = String(fields[1] || '').trim();
+        const full_name = fields.length >= 3 ? String(fields[1] || '').trim() : '';
+        const label = fields.length >= 3 ? String(fields[2] || '').trim() : String(fields[1] || '').trim();
         if (!phone || phone.startsWith('#') || phone.toLowerCase() === 'phone') continue;
         if (profiles.length >= MAX_PROFILE_IMPORT_ROWS) {
           throw new Error('Максимум 2000 профилей за раз');
         }
-        profiles.push({ phone, label });
+        profiles.push({ phone, full_name, label });
       }
       return profiles;
     }

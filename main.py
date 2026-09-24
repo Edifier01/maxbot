@@ -3702,8 +3702,11 @@ async def lifespan(_app: FastAPI):
         if _is_server_mode():
             from app.ops_monitor import ops_alert_loop
             from app.subscription_jobs import subscription_lifecycle_loop
+            from app.routes_onboarding import onboarding_cleanup_loop, recover_and_cleanup_onboarding
 
             assert get_tenant_id() is None
+            await asyncio.to_thread(recover_and_cleanup_onboarding)
+            RUNTIME.onboarding_cleanup_task = asyncio.create_task(onboarding_cleanup_loop())
             RUNTIME.ops_alert_task = asyncio.create_task(ops_alert_loop())
             RUNTIME.subscription_task = asyncio.create_task(subscription_lifecycle_loop())
 
