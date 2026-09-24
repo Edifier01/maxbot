@@ -24,8 +24,6 @@ def m(tmp_path, monkeypatch):
     main_mod._settings_cache.clear()
     REGISTRY.reset_test()
     main_mod.set_setting("message_pick_mode", "round_robin")
-    main_mod.set_setting("campaign_goal", "daily_limits")
-    main_mod.set_setting("role_plan_enabled", "0")
     monkeypatch.setattr(main_mod, "load_message_pool", lambda: ["hello", "world", "third"])
     monkeypatch.setattr(main_mod, "_is_circuit_open", lambda _pid: False)
     monkeypatch.setattr(main_mod, "_can_send_in_group", lambda _p, _gid: True)
@@ -53,8 +51,8 @@ def _seed(m, group_ids: list[int], *, n_profiles: int = 1) -> None:
         )
         for gid in group_ids:
             c.execute(
-                "INSERT INTO groups (id, name, is_active) VALUES (?, ?, 1)",
-                (gid, f"g{gid}"),
+                "INSERT INTO groups (id, name, proxy, is_active) VALUES (?, ?, ?, 1)",
+                (gid, f"g{gid}", "socks5://proxy.example:1080"),
             )
         for i in range(n_profiles):
             pid = i + 1
@@ -62,26 +60,37 @@ def _seed(m, group_ids: list[int], *, n_profiles: int = 1) -> None:
                 "INSERT INTO profiles (id, phone, status) VALUES (?, ?, ?)",
                 (pid, f"+7999000000{pid}", m.ProfileStatus.ACTIVE),
             )
-            for gid in group_ids:
-                c.execute(
-                    "INSERT INTO group_profiles "
-                    "(group_id, profile_id, order_index, is_enabled) "
-                    "VALUES (?, ?, 0, 1)",
-                    (gid, pid),
-                )
+            gid = group_ids[(i - 1) % len(group_ids)]
+            c.execute(
+                "INSERT INTO group_profiles "
+                "(group_id, profile_id, order_index, is_enabled) "
+                "VALUES (?, ?, 0, 1)",
+                (gid, pid),
+            )
+            from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+            weekly = WeeklyScheduleRepository(c)
+            weekly.assign_profile(pid, gid)
+            c.execute(
+                "UPDATE profile_send_schedules SET send_weekday=? WHERE profile_id=?",
+                (m._local_today().weekday(), pid),
+            )
+    from app.campaign_worker import materialize_weekly_plans
+
+    materialize_weekly_plans()
 
 
 def test_second_claim_skips_inflight_group(m):
     _seed(m, [1, 2])
     job1 = _claim_job()
     assert job1 is not None
-    assert int(job1["group"]["id"]) == 1
-    assert 1 in RUNTIME.groups_in_flight
+    claimed_group = int(job1["group"]["id"])
+    assert claimed_group in {1, 2}
+    assert claimed_group in RUNTIME.groups_in_flight
 
     job2 = _claim_job()
-    assert job2 is not None
-    assert int(job2["group"]["id"]) == 2
-    assert RUNTIME.groups_in_flight == {1, 2}
+    assert job2 == "WEEKLY_WAIT"
+    assert RUNTIME.groups_in_flight == {claimed_group}
 
 
 def test_only_group_inflight_returns_none(m):
@@ -89,19 +98,18 @@ def test_only_group_inflight_returns_none(m):
 
     _seed(m, [1])
     RUNTIME.groups_in_flight.add(1)
-    assert cw._claim_next_job_sync() is None
+    assert cw._claim_next_job_sync() in {"WEEKLY_WAIT", "WEEKLY_DONE"}
 
 
 def test_release_allows_skipped_group_again(m):
     _seed(m, [1, 2])
     job1 = _claim_job()
     job2 = _claim_job()
-    assert int(job1["group"]["id"]) == 1
-    assert int(job2["group"]["id"]) == 2
-    RUNTIME.groups_in_flight.discard(1)
+    claimed_group = int(job1["group"]["id"])
+    assert job2 == "WEEKLY_WAIT"
+    RUNTIME.groups_in_flight.discard(claimed_group)
     job3 = _claim_job()
-    assert job3 is not None
-    assert int(job3["group"]["id"]) == 1
+    assert job3 == "WEEKLY_WAIT"
 
 
 def test_reset_test_clears_inflight():
@@ -194,7 +202,7 @@ def test_safe_cancel_restores_sequential_claim(m):
     _seed(m, [1])
     before = _queue_state(m)
     job = cw._claim_next_job_sync()
-    assert _queue_state(m) != before
+    assert _queue_state(m) == before
 
     cw._restore_claim(job, SendTracker())
 
@@ -214,7 +222,7 @@ def test_safe_cancel_restores_exact_random_bag(m):
         )
     before = _queue_state(m)
     job = cw._claim_next_job_sync()
-    assert _queue_state(m) != before
+    assert _queue_state(m) == before
 
     cw._restore_claim(job, SendTracker())
 
@@ -234,7 +242,7 @@ def test_unknown_send_does_not_restore_claim(m):
 
     cw._restore_claim(job, tracker)
 
-    assert claimed != before
+    assert claimed == before
     assert _queue_state(m) == claimed
 
 
@@ -284,32 +292,25 @@ def test_poolworker_releases_inflight_on_cancel(m, monkeypatch):
     assert 1 not in RUNTIME.profile_reserved
 
 
-def test_claim_skips_profile_when_reserved_hits_daily(m):
+def test_claim_skips_profile_with_weekly_send_already_used(m):
     from app import campaign_worker as cw
 
     _seed(m, [1, 2], n_profiles=2)
     today = m._local_today().isoformat()
     with m._conn() as c:
         c.execute(
-            "UPDATE profiles SET messages_sent_today=9, sent_day=?, "
-            "daily_limit=10, daily_limit_day=? WHERE id=1",
-            (today, today),
+            "INSERT INTO send_log(profile_id, group_id, message_idx, status, sent_at) "
+            "VALUES (1, 1, 0, 'sent', ?)",
+            (today + " 12:00:00",),
         )
-        c.execute(
-            "UPDATE profiles SET messages_sent_today=0, sent_day=?, "
-            "daily_limit=10, daily_limit_day=? WHERE id=2",
-            (today, today),
-        )
-    RUNTIME.profile_reserved[1] = 1
     job = cw._claim_next_job_sync()
     assert job is not None
     assert int(job["profile"]["id"]) == 2
 
 
-def test_empty_bag_with_jobs_in_flight_does_not_return_done(m):
+def test_weekly_slot_is_available_independent_of_legacy_message_bag(m):
     from app import campaign_worker as cw
 
-    m.set_setting("campaign_goal", "message_pool")
     m.set_setting("message_pick_mode", "random_norepeat")
     _seed(m, [1])
     with m._conn() as c:
@@ -319,5 +320,7 @@ def test_empty_bag_with_jobs_in_flight_does_not_return_done(m):
         )
     RUNTIME.jobs_in_flight = 2
     RUNTIME.pool_done_announced = False
-    assert cw._claim_next_job_sync() is None
+    job = cw._claim_next_job_sync()
+    assert isinstance(job, dict)
+    assert job["weekly_plan"] is True
     assert RUNTIME.pool_done_announced is False

@@ -856,10 +856,7 @@ def _message_pick_mode() -> str:
 
 
 def _campaign_goal() -> str:
-    g = (get_setting("campaign_goal") or "daily_limits").strip()
-    if g not in ("daily_limits", "message_pool"):
-        return "daily_limits"
-    return g
+    return "weekly_schedule"
 
 
 
@@ -1567,10 +1564,55 @@ def _sanitize_profile_error_view(d: dict[str, Any]) -> dict[str, Any]:
     return d
 
 
-def _profile_auth_view(p: sqlite3.Row | dict) -> dict:
+def _profile_auth_view(
+    p: sqlite3.Row | dict, *, group_id: int | None = None
+) -> dict:
     from app.tenant import redact_cabinet_row
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
 
     d = _sanitize_profile_error_view(dict(p))
+    d.pop("proxy", None)
+    weekly = WeeklyScheduleRepository(_conn())
+    schedule = weekly.schedule_for(int(d["id"]))
+    d["send_weekday"] = int(schedule["send_weekday"]) if schedule else None
+    selected_group = int(group_id) if group_id is not None else None
+    with _conn() as connection:
+        if selected_group is None:
+            scope = None
+            tables = {
+                str(row["name"])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='profile_automation_scope'"
+                )
+            }
+            if "profile_automation_scope" in tables:
+                scope = connection.execute(
+                    "SELECT automation_group_id FROM profile_automation_scope "
+                    "WHERE profile_id=?",
+                    (int(d["id"]),),
+                ).fetchone()
+            if scope and scope["automation_group_id"] is not None:
+                selected_group = int(scope["automation_group_id"])
+            else:
+                memberships = connection.execute(
+                    "SELECT group_id FROM group_profiles WHERE profile_id=? "
+                    "AND is_enabled=1 ORDER BY group_id",
+                    (int(d["id"]),),
+                ).fetchall()
+                if len(memberships) == 1:
+                    selected_group = int(memberships[0]["group_id"])
+    proxy_url = (
+        weekly.assigned_proxy_url(int(d["id"]), selected_group)
+        if selected_group is not None
+        else None
+    )
+    d["proxy_label"] = (
+        weekly.proxy_label_for(int(d["id"]), selected_group)
+        if selected_group is not None
+        else None
+    )
+    d["proxy_assigned"] = proxy_url is not None
     sess = _auth_sessions.get(_auth_session_key(int(d["id"])), {})
     d["auth_step"] = sess.get("step", "idle")
     d["auth_hint"] = sess.get("hint", "")
@@ -1583,16 +1625,6 @@ def _profile_auth_view(p: sqlite3.Row | dict) -> dict:
         d.update(current_attempt.public())
     d["in_cooldown"] = _is_in_cooldown(d)
     d["circuit_open"] = _is_circuit_open(int(d["id"]))
-    try:
-        wdays = max(1, int(get_setting("warmup_days") or "7"))
-    except ValueError:
-        wdays = 7
-    age = _profile_age_days(d)
-    d["warmup_day"] = min(age + 1, wdays)
-    d["warmup_active"] = (
-        (get_setting("warmup_enabled") or "1").strip() in ("1", "true", "yes")
-        and age < wdays
-    )
     return redact_cabinet_row(d)
 
 
@@ -1879,6 +1911,29 @@ async def _with_decrypted_client(
     )
     if proxy is None and group_id is not None:
         proxy = _group_proxy(group_id, profile_id)
+    if login_mode and group_id is None:
+        with _conn() as connection:
+            selected = connection.execute(
+                "SELECT automation_group_id FROM profile_automation_scope "
+                "WHERE profile_id=?",
+                (int(profile_id),),
+            ).fetchone()
+            if selected and selected["automation_group_id"] is not None:
+                group_id = int(selected["automation_group_id"])
+            else:
+                memberships = connection.execute(
+                    "SELECT group_id FROM group_profiles WHERE profile_id=? "
+                    "AND is_enabled=1 ORDER BY group_id",
+                    (int(profile_id),),
+                ).fetchall()
+                if len(memberships) == 1:
+                    group_id = int(memberships[0]["group_id"])
+        if group_id is not None:
+            proxy = _group_proxy(group_id, profile_id)
+    if group_id is None:
+        raise RuntimeError("WORK_GROUP_REQUIRED")
+    if not proxy:
+        raise RuntimeError("PROXY_ASSIGNMENT_REQUIRED")
     if proxy:
         host = proxy.split("@")[-1]
         append_log(
@@ -2230,9 +2285,7 @@ def _windows_for_date(d: date) -> list[tuple[dt_time, dt_time]]:
 
 
 def _in_send_window(now: datetime | None = None) -> bool:
-    """Локальное время: можно ли слать сейчас. Выкл. ритм → всегда да."""
-    if not _human_rhythm_enabled():
-        return True
+    """Return whether local time is inside a configured send window."""
     now = now or _local_now()
     windows = _windows_for_date(now.date())
     if not windows:
@@ -2242,8 +2295,6 @@ def _in_send_window(now: datetime | None = None) -> bool:
 
 
 def _seconds_until_next_window(now: datetime | None = None) -> float:
-    if not _human_rhythm_enabled():
-        return 0.0
     now = now or _local_now()
     if _in_send_window(now):
         return 0.0
@@ -2727,18 +2778,17 @@ async def _maybe_idle_presence() -> None:
 
 
 def _group_proxy(group_id: int, profile_id: int | None = None) -> str | None:
-    """Прокси группы. Несколько URL (по строкам или через `;`) — ротация по profile_id."""
+    """Return the persisted proxy assigned to this profile in its work group."""
+    if profile_id is None:
+        return None
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
     with _conn() as c:
-        row = c.execute(
-            "SELECT proxy FROM groups WHERE id=?", (group_id,)
-        ).fetchone()
-    if not row:
-        return None
-    try:
-        raw = (row["proxy"] or "").strip()
-    except (KeyError, IndexError):
-        return None
-    return antiban_core.pick_proxy_from_pool(raw, profile_id)
+        repository = WeeklyScheduleRepository(c)
+        assignment = repository.assignment_for(int(profile_id), int(group_id))
+        if assignment is None:
+            repository.assign_profile(int(profile_id), int(group_id))
+        return repository.assigned_proxy_url(int(profile_id), int(group_id))
 
 
 _PROXY_RECHECK_SEC = 300.0
@@ -2771,13 +2821,11 @@ def _validate_proxy_for_group(
     group: sqlite3.Row | dict[str, Any],
     profile_id: int | None,
 ) -> tuple[bool, str]:
-    """True = можно работать (прокси доступен; desktop — или не задан)."""
+    """True when the group's required proxy route is available."""
     gid = int(group["id"])
     raw = _group_proxy_raw(gid)
     if not antiban_core.parse_proxy_list(raw):
-        if _is_server_mode():
-            return False, "нет прокси"
-        return True, ""
+        return False, "нет прокси"
     if profile_id is not None:
         urls = [u for u in [_group_proxy(gid, profile_id)] if u]
     else:
@@ -2984,14 +3032,14 @@ def _can_send_in_group(profile: sqlite3.Row, group_id: int) -> bool:
         return False
     if _is_in_human_break(int(profile["id"])):
         return False
-    if not _can_send(profile):
+    if _is_in_cooldown(profile):
         return False
-    role = _profile_day_role(profile)
-    if role == "skip":
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+    weekly = WeeklyScheduleRepository(_conn())
+    if weekly.send_block_reason(int(profile["id"]), _local_today()) != "allowed":
         return False
-    if role == "quiet":
-        return _group_sends_today(int(profile["id"]), group_id) < _quiet_limit()
-    return True
+    return _group_proxy(int(group_id), int(profile["id"])) is not None
 
 
 def _is_in_human_break(profile_id: int) -> bool:
@@ -3046,18 +3094,25 @@ def _has_sendable_profile(*, ignore_human_break: bool = False) -> bool:
             if ignore_human_break:
                 if _is_in_cooldown(profile):
                     continue
-                role = _profile_day_role(profile)
-                if role == "skip":
-                    continue
-                if not _can_send(profile):
-                    continue
-                if role == "quiet":
-                    if _group_sends_today(int(profile["id"]), group["id"]) >= _quiet_limit():
-                        continue
-                return True
+                if _can_send_in_group_without_break(profile, int(group["id"])):
+                    return True
             if _can_send_in_group(profile, group["id"]):
                 return True
     return False
+
+
+def _can_send_in_group_without_break(profile: sqlite3.Row, group_id: int) -> bool:
+    if not _automation_scope_allows_external_action(int(profile["id"]), group_id):
+        return False
+    if _is_in_cooldown(profile):
+        return False
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+    weekly = WeeklyScheduleRepository(_conn())
+    return (
+        weekly.send_block_reason(int(profile["id"]), _local_today()) == "allowed"
+        and _group_proxy(group_id, int(profile["id"])) is not None
+    )
 
 
 def _seconds_until_any_human_break_ends() -> float:
@@ -3070,53 +3125,38 @@ def _seconds_until_any_human_break_ends() -> float:
     return max(1.0, min(waits)) if waits else 30.0
 
 
-def _effective_group_limit(profile: sqlite3.Row, group_id: int) -> int:
-    """Эффективный дневной лимит профиля в группе с учётом роли."""
-    if _is_in_cooldown(profile):
-        return 0
-    role = _profile_day_role(profile)
-    if role == "skip":
-        return 0
-    lim = _ensure_daily_limit(int(profile["id"]), log=False)
-    if role == "quiet":
-        return min(lim, _quiet_limit())
-    return lim
-
-
 def _daily_capacity_progress() -> dict[str, Any]:
-    """Прогресс по дневным лимитам с учётом ролей дня (уникальные профили)."""
-    today = _local_today().isoformat()
-    best: dict[int, tuple[int, int]] = {}  # id -> (capacity, used)
+    """Weekly schedule progress by distinct account."""
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository, monday_of
+
+    today = _local_today()
+    week_start = monday_of(today).isoformat()
+    week_end = (monday_of(today) + timedelta(days=7)).isoformat()
+    repository = WeeklyScheduleRepository(_conn())
+    schedules = _conn().execute(
+        "SELECT profile_id, send_weekday FROM profile_send_schedules"
+    ).fetchall()
+    sent = _conn().execute(
+        "SELECT COUNT(DISTINCT profile_id) AS n FROM send_log WHERE status='sent' "
+        "AND date(sent_at, '+3 hours')>=? AND date(sent_at, '+3 hours')<?",
+        (week_start, week_end),
+    ).fetchone()
+    scheduled_today = sum(
+        1 for row in schedules if int(row["send_weekday"]) == today.weekday()
+    )
     sendable = 0
-    seen_sendable: set[int] = set()
     for group in _active_groups():
         gid = int(group["id"])
         for p in _active_profiles_for_group(gid):
             pid = int(p["id"])
-            if _is_circuit_open(pid):
+            if _is_circuit_open(pid) or not _can_send_in_group(p, gid):
                 continue
-            cap = _effective_group_limit(p, gid)
-            if cap <= 0:
-                continue
-            role = _profile_day_role(p)
-            if role == "quiet":
-                used = min(_group_sends_today(pid, gid), cap)
-            else:
-                used = int(p["messages_sent_today"] or 0) if p["sent_day"] == today else 0
-                used = min(used, cap)
-            prev = best.get(pid)
-            if prev is None or cap > prev[0]:
-                best[pid] = (cap, used)
-            if used < cap and pid not in seen_sendable and _can_send_in_group(p, gid):
-                seen_sendable.add(pid)
-    capacity = sum(c for c, _u in best.values())
-    sent = sum(u for _c, u in best.values())
-    sendable = len(seen_sendable)
+            sendable += 1
     return {
-        "goal": "daily_limits",
-        "sent": sent,
-        "total": capacity,
-        "remaining": max(0, capacity - sent),
+        "goal": "weekly_schedule",
+        "sent_this_week": int(sent["n"] if sent else 0),
+        "total_accounts": len(schedules),
+        "scheduled_today": scheduled_today,
         "sendable_profiles": sendable,
         "messages_in_pool": len(load_message_pool()),
     }
@@ -3144,7 +3184,6 @@ from app.campaign_queue import (
 from app.campaign_query import (
     _active_groups,
     _active_profiles_for_group,
-    _ensure_group_role_plan,
 )
 
 from app.campaign_worker import (
@@ -3525,16 +3564,7 @@ def _build_status_payload() -> dict[str, Any]:
         )
     messages_total = len(load_message_pool())
     message_idx = qs["message_idx"] if qs else 0
-    if _campaign_goal() == "daily_limits":
-        progress = _daily_capacity_progress()
-    else:
-        progress = {
-            "goal": "message_pool",
-            "sent": min(message_idx, messages_total),
-            "total": messages_total,
-            "remaining": max(0, messages_total - message_idx),
-            "messages_in_pool": messages_total,
-        }
+    progress = _daily_capacity_progress()
     return {
         "running": running,
         "queue": dict(qs) if qs else {},

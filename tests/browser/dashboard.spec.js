@@ -169,6 +169,79 @@ test.describe('dashboard surface', () => {
     await expect(campaignTab).toHaveAttribute('aria-selected', 'true');
   });
 
+  test('shows user readiness and safe attention actions without offering login for a banned account', async ({ page }) => {
+    await page.unroute('**/api/**');
+    const state = { previewCalls: [], loginCalls: [], scopeCalls: [] };
+    await page.route('**/api/**', async (route) => {
+      const request = route.request();
+      const pathname = new URL(request.url()).pathname;
+      if (pathname === '/api/health') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, server_mode: true }) });
+        return;
+      }
+      if (pathname === '/api/auth/restore-session') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (pathname === '/api/auth/me') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ role: 'user', subscription: { active: true } }) });
+        return;
+      }
+      if (pathname === '/api/dashboard/attention') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+          items: [
+            { id: 8, phone: '+70000000008', label: 'Заблокированный', status: 'banned', last_error: 'Аккаунт заблокирован платформой', primary_group_id: 2, linked_group_count: 1 },
+            { id: 9, phone: '+70000000009', status: 'needs_reauth', last_error: 'Требуется повторный вход', primary_group_id: 2, linked_group_count: 1 },
+          ], total: 2, offset: 0, limit: 10,
+        }) });
+        return;
+      }
+      if (pathname === '/api/campaign/preview') {
+        state.previewCalls.push(request.method());
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+          ok: false, readiness_revision: 'fixture-revision', blockers: ['groups', 'profiles', 'recovery_hold_active'], warnings: [],
+          selection: { groups: [], profiles: [], library_count: 0 },
+        }) });
+        return;
+      }
+      if (pathname === '/api/profiles/9/automation-scope') {
+        state.scopeCalls.push(request.method());
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) });
+        return;
+      }
+      if (pathname === '/api/profiles/9/login') {
+        state.loginCalls.push(request.method());
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ message: 'Вход начат', auth_step: 'connecting' }) });
+        return;
+      }
+      if (pathname === '/api/profiles/9') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 9, status: 'active', auth_step: 'idle' }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixturePayload(pathname)) });
+    });
+
+    await page.goto('/');
+    const readiness = page.locator('#campaignReadinessPanel');
+    await expect(readiness).toBeVisible();
+    await expect(readiness).toContainText('Нет активной группы');
+    await expect(readiness).toContainText('Нет активного авторизованного аккаунта');
+    await expect(readiness).not.toContainText('recovery_hold_active');
+    await expect(page.locator('#btnStart')).toBeDisabled();
+
+    const attention = page.locator('#attentionList');
+    await expect(attention).toContainText('Заблокированный');
+    await expect(attention).toContainText('Рассылка остановлена');
+    const banned = attention.locator('[data-profile-id="8"]');
+    await expect(banned.getByRole('button', { name: 'Войти' })).toHaveCount(0);
+    const reauth = attention.locator('[data-profile-id="9"]');
+    await expect(reauth.getByRole('button', { name: 'Войти' })).toBeVisible();
+    expect(state.previewCalls).toContain('POST');
+    await reauth.getByRole('button', { name: 'Войти' }).click();
+    await expect.poll(() => state.loginCalls.length).toBe(1);
+    expect(state.scopeCalls).toEqual(['PUT']);
+  });
+
   test('exposes a recoverable summary error when the dashboard is unavailable', async ({ page, diagnostics }, testInfo) => {
     diagnostics.allowResponse('/api/dashboard', [503]);
     diagnostics.allowConsoleError(/status of 503/);
@@ -255,6 +328,18 @@ test.describe('dashboard surface', () => {
     await page.route('**/api/**', async (route) => {
       const request = route.request();
       const pathname = new URL(request.url()).pathname;
+      if (pathname === '/api/health') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, server_mode: true }) });
+        return;
+      }
+      if (pathname === '/api/auth/restore-session') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (pathname === '/api/auth/me') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ role: 'user', subscription: { active: true } }) });
+        return;
+      }
       if (pathname === '/api/groups') {
         await route.fulfill({
           status: 200,
@@ -321,12 +406,25 @@ test.describe('dashboard surface', () => {
 
   test('keeps readiness preview read-only and binds its revision to explicit start', async ({ page }) => {
     await page.unroute('**/api/**');
-    const state = { previews: 0, starts: 0, startBody: null, unsafeCalls: [] };
+    const state = { previews: 0, previewMethods: [], starts: 0, startBody: null, unsafeCalls: [] };
     await page.route('**/api/**', async (route) => {
       const request = route.request();
       const pathname = new URL(request.url()).pathname;
+      if (pathname === '/api/health') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, server_mode: true }) });
+        return;
+      }
+      if (pathname === '/api/auth/restore-session') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (pathname === '/api/auth/me') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ role: 'user', subscription: { active: true } }) });
+        return;
+      }
       if (pathname === '/api/campaign/preview') {
         state.previews += 1;
+        state.previewMethods.push(request.method());
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -362,11 +460,15 @@ test.describe('dashboard surface', () => {
     });
 
     await page.goto('/');
-    await page.getByRole('button', { name: 'Проверить готовность' }).click();
     await expect(page.getByText('Готово к запуску.')).toBeVisible();
-    await expect(page.getByText('Групп: 1 · профилей: 1 · сообщений в библиотеке: 5')).toBeVisible();
-    expect(state.previews).toBe(1);
+    const initialPreviewCount = state.previews;
+    expect(initialPreviewCount).toBeGreaterThanOrEqual(1);
+    await page.getByRole('button', { name: 'Обновить проверку' }).click();
+    await expect(page.getByText('Готово к запуску.')).toBeVisible();
+    await expect(page.getByText('Групп: 1 · аккаунтов: 1 · сообщений: 5')).toBeVisible();
+    expect(state.previews).toBe(initialPreviewCount + 1);
     expect(state.starts).toBe(0);
+    expect(state.previewMethods).toEqual(Array(state.previews).fill('POST'));
     expect(state.unsafeCalls).toEqual([]);
 
     page.once('dialog', (dialog) => dialog.accept());
@@ -397,6 +499,20 @@ test.describe('dashboard surface', () => {
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({ role: 'user', subscription: { active: true } }),
+        });
+        return;
+      }
+      if (url.pathname === '/api/campaign/preview') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ok: true,
+            readiness_revision: 'fixture-command-readiness-revision',
+            blockers: [],
+            warnings: [],
+            selection: { groups: [1], profiles: [7], library_count: 1 },
+          }),
         });
         return;
       }
@@ -729,6 +845,11 @@ test.describe('dashboard surface', () => {
     expect(layout.left).toBeGreaterThanOrEqual(0);
     expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
     expect(layout.documentWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    const readinessBeforeStart = await page.evaluate(() => (
+      document.getElementById('campaignReadinessPanel').getBoundingClientRect().top
+      < document.getElementById('btnStart').getBoundingClientRect().top
+    ));
+    expect(readinessBeforeStart).toBe(true);
     await expect(page.locator('#campaign')).toBeVisible();
     await expect(page.locator('#campaignLog')).toContainText(holdLog);
   });
@@ -890,7 +1011,7 @@ test.describe('dashboard surface', () => {
     await expect(page.locator('#toast-container .toast.error')).toContainText('Слишком много запросов к кабинету');
     await expect(page.locator('#toast-container')).not.toContainText('Профиль не найден');
     const profileRow = page.getByRole('row').filter({ hasText: '+70000000007' });
-    await expect(profileRow.locator('.status-pending')).toHaveText('ожидает');
+    await expect(profileRow.locator('.status-pending')).toHaveText('ожидает входа');
     await expect(profileRow.locator('.status-banned, .status-needs_reauth')).toHaveCount(0);
     expect(state.profileReads).toBe(1);
   });
@@ -996,6 +1117,7 @@ test.describe('dashboard surface', () => {
     await page.goto('/');
     await page.getByRole('tab', { name: 'Группы' }).click();
     await page.getByRole('button', { name: /Fixture diagnostic group/ }).click();
+    await page.locator('details.profile-more > summary').click();
     const previewButton = page.getByRole('button', { name: 'Диагностика входа' });
     await previewButton.click();
     await expect(page.locator('.auth-diagnostic-preview')).toContainText('attempt-current-7');
@@ -1028,6 +1150,18 @@ test.describe('dashboard surface', () => {
     await page.route('**/api/**', async (route) => {
       const request = route.request();
       const pathname = new URL(request.url()).pathname;
+      if (pathname === '/api/health') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, server_mode: true }) });
+        return;
+      }
+      if (pathname === '/api/auth/restore-session') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        return;
+      }
+      if (pathname === '/api/auth/me') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ role: 'user', subscription: { active: true } }) });
+        return;
+      }
       if (pathname === '/api/groups') {
         await route.fulfill({
           status: 200,
@@ -1056,8 +1190,9 @@ test.describe('dashboard surface', () => {
             items: [{
               id: 7,
               phone: '+70000000007',
-              status: 'needs_reauth',
+              status: state.authCompleted ? 'active' : 'needs_reauth',
               auth_step: 'idle',
+              attempt_id: state.authCompleted ? 'auth-browser-retry' : undefined,
               last_error: 'Предыдущий вход не завершён',
               circuit_open: false,
             }],
@@ -1177,9 +1312,10 @@ test.describe('dashboard surface', () => {
     await page.locator('#authModalInput').press('Enter');
     await expect(page.locator('#authModal')).toBeHidden();
     await expect(page.getByRole('table').getByRole('button', { name: 'Войти', exact: true })).toBeFocused();
-    await page.keyboard.press('Tab');
     await expect.poll(() => state.delayedCompletionRefreshDone).toBe(true);
-    await expect(page.getByRole('table').getByRole('button', { name: 'Заново', exact: true })).toBeFocused();
+    await expect(page.locator('details.profile-more > summary')).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('#phone-1')).toBeFocused();
     await expect(page.getByText('Аккаунт подключён', { exact: true })).toBeVisible();
     expect(state.loginCalls).toBe(1);
     expect(state.smsCalls).toBe(1);

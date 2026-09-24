@@ -165,51 +165,14 @@ def test_auto_resume_accepts_current_immutable_library_without_legacy_pool(m, mo
     start_mock.assert_awaited_once_with(record_campaign=True)
 
 
-def test_legacy_message_pool_random_norepeat_exhausts_one_tenant_deck(
-    m, monkeypatch
-):
-    from app.campaign_runtime import RUNTIME
+def test_legacy_pool_goal_cannot_activate_old_queue(m):
     from app.campaign_worker import _claim_next_job_sync
 
-    today = m._local_today().isoformat()
     m.set_setting("campaign_goal", "message_pool")
-    m.set_setting("message_pick_mode", "random_norepeat")
-    m.set_setting("role_plan_enabled", "0")
-    monkeypatch.setattr(m, "load_message_pool", lambda: ["one", "two", "three"])
     with m._conn() as connection:
-        connection.execute(
-            "UPDATE queue_state SET running=1, profile_idx=0, message_idx=0, "
-            "group_idx=0, message_bag='[]' WHERE id=1"
-        )
-        for group_id, profile_id in ((3, 7), (4, 8)):
-            connection.execute(
-                "INSERT INTO groups (id, name, is_active) VALUES (?, ?, 1)",
-                (group_id, f"group-{group_id}"),
-            )
-            connection.execute(
-                "INSERT INTO profiles "
-                "(id, phone, status, daily_limit, daily_limit_day, sent_day) "
-                "VALUES (?, ?, 'active', 10, ?, ?)",
-                (profile_id, f"+7999000{profile_id:04d}", today, today),
-            )
-            connection.execute(
-                "INSERT INTO group_profiles "
-                "(group_id, profile_id, is_enabled) VALUES (?, ?, 1)",
-                (group_id, profile_id),
-            )
-
-    texts: list[str] = []
-    for _ in range(3):
-        job = _claim_next_job_sync()
-        assert isinstance(job, dict)
-        texts.append(str(job["text"]))
-        RUNTIME.groups_in_flight.clear()
-        RUNTIME.jobs_in_flight = 0
-        RUNTIME.profile_reserved.clear()
-
-    assert sorted(texts) == ["one", "three", "two"]
-    RUNTIME.pool_done_announced = False
-    assert _claim_next_job_sync() == "DONE"
+        connection.execute("UPDATE queue_state SET running=1 WHERE id=1")
+    assert m._campaign_goal() == "weekly_schedule"
+    assert _claim_next_job_sync() == "WEEKLY_DONE"
 
 
 def test_campaign_preview_is_read_only_and_returns_revision(m):
@@ -223,12 +186,20 @@ def test_campaign_preview_is_read_only_and_returns_revision(m):
             "VALUES (7, '+79990007777', 'active')"
         )
         c.execute(
-            "INSERT INTO groups (id, name, max_chat_id, is_active) "
-            "VALUES (3, 'fixture', '77', 1)"
+            "INSERT INTO groups (id, name, max_chat_id, is_active, proxy) "
+            "VALUES (3, 'fixture', '77', 1, 'socks5://proxy.example:1080')"
         )
         c.execute(
             "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
             "VALUES (3, 7, 1)"
+        )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        weekly = WeeklyScheduleRepository(c)
+        weekly.assign_profile(7, 3)
+        c.execute(
+            "UPDATE profile_send_schedules SET send_weekday=? WHERE profile_id=7",
+            (m._local_today().weekday(),),
         )
         DailyPlanRepository(c)
         MessageSetRepository(c).publish("local", ("preview-text",))
@@ -419,12 +390,20 @@ def test_campaign_start_accepts_unchanged_readiness_revision(m, monkeypatch):
             "VALUES (7, '+79990007777', 'active')"
         )
         c.execute(
-            "INSERT INTO groups (id, name, max_chat_id, is_active) "
-            "VALUES (3, 'fixture', '77', 1)"
+            "INSERT INTO groups (id, name, max_chat_id, is_active, proxy) "
+            "VALUES (3, 'fixture', '77', 1, 'socks5://proxy.example:1080')"
         )
         c.execute(
             "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
             "VALUES (3, 7, 1)"
+        )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        weekly = WeeklyScheduleRepository(c)
+        weekly.assign_profile(7, 3)
+        c.execute(
+            "UPDATE profile_send_schedules SET send_weekday=? WHERE profile_id=7",
+            (m._local_today().weekday(),),
         )
         MessageSetRepository(c).publish("local", ("start-text",))
 
@@ -447,7 +426,7 @@ def test_campaign_start_accepts_unchanged_readiness_revision(m, monkeypatch):
     assert start_mock.await_args.kwargs["preflight"] is False
 
 
-def test_repeated_start_creates_one_plan_per_profile_not_a_pool_broadcast(m, monkeypatch):
+def test_repeated_start_keeps_one_weekly_slot_per_profile(m, monkeypatch):
     from app.repositories.message_sets import MessageSetRepository
     from app.routes_campaign import campaign_start
 
@@ -461,38 +440,60 @@ def test_repeated_start_creates_one_plan_per_profile_not_a_pool_broadcast(m, mon
                 (profile_id, f"+7999000{profile_id:04d}", limit, today, today),
             )
             c.execute(
-                "INSERT INTO groups (id, name, max_chat_id, is_active) "
-                "VALUES (?, ?, ?, 1)",
-                (group_id, f"fixture-{group_id}", str(group_id)),
+                "INSERT INTO groups (id, name, max_chat_id, is_active, proxy) "
+                "VALUES (?, ?, ?, 1, ?)",
+                (group_id, f"fixture-{group_id}", str(group_id),
+                 f"socks5://proxy-{group_id}.example:1080"),
             )
             c.execute(
                 "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
                 "VALUES (?, ?, 1)",
                 (group_id, profile_id),
             )
-        MessageSetRepository(c).publish(
-            "local", tuple(f"text-{index}" for index in range(7))
+            from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+            weekly = WeeklyScheduleRepository(c)
+            weekly.assign_profile(profile_id, group_id)
+            c.execute(
+                "UPDATE profile_send_schedules SET send_weekday=? WHERE profile_id=?",
+                (m._local_today().weekday(), profile_id),
+            )
+        library_connection, library_scope = m._message_library_source_storage()
+        MessageSetRepository(library_connection).publish(
+            library_scope, tuple(f"text-{index}" for index in range(7))
         )
 
     monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
     monkeypatch.setattr(m, "_preflight_group_proxies", AsyncMock())
     monkeypatch.setattr(m, "_has_sendable_profile", lambda: True)
+    monkeypatch.setattr(m, "_automation_scope_allows_external_action", lambda *_args: True)
     start_mock = AsyncMock(return_value=True)
     monkeypatch.setattr(m, "_start_worker", start_mock)
 
     first = asyncio.run(campaign_start(request_id="repeat-start"))
     second = asyncio.run(campaign_start(request_id="repeat-start"))
+    with m._conn() as c:
+        slots = c.execute(
+            "SELECT profile_id, status, work_group_id FROM profile_weekly_slots "
+            "WHERE scheduled_date=? ORDER BY profile_id",
+            (today,),
+        ).fetchall()
+        legacy_count = c.execute(
+            "SELECT COUNT(*) FROM profile_daily_plans WHERE business_date=?",
+            (today,),
+        ).fetchone()[0]
+    assert [tuple(row) for row in slots] == [(7, "queued", 3), (8, "queued", 4)]
+    assert legacy_count == 0
 
     assert first["state"] == "running"
     assert second["state"] == "running"
     start_mock.assert_awaited_once()
     with m._conn() as c:
         plans = c.execute(
-            "SELECT profile_id, target, work_group_id FROM profile_daily_plans "
-            "WHERE business_date=? ORDER BY profile_id",
+            "SELECT profile_id FROM profile_weekly_slots WHERE scheduled_date=?",
             (today,),
         ).fetchall()
-    assert [tuple(row) for row in plans] == [(7, 5, 3), (8, 7, 4)]
+    assert [row["profile_id"] for row in plans] == [7, 8]
 
 
 def test_auto_run_next_day_materializes_existing_library_without_reimport(m, monkeypatch):

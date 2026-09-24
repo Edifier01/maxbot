@@ -31,11 +31,19 @@ def _setup_local_db(tmp_path, monkeypatch):
             "INSERT INTO profiles (id, phone, status) VALUES (7, '+79990007777', 'active')"
         )
         connection.execute(
-            "INSERT INTO groups (id, name, max_chat_id, destination_verified, is_active) "
-            "VALUES (3, 'fixture', '77', 1, 1)"
+            "INSERT INTO groups (id, name, max_chat_id, destination_verified, is_active, proxy) "
+            "VALUES (3, 'fixture', '77', 1, 1, 'socks5://proxy.example:1080')"
         )
         connection.execute(
             "INSERT INTO group_profiles (group_id, profile_id, is_enabled) VALUES (3, 7, 1)"
+        )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        weekly = WeeklyScheduleRepository(connection)
+        weekly.assign_profile(7, 3)
+        connection.execute(
+            "UPDATE profile_send_schedules SET send_weekday=? WHERE profile_id=7",
+            (m._local_today().weekday(),),
         )
         profile = connection.execute("SELECT * FROM profiles WHERE id=7").fetchone()
         group = connection.execute("SELECT * FROM groups WHERE id=3").fetchone()
@@ -314,11 +322,13 @@ def test_destination_change_blocks_queued_send_until_explicit_confirmation(
     ) is False
     assert gateway.send_calls == 1
     with m._conn() as connection:
-        blocked = connection.execute(
-            "SELECT status, last_error FROM operations "
-            "WHERE status='failed_unsent'"
-        ).fetchone()
-    assert tuple(blocked) == ("failed_unsent", "DESTINATION_REVIEW_REQUIRED")
+        operations = connection.execute(
+            "SELECT status FROM operations ORDER BY rowid"
+        ).fetchall()
+    assert [row["status"] for row in operations] == ["accepted"]
+
+    next_week = date.fromisoformat(today) + timedelta(days=7)
+    monkeypatch.setattr(m, "_local_today", lambda: next_week)
 
     with m._conn() as connection:
         repository = AutomationScopeRepository(connection)
@@ -377,7 +387,7 @@ def test_auxiliary_wait_prevents_worker_claiming_the_following_send(
 ) -> None:
     """T13-C07/COMP-R05: the persisted auxiliary sanction gates the real claim path."""
     m, profile, group = _setup_local_db(tmp_path, monkeypatch)
-    from app.campaign_worker import _claim_next_job_sync
+    from app.campaign_worker import _claim_next_job_sync, materialize_weekly_plans
     from app.platform_policy import (
         AuthorizationRecord,
         MaxAction,
@@ -397,6 +407,8 @@ def test_auxiliary_wait_prevents_worker_claiming_the_following_send(
             "UPDATE campaign_control SET auto_run=1, stop_requested=0, state='running' "
             "WHERE scope='local'"
         )
+
+    assert materialize_weekly_plans() == 1
 
     assert m._can_send_in_group(profile, int(group["id"])) is True
     now = datetime.now(timezone.utc)
@@ -437,7 +449,7 @@ def test_auxiliary_wait_prevents_worker_claiming_the_following_send(
 
     job = _claim_next_job_sync()
 
-    assert job is None
+    assert job == "WEEKLY_WAIT"
     assert adapter.send_calls == 0
     with m._conn() as connection:
         cooldown = connection.execute(
@@ -522,6 +534,9 @@ def test_ack_after_midnight_keeps_authorization_budget_date(
             "UPDATE profiles SET sent_day=?, messages_sent_today=0 WHERE id=7",
             ("2026-09-21",),
         )
+        connection.execute(
+            "UPDATE profile_send_schedules SET send_weekday=6 WHERE profile_id=7"
+        )
     current = [date(2026, 9, 20)]
     monkeypatch.setattr(m, "_local_today", lambda: current[0])
 
@@ -579,46 +594,54 @@ def test_unknown_operation_occupies_daily_reservation_after_restart(
     assert m._reserved_hits_daily_limit(profile) is True
 
 
-def test_duplicate_group_records_share_one_configured_profile_cap(
+def test_weekly_limit_is_account_wide_across_groups(
     tmp_path, monkeypatch
 ) -> None:
-    m, _profile, _group = _setup_local_db(tmp_path, monkeypatch)
-    today = m._local_today().isoformat()
+    m, profile, _group = _setup_local_db(tmp_path, monkeypatch)
+    from app.campaign_send import (
+        DailyReservationUnavailable,
+        SendTracker,
+        _start_send_operation,
+    )
+
     with m._conn() as connection:
-        # This fixture isolates the legacy cap behavior from the separate
-        # explicit work-group-selection gate.
         connection.execute("DROP TABLE profile_automation_scope")
         connection.execute(
             "INSERT INTO groups "
-            "(id, name, max_chat_id, invite_link, is_active) "
-            "VALUES (4, 'duplicate-record', '77', 'https://max.example/fixture', 1)"
+            "(id, name, max_chat_id, invite_link, is_active, proxy) "
+            "VALUES (4, 'second-group', '77', 'https://max.example/fixture', 1, "
+            "'socks5://second-proxy.example:1080')"
         )
         connection.execute(
             "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
             "VALUES (4, 7, 1)"
         )
-        connection.execute(
-            "UPDATE profiles SET daily_limit=5, daily_limit_day=?, "
-            "sent_day=?, messages_sent_today=4 WHERE id=7",
-            (today, today),
-        )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        WeeklyScheduleRepository(connection).assign_profile(7, 4)
         profile = connection.execute(
             "SELECT * FROM profiles WHERE id=7"
+        ).fetchone()
+        second_group = connection.execute(
+            "SELECT * FROM groups WHERE id=4"
         ).fetchone()
 
     assert m._can_send_in_group(profile, 3) is True
     assert m._can_send_in_group(profile, 4) is True
 
-    with m._conn() as connection:
-        connection.execute(
-            "UPDATE profiles SET messages_sent_today=5 WHERE id=7"
-        )
-        capped = connection.execute(
-            "SELECT * FROM profiles WHERE id=7"
-        ).fetchone()
+    first_group = m._conn().execute("SELECT * FROM groups WHERE id=3").fetchone()
+    _start_send_operation(
+        tracker=SendTracker(), profile=profile, group=first_group, text="first"
+    )
 
-    assert m._can_send_in_group(capped, 3) is False
-    assert m._can_send_in_group(capped, 4) is False
+    assert m._can_send_in_group(profile, 3) is False
+    assert m._can_send_in_group(profile, 4) is False
+    with pytest.raises(DailyReservationUnavailable):
+        _start_send_operation(
+            tracker=SendTracker(), profile=profile, group=second_group, text="second"
+        )
+    with m._conn() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 1
 
 
 def test_legacy_manual_operation_reserves_only_unallocated_budget(

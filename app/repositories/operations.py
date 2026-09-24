@@ -311,7 +311,13 @@ class OperationRepository:
             )
             return self._get_locked(operation_id)
 
-    def retry(self, operation_id: str, *, proof_no_send: bool) -> OperationRecord:
+    def retry(
+        self,
+        operation_id: str,
+        *,
+        proof_no_send: bool,
+        reservation_guard: Callable[[sqlite3.Connection], None] | None = None,
+    ) -> OperationRecord:
         with self._transaction():
             row = self._get_locked(operation_id)
             if not proof_no_send:
@@ -320,6 +326,8 @@ class OperationRepository:
                 raise RuntimeError(f"operation is not safely retryable: {row.status}")
             if row.pre_effect_retry_count >= row.max_pre_effect_retries:
                 raise RuntimeError("pre-effect retry budget exhausted")
+            if reservation_guard is not None:
+                reservation_guard(self.connection)
             self.connection.execute(
                 "UPDATE operations SET status='claimed', pre_effect_retry_count="
                 "pre_effect_retry_count+1, updated_at=? WHERE operation_id=?",

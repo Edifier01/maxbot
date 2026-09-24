@@ -22,6 +22,28 @@ LEGACY_PRESENCE_SETTING_KEYS = (
     "presence_idle_chance",
 )
 GLOBAL_PACING_LEGACY_INACTIVE = frozenset(LEGACY_PRESENCE_SETTING_KEYS)
+RETIRED_SCHEDULE_SETTING_KEYS = frozenset(
+    {
+        "max_msgs_per_profile_day",
+        "daily_limit_min",
+        "daily_limit_max",
+        "campaign_goal",
+        "warmup_enabled",
+        "warmup_days",
+        "warmup_start_min",
+        "warmup_start_max",
+        "human_rhythm_enabled",
+        "day_skip_percent",
+        "lazy_day_percent",
+        "lazy_day_factor",
+        "role_plan_enabled",
+        "role_active_percent",
+        "role_quiet_percent",
+        "role_active_min",
+        "role_active_max",
+        "role_quiet_limit",
+    }
+)
 
 # Explicit allowlist (pacing / antiban / human-rhythm). Do not derive by
 # subtracting a denylist from DEFAULTS — new keys must be classified in tests.
@@ -29,26 +51,12 @@ GLOBAL_PACING_SETTING_KEYS = frozenset(
     {
         "delay_min_sec",
         "delay_max_sec",
-        "max_msgs_per_profile_day",
-        "daily_limit_min",
-        "daily_limit_max",
         "jitter_percent",
         "message_pick_mode",
-        "campaign_goal",
-        "warmup_enabled",
-        "warmup_days",
         "cooldown_reauth_hours",
         "cooldown_fail_hours",
-        "human_rhythm_enabled",
         "send_windows_weekday",
         "send_windows_weekend",
-        "day_skip_percent",
-        "role_plan_enabled",
-        "role_active_percent",
-        "role_quiet_percent",
-        "role_active_min",
-        "role_active_max",
-        "role_quiet_limit",
         "human_pauses_enabled",
         "short_pause_chance",
         "short_pause_min_sec",
@@ -61,10 +69,6 @@ GLOBAL_PACING_SETTING_KEYS = frozenset(
         "break_max_sec",
         "jitter_morning_percent",
         "jitter_evening_percent",
-        "warmup_start_min",
-        "warmup_start_max",
-        "lazy_day_percent",
-        "lazy_day_factor",
         "human_texts_enabled",
         "text_dedupe_enabled",
         "text_similarity_max",

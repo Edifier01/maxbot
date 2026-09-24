@@ -523,7 +523,8 @@ def test_admin_imp_can_patch_group_proxy(tmp_path, monkeypatch):
             gid = int(cur.lastrowid)
         proxy = "socks5://user:pass@203.0.113.10:1080"
         row = asyncio.run(patch_group(gid, GroupPatchIn(proxy=proxy)))
-        assert row["proxy"] == proxy
+        assert "proxy" not in row
+        assert row["proxy_labels"] == ["203.0.113.10:1080"]
         off = asyncio.run(patch_group(gid, GroupPatchIn(is_active=0)))
         assert off["is_active"] == 0
 
@@ -633,7 +634,7 @@ def test_user_cannot_add_phone_with_proxy(tmp_path, monkeypatch):
         assert row["proxy"] == ""
 
 
-def test_admin_imp_can_patch_profile_proxy(tmp_path, monkeypatch):
+def test_admin_cannot_patch_profile_proxy_directly(tmp_path, monkeypatch):
     m = _setup_tenant_db(tmp_path, monkeypatch)
     from app.routes_models import ProfilePatchIn
     from app.routes_profiles import patch_profile
@@ -648,8 +649,10 @@ def test_admin_imp_can_patch_profile_proxy(tmp_path, monkeypatch):
             )
             pid = int(cur.lastrowid)
         proxy = "socks5://user:pass@203.0.113.10:1080"
-        row = asyncio.run(patch_profile(pid, ProfilePatchIn(proxy=proxy)))
-        assert row["proxy"] == proxy
+        with pytest.raises(HTTPException) as caught:
+            asyncio.run(patch_profile(pid, ProfilePatchIn(proxy=proxy)))
+        assert caught.value.status_code == 400
+        assert caught.value.detail == "PROXY_ASSIGNMENT_AUTOMATIC"
 
 
 def test_redact_cabinet_row_drops_proxy_and_sent_text():
@@ -736,7 +739,7 @@ def test_cabinet_get_serializers_omit_proxy_and_sent_text(tmp_path, monkeypatch)
         assert "proxy" not in dash["items"][0]
 
 
-def test_admin_imp_get_serializers_keep_proxy_and_sent_text(tmp_path, monkeypatch):
+def test_admin_imp_get_serializers_hide_proxy_credentials(tmp_path, monkeypatch):
     m = _setup_tenant_db(tmp_path, monkeypatch)
     from app.routes_dashboard import get_send_log
     from app.routes_groups import list_groups
@@ -764,9 +767,11 @@ def test_admin_imp_get_serializers_keep_proxy_and_sent_text(tmp_path, monkeypatc
             )
 
         groups = asyncio.run(list_groups())
-        assert groups[0]["proxy"] == proxy
+        assert "proxy" not in groups[0]
+        assert groups[0]["proxy_labels"] == ["203.0.113.10:1080"]
         one = asyncio.run(get_profile(pid))
-        assert one["proxy"] == proxy
+        assert "proxy" not in one
+        assert one["proxy_assigned"] is False
         log = asyncio.run(get_send_log())
         assert log["items"][0]["sent_text"] == "SECRET-BODY"
 

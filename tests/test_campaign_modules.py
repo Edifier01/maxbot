@@ -8,6 +8,22 @@ import os
 from unittest.mock import AsyncMock
 
 import pytest
+
+
+def _mock_weekly_test_slot(monkeypatch, profile, group):
+    from app import campaign_worker
+
+    job = {
+        "profile": profile,
+        "group": group,
+        "text": "hello",
+        "slot_id": "weekly-test-slot",
+        "weekly_plan": True,
+    }
+    monkeypatch.setattr(campaign_worker, "materialize_weekly_plans", lambda: 1)
+    monkeypatch.setattr(campaign_worker, "_claim_weekly_job_sync", lambda: job)
+    monkeypatch.setattr(campaign_worker, "_finalize_weekly_job", lambda *_args: None)
+    return job
 from fastapi import HTTPException
 
 from app import campaign_pacing
@@ -133,6 +149,7 @@ def test_campaign_test_idle_does_not_advance_queue(setup_local, monkeypatch):
     monkeypatch.setattr(m, "_is_circuit_open", lambda _pid: False)
     monkeypatch.setattr(m, "_can_send_in_group", lambda _p, _gid: True)
     from app import routes_campaign
+    _mock_weekly_test_slot(monkeypatch, profile, group)
 
     monkeypatch.setattr(routes_campaign.m, "_preflight_group_proxies", AsyncMock(), raising=False)
     send = AsyncMock(return_value=True)
@@ -170,6 +187,7 @@ def test_campaign_test_waits_for_message_pool_publication_lock(setup_local, monk
     )
     from app import routes_campaign
     from app.campaign_runtime import REGISTRY
+    _mock_weekly_test_slot(monkeypatch, profile, group)
 
     monkeypatch.setattr(routes_campaign.m, "_preflight_group_proxies", AsyncMock())
     monkeypatch.setattr(
@@ -211,6 +229,7 @@ def test_campaign_test_does_not_report_success_after_stop_fence(setup_local, mon
     )
     from app import routes_campaign
     from app.routes_campaign import CampaignCommandCoordinator
+    _mock_weekly_test_slot(monkeypatch, profile, group)
 
     monkeypatch.setattr(routes_campaign.m, "_preflight_group_proxies", AsyncMock())
 
@@ -241,6 +260,7 @@ def test_campaign_test_reports_daily_reservation_conflict(setup_local, monkeypat
     monkeypatch.setattr(m, "_can_send_in_group", lambda _p, _gid: True)
     from app import routes_campaign
     from app.campaign_send import DailyReservationUnavailable
+    _mock_weekly_test_slot(monkeypatch, profile, group)
 
     monkeypatch.setattr(routes_campaign.m, "_preflight_group_proxies", AsyncMock())
 
@@ -253,4 +273,4 @@ def test_campaign_test_reports_daily_reservation_conflict(setup_local, monkeypat
     with pytest.raises(HTTPException) as caught:
         asyncio.run(routes_campaign.campaign_test())
     assert caught.value.status_code == 409
-    assert "дневного бюджета" in str(caught.value.detail).lower()
+    assert "недельный слот" in str(caught.value.detail).lower()

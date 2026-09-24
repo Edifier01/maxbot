@@ -122,6 +122,17 @@ def test_worker_start_captures_tenant_context(tmp_path, monkeypatch):
                 profile_idx INTEGER DEFAULT 0, message_idx INTEGER DEFAULT 0,
                 group_idx INTEGER DEFAULT 0);
             INSERT INTO queue_state (id, running) VALUES (1, 0);
+            CREATE TABLE profiles (
+                id INTEGER PRIMARY KEY, phone TEXT, status TEXT
+            );
+            CREATE TABLE groups (
+                id INTEGER PRIMARY KEY, name TEXT, proxy TEXT,
+                is_active INTEGER DEFAULT 1
+            );
+            CREATE TABLE group_profiles (
+                group_id INTEGER, profile_id INTEGER, is_enabled INTEGER DEFAULT 1,
+                order_index INTEGER DEFAULT 0, PRIMARY KEY(group_id, profile_id)
+            );
             CREATE TABLE campaigns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, status TEXT,
                 started_at TEXT, finished_at TEXT, reason TEXT, config_snapshot TEXT

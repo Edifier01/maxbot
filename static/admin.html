@@ -196,6 +196,22 @@
     }
     .users-table td:nth-child(1),
     .users-table td:nth-child(2) { overflow-wrap: anywhere; }
+    .admin-row-actions { display: grid; gap: .45rem; min-width: 12rem; }
+    details.admin-actions { position: relative; }
+    details.admin-actions > summary {
+      list-style: none; cursor: pointer; display: inline-flex; align-items: center;
+      min-height: 2.25rem; padding: .35rem .75rem; border: 1px solid var(--line);
+      border-radius: 8px; color: var(--muted); background: var(--bg-soft); font-size: .82rem;
+    }
+    details.admin-actions > summary::-webkit-details-marker { display: none; }
+    details.admin-actions > summary::after { content: "⌄"; margin-left: .45rem; }
+    .admin-actions-menu {
+      display: grid; gap: .45rem; margin-top: .4rem; padding: .65rem;
+      border: 1px solid var(--line-soft); border-radius: 10px; background: var(--bg-elev);
+    }
+    .admin-actions-menu label { color: var(--muted); font-size: .8rem; }
+    .admin-renew-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+    .admin-renew-row input { width: 5.5rem; text-align: center; }
     main section { display: none; }
     main section.active { display: block; }
     .global-groups-panel .row { gap: .65rem; }
@@ -291,6 +307,11 @@
       td .row { flex-direction: column; align-items: stretch; }
       td .row .btn { width: 100%; }
       td .row .btn.primary { order: -1; }
+      .admin-row-actions { min-width: 0; }
+      .admin-row-actions > .btn, .admin-actions > summary { width: 100%; justify-content: center; }
+      .admin-actions-menu > .btn { width: 100%; min-height: var(--touch-min); }
+      .admin-renew-row input { width: 100%; }
+      .admin-renew-row .btn { width: 100%; }
       #toast-container {
         left: 1rem; right: 1rem;
         bottom: max(1rem, env(safe-area-inset-bottom, 0px));
@@ -386,15 +407,13 @@
     <section id="settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
     <div class="panel" id="globalSettingsPanel">
       <h2 class="panel-title">Настройки рассылки</h2>
-      <p class="hint" style="margin:.35rem 0 .75rem">Параметры антибана и лимитов. Сохранение применяется ко всем учреждениям.</p>
+      <p class="hint" style="margin:.35rem 0 .75rem">Паузы и окна отправки. Сохранение применяется ко всем учреждениям.</p>
 
       <details class="settings-panel" open>
-        <summary>Рассылка и лимиты</summary>
+        <summary>Рассылка и паузы</summary>
         <div class="settings-body">
           <div class="settings-row"><label for="delayMin">Мин. пауза (сек)</label><div class="controls"><input id="delayMin" type="number"></div></div>
           <div class="settings-row"><label for="delayMax">Макс. пауза (сек)</label><div class="controls"><input id="delayMax" type="number"></div></div>
-          <div class="settings-row"><label for="dayLimitMin">Лимит/день мин</label><div class="controls"><input id="dayLimitMin" type="number" min="1"></div></div>
-          <div class="settings-row"><label for="dayLimitMax">Лимит/день макс</label><div class="controls"><input id="dayLimitMax" type="number" min="1"></div></div>
           <div class="settings-row"><label for="jitter">Разброс (%)</label><div class="controls"><input id="jitter" type="number"></div></div>
           <div class="settings-row"><label for="msgPickMode">Режим сообщений</label><div class="controls">
             <select id="msgPickMode">
@@ -402,40 +421,15 @@
               <option value="round_robin">По кругу</option>
             </select>
           </div></div>
-          <div class="settings-row"><label for="campaignGoal">Цель кампании</label><div class="controls">
-            <select id="campaignGoal">
-              <option value="daily_limits">Дневные лимиты аккаунтов</option>
-              <option value="message_pool">Исчерпать пул TXT</option>
-            </select>
-          </div></div>
-          <div class="settings-row"><label>Прогрев</label><div class="controls">
-            <label style="color:var(--text);font-size:.85rem"><input type="checkbox" id="warmupOn" style="width:auto;margin-right:.25rem"> вкл</label>
-            <input id="warmupDays" type="number" min="1" style="max-width:70px" aria-label="Дней прогрева">
-            <span class="hint" style="margin:0">дней</span>
-          </div></div>
-          <div class="settings-row"><label>Прогрев: старт мин/макс</label><div class="controls">
-            <input id="warmupStartMin" type="number" min="1" style="max-width:70px" aria-label="Прогрев старт мин">
-            <span class="hint" style="margin:0">–</span>
-            <input id="warmupStartMax" type="number" min="1" style="max-width:70px" aria-label="Прогрев старт макс">
-          </div></div>
-          <div class="settings-row"><label>Ленивый день (%)</label><div class="controls">
-            <input id="lazyDayPct" type="number" min="0" max="100" style="max-width:70px" aria-label="Ленивый день процент">
-            <span class="hint" style="margin:0">×</span>
-            <input id="lazyDayFactor" type="number" min="0.05" max="1" step="0.05" style="max-width:70px" aria-label="Ленивый день множитель">
-          </div></div>
         </div>
       </details>
 
       <details class="settings-panel">
-        <summary>Ритм и роли дня</summary>
+        <summary>Окна отправки</summary>
         <div class="settings-body">
-          <div class="settings-row"><label>Ритм</label><div class="controls">
-            <label style="color:var(--text);font-size:.85rem"><input type="checkbox" id="rhythmOn" style="width:auto;margin-right:.25rem"> вкл</label>
-          </div></div>
           <div class="settings-row"><label for="windowsWeekday">Окна будни</label><div class="controls"><input id="windowsWeekday" placeholder="9-13,16-21…" style="max-width:280px"></div></div>
           <div class="settings-row"><label for="windowsWeekend">Окна выходные</label><div class="controls"><input id="windowsWeekend" placeholder="11-14,17-20…" style="max-width:280px"></div></div>
-          <p class="hint">Время системы: UTC+3. Роли дня фиксированы: active → quiet → skip, примерно по трети профилей.</p>
-          <div class="settings-row"><label for="roleQuietLimit">Тихие: лимит</label><div class="controls"><input id="roleQuietLimit" type="number" min="0" style="max-width:80px"></div></div>
+          <p class="hint">Время системы: UTC+3. День отправки закреплён за аккаунтом.</p>
         </div>
       </details>
 

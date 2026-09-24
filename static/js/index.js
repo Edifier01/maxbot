@@ -34,8 +34,9 @@ let openGroupId = null;
       } catch (e) {
         toast(e.message || 'Ошибка', 'error');
       } finally {
-        btn.disabled = false;
         btn.innerHTML = orig;
+        if (btn.id === 'btnStart') updateCampaignStartGate();
+        else btn.disabled = false;
       }
     }
 
@@ -111,6 +112,14 @@ let openGroupId = null;
     let _lastStatus = null;
     let _dashboardLoadSequence = 0;
     let _readinessRevision = null;
+    let _readinessKnown = false;
+    let _readinessReady = false;
+    let _readinessRequestSequence = 0;
+    let _attentionOffset = 0;
+    let _attentionTotal = 0;
+    let _attentionLoadSequence = 0;
+    let _readinessStatusSignature = null;
+    let _readinessRefreshTimer = null;
     const CAMPAIGN_COMMAND_STORAGE_KEY = 'maxbot.pendingCampaignCommand.v1';
     const CAMPAIGN_COMMAND_PENDING_STATES = new Set(['preflight', 'testing', 'stopping', 'unknown']);
     const CAMPAIGN_COMMAND_LABELS = Object.freeze({
@@ -184,13 +193,15 @@ let openGroupId = null;
       stop.classList.remove('campaign-btn-active', 'campaign-btn-idle');
       if (!isSimpleCampaignView()) return;
       if (isUserRole() && !_subscriptionActive) {
-        start.disabled = true;
+        updateCampaignStartGate();
         start.title = 'Обратитесь к администратору';
         stop.classList.remove('campaign-btn-active', 'campaign-btn-idle');
         return;
       }
-      start.disabled = false;
-      start.title = '';
+      updateCampaignStartGate();
+      start.title = isUserRole() && !_readinessReady
+        ? 'Сначала устраните причины в блоке «Готовность к запуску»'
+        : '';
       const on = !!(s && (s.running || s.auto_run));
       if (on) {
         stop.classList.add('campaign-btn-active');
@@ -199,6 +210,12 @@ let openGroupId = null;
         start.classList.add('campaign-btn-active');
         stop.classList.add('campaign-btn-idle');
       }
+    }
+
+    function updateCampaignStartGate() {
+      const start = document.getElementById('btnStart');
+      if (!start || !isUserRole()) return;
+      start.disabled = !_subscriptionActive || !_readinessKnown || !_readinessReady;
     }
 
     const VALID_TABS = ['campaign', 'messages', 'groups', 'settings'];
@@ -627,6 +644,10 @@ let openGroupId = null;
       const isUser = isUserRole();
       const simpleCampaign = isSimpleCampaignView();
       mountCampaignLayout(simpleCampaign);
+      document.body.classList.toggle(
+        'campaign-attention-enabled',
+        _serverMode && (isUser || isAdminImpersonating()),
+      );
       document.querySelectorAll('nav button[data-tab="messages"], nav button[data-tab="settings"]').forEach(el => {
         el.style.display = isUser ? 'none' : '';
       });
@@ -754,6 +775,11 @@ let openGroupId = null;
 
     document.getElementById('btnLogout').addEventListener('click', logoutUser);
     document.getElementById('dashFilter').addEventListener('change', () => loadDashboard());
+    document.getElementById('attentionMore').addEventListener('click', function() {
+      const next = _attentionOffset + 10;
+      this.disabled = true;
+      loadAttention(next).catch(() => {}).finally(() => { this.disabled = false; });
+    });
     document.getElementById('btnStart').addEventListener('click', function() { withLoading(this, startCampaign); });
     document.getElementById('btnCampaignPreview').addEventListener('click', function() { withLoading(this, previewCampaign); });
     document.getElementById('btnPause').addEventListener('click', function() { withLoading(this, pauseCampaign); });
@@ -878,7 +904,9 @@ let openGroupId = null;
       const targets = [...document.querySelectorAll(
         '[data-action="reset-login"], [data-action="login-profile"]'
       )].filter(element => (
-        element.dataset.profileId === String(profileId) && !element.disabled
+        element.dataset.profileId === String(profileId)
+        && !element.disabled
+        && !element.closest('details:not([open])')
       ));
       const target = preferred
         ? targets.find(element => (
@@ -887,7 +915,12 @@ let openGroupId = null;
           && element.dataset.fresh === preferred.fresh
         ))
         : null;
-      (target || targets[0])?.focus();
+      const menu = [...document.querySelectorAll('details.profile-more')]
+        .find(element => element.dataset.profileId === String(profileId));
+      const groupTarget = preferred && preferred.groupId
+        ? document.querySelector(`[data-action="toggle-group"][data-group-id="${preferred.groupId}"]`)
+        : null;
+      (target || targets[0] || menu?.querySelector('summary') || groupTarget)?.focus();
     }
 
     function showAuthModal(title, message, password = false, restoreFocus = null) {
@@ -1088,6 +1121,7 @@ let openGroupId = null;
           }
           else if (restoreDefault) focusProfileAuthAction(profileId);
         });
+        refreshCampaignOverview();
       }
     }
 
@@ -1112,6 +1146,16 @@ let openGroupId = null;
     }
 
     function applyStatus(s) {
+      const signature = JSON.stringify({
+        profiles: s.profiles || {},
+        running: Boolean(s.running),
+        auto_run: Boolean(s.auto_run),
+        circuit_open: Number(s.circuit_open || 0),
+        messages_count: Number(s.messages_count || 0),
+      });
+      const readinessChanged = _readinessStatusSignature !== null
+        && signature !== _readinessStatusSignature;
+      _readinessStatusSignature = signature;
       _lastStatus = s;
       const running = !!s.running;
       if (_wasRunning && !running) {
@@ -1130,6 +1174,13 @@ let openGroupId = null;
         renderDashProgress(s);
       }
       applyCampaignButtonState(s);
+      if (readinessChanged && _serverMode) {
+        window.clearTimeout(_readinessRefreshTimer);
+        _readinessRefreshTimer = window.setTimeout(() => {
+          loadAttention(0).catch(() => {});
+          loadCampaignPreview().catch(() => {});
+        }, 250);
+      }
     }
 
     function renderDashProgress(data) {
@@ -1145,17 +1196,17 @@ let openGroupId = null;
       const statusEl = document.getElementById('dashProgressStatus');
       const bar = document.getElementById('dashProgressBar');
       const label = document.getElementById('dashProgressLabel');
-      if (!prog.total || prog.total <= 0) {
+      if (!prog.total_accounts || prog.total_accounts <= 0) {
         panel.style.display = 'none';
         return;
       }
       panel.style.display = '';
-      const sent = prog.sent || 0;
-      const total = prog.total || 0;
+      const sent = prog.sent_this_week || 0;
+      const total = prog.total_accounts || 0;
       const remaining = prog.remaining != null ? prog.remaining : Math.max(0, total - sent);
       const pct = Math.min(100, sent / total * 100);
       bar.style.width = pct.toFixed(1) + '%';
-      label.textContent = `${sent}/${total} · ${remaining} ост. · ${pct.toFixed(0)}%`;
+      label.textContent = `${sent}/${total} за неделю · сегодня назначено ${prog.scheduled_today || 0}`;
       if (statusEl) {
         if (running) statusEl.textContent = 'идёт рассылка';
         else if (autoRun) statusEl.textContent = 'активна · ждёт продолжения';
@@ -1348,11 +1399,13 @@ let openGroupId = null;
       const counts = (d && d.counts) || {};
       const el = document.getElementById('dashStats');
       if (!el) return;
-      el.innerHTML = `
+      const basics = `
         <div class="dash-stat"><div class="n">${counts.active || 0}</div><div class="l">активны</div></div>
-        <div class="dash-stat"><div class="n">${counts.pending || 0}</div><div class="l">ожидают</div></div>
-        <div class="dash-stat"><div class="n">${counts.needs_reauth || 0}</div><div class="l">нужен вход</div></div>
+        <div class="dash-stat"><div class="n">${counts.pending || 0}</div><div class="l">ожидают входа</div></div>
+        <div class="dash-stat"><div class="n">${counts.needs_reauth || 0}</div><div class="l">повторный вход</div></div>
         <div class="dash-stat"><div class="n">${counts.banned || 0}</div><div class="l">забанены</div></div>
+      `;
+      el.innerHTML = isUserRole() ? basics : `${basics}
         <div class="dash-stat"><div class="n">${(d && d.groups_count) || 0}</div><div class="l">групп</div></div>
         <div class="dash-stat"><div class="n">${(d && d.sent_today) || 0}</div><div class="l">успешно сегодня</div></div>
         <div class="dash-stat"><div class="n">${(d && d.failed_today) || 0}</div><div class="l">ошибок сегодня</div></div>
@@ -1363,6 +1416,10 @@ let openGroupId = null;
     async function loadDashboard() {
       const requestSequence = ++_dashboardLoadSequence;
       const errEl = document.getElementById('dashSummaryError');
+      if (_serverMode) {
+        loadAttention(0).catch(() => {});
+        loadCampaignPreview().catch(() => {});
+      }
       try {
         const d = await api('/dashboard');
         if (requestSequence !== _dashboardLoadSequence) return;
@@ -1396,12 +1453,11 @@ let openGroupId = null;
             ${p.circuit_open ? ' · <span class="auth-error">автопауза</span>' : ''}
             ${authLabel(p) ? ' · ' + esc(authLabel(p)) : ''}
           </div>
-          <div class="meta">Сегодня: ${p.messages_sent_today || 0} · ${esc(p.group_names || '')}</div>
+          <div class="meta">Отправка: ${p.send_weekday == null ? '—' : ['пн','вт','ср','чт','пт','сб','вс'][p.send_weekday]} · прокси: ${esc(p.proxy_label || 'не назначен')} · ${esc(p.group_names || '')}</div>
           ${scopeMessage ? `<div class="hint" role="status">${esc(scopeMessage)}</div>` : ''}
           ${p.last_error ? `<div class="auth-error">${esc(p.last_error)}</div>` : ''}
           <div class="row" style="margin-top:.5rem;margin-bottom:0">
-            ${selectedGroupId ? `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${isUserRole() ? 1 : 0}" data-group-id="${selectedGroupId}">Войти</button>` : ''}
-            ${isUserRole() || !selectedGroupId ? '' : `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${selectedGroupId}">Заново</button>`}
+            ${selectedGroupId && !['active', 'banned', 'disabled'].includes(p.status) ? `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${isUserRole() ? 1 : 0}" data-group-id="${selectedGroupId}">Войти</button>` : ''}
           </div>
         </div>
       `;
@@ -1416,28 +1472,178 @@ let openGroupId = null;
       }
     }
 
+    function refreshCampaignOverview() {
+      if (_serverMode) loadDashboard().catch(() => {});
+    }
+
+    const READINESS_REASON_TEXT = Object.freeze({
+      library: 'Нет доступных сообщений. Обратитесь к администратору.',
+      groups: 'Нет активной группы с подтверждённым назначением.',
+      profiles: 'Нет активного авторизованного аккаунта для отправки.',
+      recovery_hold_active: 'Внешние действия временно приостановлены.',
+      max_authorization_missing: 'Администратору нужно проверить разрешение на внешние действия.',
+      max_authorization_expired: 'Разрешение на внешние действия истекло. Обратитесь к администратору.',
+      max_authorization_revoked: 'Разрешение на внешние действия отозвано. Обратитесь к администратору.',
+      migration_review_required: 'Данные требуют проверки администратором.',
+      daily_plan_window_shortfall: 'Для части аккаунтов не осталось времени в сегодняшнем расписании.',
+      daily_plans_materialize_on_start: 'Расписание будет подготовлено при запуске.',
+    });
+
+    function readinessReason(code, warning = false) {
+      const text = READINESS_REASON_TEXT[String(code || '')];
+      if (text) return text;
+      return warning
+        ? 'Есть дополнительное условие, которое не мешает запуску.'
+        : 'Есть условие, мешающее запуску. Обратитесь к администратору.';
+    }
+
+    function renderCampaignReadiness(report) {
+      const state = document.getElementById('campaignReadinessState');
+      const details = document.getElementById('campaignReadinessDetails');
+      const blockers = document.getElementById('campaignReadinessBlockers');
+      const selection = document.getElementById('campaignReadinessSelection');
+      if (!state || !details || !blockers || !selection) return;
+      const isReady = report && report.ok === true;
+      _readinessKnown = true;
+      _readinessReady = Boolean(isReady);
+      _readinessRevision = report && typeof report.readiness_revision === 'string'
+        ? report.readiness_revision
+        : null;
+      state.textContent = isReady ? 'Готово к запуску.' : 'Запуск пока недоступен. Устраните причины ниже.';
+      state.className = 'hint ' + (isReady ? 'ok' : 'auth-error');
+      const reasons = [
+        ...((report && report.blockers) || []).map((item) => `Мешает запуску: ${readinessReason(item)}`),
+        ...((report && report.warnings) || []).map((item) => `Важно: ${readinessReason(item, true)}`),
+      ];
+      blockers.innerHTML = reasons.map((item) => `<li>${esc(item)}</li>`).join('');
+      const picked = report && report.selection ? report.selection : {};
+      const groups = Array.isArray(picked.groups) ? picked.groups.length : 0;
+      const profiles = Array.isArray(picked.profiles) ? picked.profiles.length : 0;
+      const libraryCount = Number.isFinite(Number(picked.library_count))
+        ? Number(picked.library_count)
+        : 0;
+      selection.textContent = `Групп: ${groups} · аккаунтов: ${profiles} · сообщений: ${libraryCount}`;
+      details.style.display = '';
+      updateCampaignStartGate();
+    }
+
+    async function loadCampaignPreview() {
+      if (!_serverMode) return;
+      const requestSequence = ++_readinessRequestSequence;
+      _readinessKnown = false;
+      updateCampaignStartGate();
+      const state = document.getElementById('campaignReadinessState');
+      if (state) state.textContent = 'Проверяем условия запуска…';
+      try {
+        const report = await api('/campaign/preview', { method: 'POST' });
+        if (requestSequence !== _readinessRequestSequence) return null;
+        renderCampaignReadiness(report);
+        return report;
+      } catch (error) {
+        if (requestSequence === _readinessRequestSequence) {
+          _readinessKnown = false;
+          _readinessReady = false;
+          _readinessRevision = null;
+          if (state) {
+            state.textContent = 'Не удалось проверить готовность. Запуск временно недоступен; попробуйте обновить проверку.';
+            state.className = 'hint auth-error';
+          }
+          updateCampaignStartGate();
+        }
+        throw error;
+      }
+    }
+
+    function attentionReason(item) {
+      if (item.status === 'banned') return 'Аккаунт заблокирован. Рассылка остановлена для аккаунтов этого кабинета.';
+      if (item.auth_step === 'waiting_sms') return 'Введите код из SMS, чтобы завершить вход.';
+      if (item.auth_step === 'waiting_cloud_password') return 'Введите облачный пароль, чтобы завершить вход.';
+      if (item.status === 'needs_reauth') return 'Требуется повторный вход в аккаунт.';
+      if (item.status === 'pending') {
+        return Number(item.linked_group_count || 0) > 0
+          ? 'Аккаунт ещё не подключён.'
+          : 'Сначала добавьте аккаунт в рабочую группу в разделе «Группы».';
+      }
+      if (item.status === 'disabled') return 'Аккаунт отключён администратором.';
+      if (item.circuit_open) return 'Временная пауза после серии ошибок.';
+      if (item.in_cooldown) return 'Аккаунт временно на паузе.';
+      if (item.last_error) return item.last_error;
+      return 'Проверьте состояние аккаунта в разделе «Группы».';
+    }
+
+    async function loadAttention(offset = 0) {
+      const list = document.getElementById('attentionList');
+      const count = document.getElementById('attentionCount');
+      const more = document.getElementById('attentionMore');
+      if (!list || !count || !more) return;
+      const requestSequence = ++_attentionLoadSequence;
+      const pageSize = 10;
+      _attentionOffset = Math.max(0, offset);
+      if (!_attentionOffset) list.innerHTML = '<p class="hint">Загружаем состояние аккаунтов…</p>';
+      try {
+        const data = await api(`/dashboard/attention?offset=${_attentionOffset}&limit=${pageSize}`);
+        if (requestSequence !== _attentionLoadSequence) return;
+        _attentionTotal = Number(data.total || 0);
+        count.textContent = _attentionTotal ? `Всего: ${_attentionTotal}` : '';
+        if (!_attentionTotal) {
+          list.innerHTML = '<div class="attention-clear"><strong>Всё в порядке</strong><span>Сейчас нет аккаунтов, требующих внимания.</span></div>';
+          more.style.display = 'none';
+          return;
+        }
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (!_attentionOffset) list.innerHTML = '';
+        list.insertAdjacentHTML('beforeend', items.map((item) => {
+          const groupId = Number(item.primary_group_id) || 0;
+          const inProgress = ['connecting', 'waiting_sms', 'verifying_sms', 'waiting_cloud_password', 'verifying_password'].includes(item.auth_step);
+          const canLogin = item.status !== 'banned' && item.status !== 'disabled'
+            && ['pending', 'needs_reauth'].includes(item.status) && !inProgress && groupId;
+          const canDiagnose = item.status === 'banned' && Boolean(item.attempt_id);
+          const label = item.label ? ` · ${esc(item.label)}` : '';
+          const diagnostic = canDiagnose
+            ? `<div class="auth-diagnostic" data-auth-diagnostic-host data-profile-id="${Number(item.id)}" data-attempt-id="${escAttr(item.attempt_id)}"><button type="button" class="small" data-action="auth-diagnostic-preview" data-profile-id="${Number(item.id)}">Безопасная диагностика</button></div>`
+            : '';
+          return `<article class="attention-item" data-profile-id="${Number(item.id)}">
+            <div class="attention-copy">
+              <div class="attention-title"><strong>${esc(item.phone)}${label}</strong><span class="status-${esc(item.status)}">${esc(statusRu(item.status))}</span></div>
+              <p>${esc(attentionReason(item))}</p>
+              ${inProgress ? `<span class="hint">${esc(authLabel(item).replace(/^→ /, ''))}</span>` : ''}
+            </div>
+            ${canLogin ? `<button type="button" class="small" data-action="login-profile" data-profile-id="${Number(item.id)}" data-fresh="1" data-group-id="${groupId}">Войти</button>` : diagnostic}
+          </article>`;
+        }).join(''));
+        const loaded = _attentionOffset + items.length;
+        more.style.display = loaded < _attentionTotal ? '' : 'none';
+        more.textContent = `Показать ещё (${Math.max(0, _attentionTotal - loaded)})`;
+      } catch (error) {
+        if (requestSequence !== _attentionLoadSequence) return;
+        list.innerHTML = '<p class="hint" role="status">Не удалось загрузить состояние аккаунтов. Обновите страницу или проверьте раздел «Группы».</p>';
+        count.textContent = '';
+        more.style.display = 'none';
+        throw error;
+      }
+    }
+
     async function startCampaign() {
       try {
         if (isUserRole() && !_subscriptionActive) {
           toast('Нет активной подписки. Обратитесь к администратору.', 'error');
           return;
         }
+        if (isUserRole() && (!_readinessKnown || !_readinessReady)) {
+          toast('Сначала устраните причины в блоке «Готовность к запуску».', 'error');
+          if (!_readinessKnown) loadCampaignPreview().catch(() => {});
+          return;
+        }
         if (!isSimpleCampaignView()) {
           const s = await api('/status');
           const prog = s.campaign_progress || {};
           const activeCount = (s.profiles && s.profiles.active) || 0;
-          const msg = prog.goal === 'daily_limits'
-            ? [
-                `Цель: исчерпать дневные лимиты`,
-                `Ёмкость сегодня: ${prog.total || 0} (уже ${prog.sent || 0})`,
-                `Пул TXT: ${s.messages_count}`,
-                `Активных профилей: ${activeCount}`,
-              ].join('\n')
-            : [
-                `Сообщений в пуле: ${prog.total || s.messages_count}`,
-                `Активных профилей: ${activeCount}`,
-                prog.sent > 0 ? `Продолжить с позиции ${prog.sent}` : 'Старт с начала',
-              ].join('\n');
+          const msg = [
+            `Правило: одно сообщение на аккаунт за неделю`,
+            `Отправлено на этой неделе: ${prog.sent_this_week || 0}/${prog.total_accounts || 0}`,
+            `Сегодня назначено: ${prog.scheduled_today || 0}`,
+            `Активных профилей: ${activeCount}`,
+          ].join('\n');
           if (!confirm(`Запустить рассылку?\n\n${msg}`)) return;
         } else if (!confirm('Запустить рассылку?\n\nСистема будет работать автоматически каждый день, пока вы не нажмёте «Стоп».')) {
           return;
@@ -1455,12 +1661,17 @@ let openGroupId = null;
         }
         _readinessRevision = null;
         refreshStatus();
+        loadCampaignPreview().catch(() => {});
         toast('Рассылка запущена', 'success');
       } catch (e) {
         if (e && e.code === 'PREVIEW_STALE') {
           _readinessRevision = null;
+          _readinessKnown = false;
+          _readinessReady = false;
           const state = document.getElementById('campaignReadinessState');
           if (state) state.textContent = 'Предпросмотр устарел. Проверьте готовность ещё раз.';
+          updateCampaignStartGate();
+          loadCampaignPreview().catch(() => {});
         }
         const msg = e.message || '';
         if (isUserRole() && /загрузите файл сообщений/i.test(msg)) {
@@ -1469,33 +1680,6 @@ let openGroupId = null;
           toast(msg || 'Ошибка', 'error');
         }
       }
-    }
-
-    function renderCampaignReadiness(report) {
-      const state = document.getElementById('campaignReadinessState');
-      const details = document.getElementById('campaignReadinessDetails');
-      const blockers = document.getElementById('campaignReadinessBlockers');
-      const selection = document.getElementById('campaignReadinessSelection');
-      if (!state || !details || !blockers || !selection) return;
-      const isReady = report && report.ok === true;
-      _readinessRevision = report && typeof report.readiness_revision === 'string'
-        ? report.readiness_revision
-        : null;
-      state.textContent = isReady ? 'Готово к запуску.' : 'Запуск заблокирован — проверьте причины.';
-      state.className = 'hint ' + (isReady ? 'ok' : 'auth-error');
-      const reasons = [
-        ...((report && report.blockers) || []).map((item) => `Блокирует: ${item}`),
-        ...((report && report.warnings) || []).map((item) => `Предупреждение: ${item}`),
-      ];
-      blockers.innerHTML = reasons.map((item) => `<li>${esc(item)}</li>`).join('');
-      const picked = report && report.selection ? report.selection : {};
-      const groups = Array.isArray(picked.groups) ? picked.groups.length : 0;
-      const profiles = Array.isArray(picked.profiles) ? picked.profiles.length : 0;
-      const libraryCount = Number.isFinite(Number(picked.library_count))
-        ? Number(picked.library_count)
-        : 0;
-      selection.textContent = `Групп: ${groups} · профилей: ${profiles} · сообщений в библиотеке: ${libraryCount}`;
-      details.style.display = '';
     }
 
     function pendingCampaignCommand() {
@@ -1632,8 +1816,8 @@ let openGroupId = null;
     }
 
     async function previewCampaign() {
-      const report = await api('/campaign/preview', { method: 'POST' });
-      renderCampaignReadiness(report);
+      const report = await loadCampaignPreview();
+      if (!report) return;
       toast(report.ok ? 'Готовность подтверждена' : 'Есть блокирующие условия', report.ok ? 'success' : 'info');
     }
 
@@ -1813,8 +1997,8 @@ let openGroupId = null;
     function statusRu(s) {
       return ({
         active: 'активен',
-        pending: 'ожидает',
-        needs_reauth: 'нужен вход',
+        pending: 'ожидает входа',
+        needs_reauth: 'нужен повторный вход',
         disabled: 'отключён',
         banned: 'забанен',
       })[s] || s || '';
@@ -1849,35 +2033,10 @@ let openGroupId = null;
 
     function phoneBadges(p) {
       const badges = [];
-      const err = p.last_error || '';
-      if (p.status === 'banned') {
-        badges.push(['Забанен', 'danger', err || 'Аккаунт заблокирован']);
-      } else if (p.status === 'active') {
-        badges.push(['Активен', 'ok', 'Активен']);
-      } else {
-        badges.push(['Неактивен', 'warn', statusRu(p.status) || 'Неактивен']);
-      }
-      if (p.status === 'needs_reauth') {
-        badges.push(['Сессия', 'warn', err || 'Нужен повторный вход']);
-      } else if (p.status === 'pending') {
-        badges.push(['Не вошёл', 'info', 'Ещё не авторизован']);
-      } else if (p.status === 'disabled') {
-        badges.push(['Отключён', 'danger', err || 'Профиль отключён']);
-      }
-      if (p.circuit_open) {
-        badges.push(['Автопауза', 'danger', 'Пауза после серии ошибок']);
-      }
-      if (p.in_cooldown) {
+      if (p.circuit_open || p.in_cooldown) {
         const until = (p.cooldown_until || '').slice(0, 16);
-        badges.push(['Пауза', 'warn', until ? `до ${until}` : 'временная пауза']);
-      }
-      if (p.auth_step === 'waiting_sms') badges.push(['Код SMS', 'warn', 'Ожидает код']);
-      if (p.auth_step === 'waiting_cloud_password') badges.push(['Пароль MAX', 'warn', p.auth_hint || 'Нужен облачный пароль']);
-      if (p.auth_step === 'error' && p.status === 'active') {
-        badges.push(['Ошибка входа', 'danger', err || 'Ошибка авторизации']);
-      }
-      if (p.warmup_active && p.status === 'active') {
-        badges.push([`Прогрев ${p.warmup_day}`, 'muted', 'Прогрев аккаунта']);
+        const reason = p.circuit_open ? 'Пауза после серии ошибок' : 'Пауза по таймеру';
+        badges.push(['Временная пауза', p.circuit_open ? 'danger' : 'warn', until ? `${reason} · до ${until}` : reason]);
       }
       return `<span class="phone-badges">${badges.map(([label, kind, tip]) =>
         `<span class="phone-badge ${kind}" title="${esc(tip || label)}">${esc(label)}</span>`
@@ -1886,13 +2045,16 @@ let openGroupId = null;
 
     function profileActions(p, groupId) {
       const busy = ['connecting', 'waiting_sms', 'verifying_sms', 'waiting_cloud_password', 'verifying_password'].includes(p.auth_step);
-      const loginFresh = isUserRole();
-      return `
-        <button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${loginFresh ? 1 : 0}" data-group-id="${groupId}" ${busy ? 'disabled' : ''}>Войти</button>
-        ${isUserRole() ? '' : `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${groupId}" ${busy ? 'disabled' : ''}>Заново</button>`}
-        ${isUserRole() && p.attempt_id ? `<div class="auth-diagnostic" data-auth-diagnostic-host data-profile-id="${p.id}" data-attempt-id="${esc(p.attempt_id)}"><button type="button" class="small" data-action="auth-diagnostic-preview" data-profile-id="${p.id}">Диагностика входа</button></div>` : ''}
-        ${busy ? `<button type="button" class="small" data-action="reset-login" data-profile-id="${p.id}">Отменить вход</button>` : ''}
-        <button type="button" class="small danger" data-action="remove-profile" data-group-id="${groupId}" data-profile-id="${p.id}">Удалить</button>`;
+      const canLogin = !busy && !['active', 'disabled', 'banned'].includes(p.status);
+      const secondary = [
+        (!isUserRole() && p.status !== 'banned' ? `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="1" data-group-id="${groupId}" ${busy ? 'disabled' : ''}>Повторить вход</button>` : ''),
+        (isUserRole() && p.attempt_id ? `<div class="auth-diagnostic" data-auth-diagnostic-host data-profile-id="${p.id}" data-attempt-id="${esc(p.attempt_id)}"><button type="button" class="small" data-action="auth-diagnostic-preview" data-profile-id="${p.id}">Диагностика входа</button></div>` : ''),
+        (busy ? `<button type="button" class="small" data-action="reset-login" data-profile-id="${p.id}">Отменить вход</button>` : ''),
+        (!isUserRole() || p.status !== 'banned' ? `<button type="button" class="small danger" data-action="remove-profile" data-group-id="${groupId}" data-profile-id="${p.id}">Удалить</button>` : ''),
+      ].filter(Boolean).join('');
+      return `${canLogin ? `<button type="button" class="small" data-action="login-profile" data-profile-id="${p.id}" data-fresh="${isUserRole() ? 1 : 0}" data-group-id="${groupId}">Войти</button>` : ''}
+        ${busy ? '<span class="hint">Вход выполняется</span>' : ''}
+        ${secondary ? `<details class="action-menu profile-more" data-profile-id="${p.id}"><summary>Ещё</summary><div>${secondary}</div></details>` : ''}`;
     }
 
     async function showAuthDiagnostic(button, profileId) {
@@ -1970,6 +2132,7 @@ let openGroupId = null;
         if (openGroupId === id) openGroupId = null;
         toast('Группа удалена', 'success');
         loadGroups(true);
+        refreshCampaignOverview();
       } catch (e) {
         toast(e.message || 'Не удалось удалить группу', 'error');
       }
@@ -1981,6 +2144,7 @@ let openGroupId = null;
         await api(`/groups/${groupId}/profiles/${profileId}`, { method: 'DELETE' });
         toast('Профиль удалён', 'success');
         loadGroups(true);
+        refreshCampaignOverview();
       } catch (e) {
         toast(e.message || 'Не удалось удалить профиль', 'error');
       }
@@ -1994,6 +2158,7 @@ let openGroupId = null;
       } catch (e) {
         toast(e.message || 'Не удалось отменить вход', 'error');
       }
+      refreshCampaignOverview();
     }
 
     function isValidInviteLink(link) {
@@ -2038,6 +2203,7 @@ let openGroupId = null;
       } catch (e) {
         toast(e.message, 'error');
         loadGroups(true);
+        refreshCampaignOverview();
       }
     }
 
@@ -2096,6 +2262,7 @@ let openGroupId = null;
         });
         toast(proxy ? 'Прокси группы сохранён' : 'Прокси группы очищен', 'success');
         loadGroups(true);
+        refreshCampaignOverview();
       } catch (e) {
         toast(e.message, 'error');
       }
@@ -2117,6 +2284,7 @@ let openGroupId = null;
         });
         toast('Назначение подтверждено', 'success');
         loadGroups(true);
+        refreshCampaignOverview();
       } catch (e) {
         toast(e.message || 'Не удалось подтвердить назначение', 'error');
       }
@@ -2131,6 +2299,7 @@ let openGroupId = null;
         });
         toast(active ? 'Группа включена в рассылку' : 'Группа выключена из рассылки', 'success');
         loadGroups(true);
+        refreshCampaignOverview();
       } catch (e) {
         toast(e.message || 'Не удалось изменить группу', 'error');
       }
@@ -2197,17 +2366,16 @@ let openGroupId = null;
                 <span class="phone-num">${esc(p.phone)}${p.label ? ' ('+esc(p.label)+')' : ''}</span>
                 ${phoneBadges(p)}
               </div>
-              ${p.in_cooldown ? `<div class="auth-error">пауза до ${esc((p.cooldown_until||'').slice(0,16))}</div>` : ''}
             </td>
             <td data-label="Статус">
-              <span class="status-${p.status}">${statusRu(p.status)}</span>
-              ${p.circuit_open ? ' · <span class="auth-error">автопауза</span>' : ''}
+              <span class="status-${p.status}">${esc(statusRu(p.status))}</span>
               ${authLabel(p) ? `<div class="auth-wait">${esc(authLabel(p))}</div>` : ''}
               ${p.last_error ? `<div class="auth-error">${esc(p.last_error)}</div>` : ''}
             </td>
-            <td data-label="Сегодня">${p.messages_sent_today || 0}${p.daily_limit != null ? '/'+p.daily_limit : ''}</td>
+            <td data-label="День">${p.send_weekday == null ? '—' : ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][p.send_weekday]}</td>
+            <td data-label="Прокси">${esc(p.proxy_label || 'не назначен')}</td>
             <td data-label="Действия">${profileActions(p, g.id)}</td>
-          </tr>`).join('') : `<tr><td colspan="5" class="hint">Профилей нет — ${isUserRole() ? 'добавьте номер' : 'добавьте номер или импортируйте CSV'}</td></tr>`) : '';
+          </tr>`).join('') : `<tr><td colspan="6" class="hint">Профилей нет — ${isUserRole() ? 'добавьте номер' : 'добавьте номер или импортируйте CSV'}</td></tr>`) : '';
         const groupActive = g.is_active == null || Number(g.is_active) !== 0;
         return `
           <div class="group-card">
@@ -2217,21 +2385,25 @@ let openGroupId = null;
               <span class="title">${esc(g.name)}${groupActive ? '' : ' <span class="badge stop">неактивна</span>'}</span>
               <span class="meta">${g.profiles_count} проф.${g.active_count != null ? ' · ' + g.active_count + ' активных' : ''} · ${esc(g.invite_link || '—')}</span>
             </button>
-              <span class="group-actions">
-                ${!isUserRole() ? `<button type="button" class="small" data-action="toggle-group-active" data-group-id="${g.id}" data-active="${groupActive ? 0 : 1}">${groupActive ? 'Выкл.' : 'Вкл.'}</button>` : ''}
-                <button type="button" class="small danger" data-action="delete-group" data-group-id="${g.id}">Удалить группу</button>
-              </span>
+              <details class="group-actions action-menu">
+                <summary>Ещё</summary>
+                <div>
+                  ${!isUserRole() ? `<button type="button" class="small" data-action="toggle-group-active" data-group-id="${g.id}" data-active="${groupActive ? 0 : 1}">${groupActive ? 'Включить группу' : 'Отключить группу'}</button>` : ''}
+                  <button type="button" class="small danger" data-action="delete-group" data-group-id="${g.id}">Удалить группу</button>
+                </div>
+              </details>
             </div>
             ${open ? `
             <div class="group-body">
               ${destinationReview}
               ${!isUserRole() ? `<div class="row" style="margin-bottom:.75rem">
-                <textarea id="groupProxy-${g.id}" rows="2" placeholder="1 прокси на группу (~30 acc). Несколько URL — ротация по аккаунту…" aria-label="Прокси группы" style="max-width:360px;min-height:2.4rem">${esc(g.proxy||'')}</textarea>
+                <small class="muted">Назначены: ${esc((g.proxy_labels || []).join(', ') || 'нет прокси')}</small>
+                <textarea id="groupProxy-${g.id}" rows="2" placeholder="Вставьте список прокси для замены; адреса и учётные данные не показываются" aria-label="Новый список прокси группы" style="max-width:360px;min-height:2.4rem"></textarea>
                 <button type="button" class="small" data-action="save-group-proxy" data-group-id="${g.id}">Сохранить прокси</button>
               </div>` : ''}
               <div class="table-wrap group-table-wrap">
               <table>
-                <thead><tr><th>ID</th><th>Телефон</th><th>Статус</th><th>Сегодня</th><th>Действия</th></tr></thead>
+                <thead><tr><th>ID</th><th>Телефон</th><th>Статус</th><th>День отправки</th><th>Прокси</th><th>Действия</th></tr></thead>
                 <tbody>${body}</tbody>
               </table>
               </div>
@@ -2277,6 +2449,7 @@ let openGroupId = null;
         updateCreateGroupBtn();
         toast('Группа создана', 'success');
         loadGroups(true);
+        refreshCampaignOverview();
       } catch (e) {
         toast(e.message, 'error');
       }
@@ -2286,21 +2459,10 @@ let openGroupId = null;
       const s = await api('/settings');
       document.getElementById('delayMin').value = s.delay_min_sec;
       document.getElementById('delayMax').value = s.delay_max_sec;
-      document.getElementById('dayLimitMin').value = s.daily_limit_min || '5';
-      document.getElementById('dayLimitMax').value = s.daily_limit_max || s.max_msgs_per_profile_day || '12';
       document.getElementById('jitter').value = s.jitter_percent;
       document.getElementById('msgPickMode').value = s.message_pick_mode || 'random_norepeat';
-      document.getElementById('campaignGoal').value = s.campaign_goal || 'daily_limits';
-      document.getElementById('warmupOn').checked = String(s.warmup_enabled || '1') === '1';
-      document.getElementById('warmupDays').value = s.warmup_days || '7';
-      document.getElementById('warmupStartMin').value = s.warmup_start_min || '1';
-      document.getElementById('warmupStartMax').value = s.warmup_start_max || '2';
-      document.getElementById('lazyDayPct').value = s.lazy_day_percent || '15';
-      document.getElementById('lazyDayFactor').value = s.lazy_day_factor || '0.4';
-      document.getElementById('rhythmOn').checked = String(s.human_rhythm_enabled || '1') === '1';
       document.getElementById('windowsWeekday').value = s.send_windows_weekday || '9-13,16-21';
       document.getElementById('windowsWeekend').value = s.send_windows_weekend || '11-14,17-20';
-      document.getElementById('roleQuietLimit').value = s.role_quiet_limit || '1';
       document.getElementById('pausesOn').checked = String(s.human_pauses_enabled || '1') === '1';
       document.getElementById('shortPauseChance').value = s.short_pause_chance || '8';
       document.getElementById('shortPauseMin').value = s.short_pause_min_sec || '30';
@@ -2351,21 +2513,10 @@ let openGroupId = null;
       const body = {
         delay_min_sec: +document.getElementById('delayMin').value,
         delay_max_sec: +document.getElementById('delayMax').value,
-        daily_limit_min: +document.getElementById('dayLimitMin').value,
-        daily_limit_max: +document.getElementById('dayLimitMax').value,
         jitter_percent: +document.getElementById('jitter').value,
         message_pick_mode: document.getElementById('msgPickMode').value,
-        campaign_goal: document.getElementById('campaignGoal').value,
-        warmup_enabled: document.getElementById('warmupOn').checked ? 1 : 0,
-        warmup_days: +document.getElementById('warmupDays').value,
-        warmup_start_min: +document.getElementById('warmupStartMin').value,
-        warmup_start_max: +document.getElementById('warmupStartMax').value,
-        lazy_day_percent: +document.getElementById('lazyDayPct').value,
-        lazy_day_factor: +document.getElementById('lazyDayFactor').value,
-        human_rhythm_enabled: document.getElementById('rhythmOn').checked ? 1 : 0,
         send_windows_weekday: document.getElementById('windowsWeekday').value.trim(),
         send_windows_weekend: document.getElementById('windowsWeekend').value.trim(),
-        role_quiet_limit: +document.getElementById('roleQuietLimit').value,
         human_pauses_enabled: document.getElementById('pausesOn').checked ? 1 : 0,
         short_pause_chance: +document.getElementById('shortPauseChance').value,
         short_pause_min_sec: +document.getElementById('shortPauseMin').value,

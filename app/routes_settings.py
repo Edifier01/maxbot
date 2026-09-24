@@ -9,6 +9,7 @@ from app.runtime import main as m
 from app.settings_scope import (
     LEGACY_PRESENCE_SETTING_KEYS,
     GLOBAL_PACING_SETTING_KEYS,
+    RETIRED_SCHEDULE_SETTING_KEYS,
     apply_pacing_revision,
     filter_pacing_updates,
     propagate_global_pacing_settings,
@@ -19,12 +20,12 @@ router = APIRouter(tags=["settings"])
 
 _RANGE_PAIRS = (
     ("delay_min_sec", "delay_max_sec", "Пауза"),
-    ("daily_limit_min", "daily_limit_max", "Лимит/день"),
     ("short_pause_min_sec", "short_pause_max_sec", "Короткая пауза"),
     ("long_pause_min_sec", "long_pause_max_sec", "Длинная пауза"),
     ("break_min_sec", "break_max_sec", "Перерыв"),
-    ("warmup_start_min", "warmup_start_max", "Прогрев старт"),
 )
+
+_RETIRED_SCHEDULE_KEYS = RETIRED_SCHEDULE_SETTING_KEYS
 
 
 def _validate_merged_ranges(data: dict) -> None:
@@ -50,11 +51,7 @@ async def get_settings():
         "telegram_bot_token",
         "worker_pool_size",
         "timezone_offset_hours",
-        "role_plan_enabled",
-        "role_active_percent",
-        "role_quiet_percent",
-        "role_active_min",
-        "role_active_max",
+        *_RETIRED_SCHEDULE_KEYS,
     }
     out = {k: m.get_setting(k) for k in m.DEFAULTS if k not in hide}
     out["api_pin_set"] = m._pin_is_set()
@@ -71,15 +68,13 @@ async def get_settings():
 async def update_settings(body: SettingsIn):
 
     data = body.model_dump(exclude_unset=True)
+    for retired_key in _RETIRED_SCHEDULE_KEYS:
+        data.pop(retired_key, None)
     for legacy_key in LEGACY_PRESENCE_SETTING_KEYS:
         data.pop(legacy_key, None)
     for fixed_key in (
         "timezone_offset_hours",
-        "role_plan_enabled",
-        "role_active_percent",
-        "role_quiet_percent",
-        "role_active_min",
-        "role_active_max",
+        *_RETIRED_SCHEDULE_KEYS,
     ):
         data.pop(fixed_key, None)
     if not is_admin():
@@ -104,11 +99,6 @@ async def update_settings(body: SettingsIn):
             pass  # не затираем пустой строкой случайно — только явное
         else:
             m.set_setting("telegram_bot_token", str(tok).strip())
-
-    # Keep the legacy alias in the same atomic policy revision as the daily
-    # limit update and before splitting pacing from tenant-local settings.
-    if "daily_limit_max" in data and "max_msgs_per_profile_day" not in data:
-        data["max_msgs_per_profile_day"] = str(data["daily_limit_max"])
 
     pacing_data = filter_pacing_updates(data)
     local_data = {

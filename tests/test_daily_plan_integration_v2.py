@@ -33,11 +33,19 @@ def _setup_local_db(tmp_path, monkeypatch):
             "INSERT INTO profiles (id, phone, status) VALUES (7, '+79990007777', 'active')"
         )
         connection.execute(
-            "INSERT INTO groups (id, name, max_chat_id, destination_verified, is_active) "
-            "VALUES (3, 'fixture', '77', 1, 1)"
+            "INSERT INTO groups "
+            "(id, name, max_chat_id, destination_verified, is_active, proxy) "
+            "VALUES (3, 'fixture', '77', 1, 1, 'socks5://proxy.example:1080')"
         )
         connection.execute(
             "INSERT INTO group_profiles (group_id, profile_id, is_enabled) VALUES (3, 7, 1)"
+        )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        WeeklyScheduleRepository(connection).assign_profile(7, 3)
+        connection.execute(
+            "UPDATE profile_send_schedules SET send_weekday=? WHERE profile_id=7",
+            (m._local_today().weekday(),),
         )
         profile = connection.execute("SELECT * FROM profiles WHERE id=7").fetchone()
         group = connection.execute("SELECT * FROM groups WHERE id=3").fetchone()
@@ -179,8 +187,8 @@ def test_proxy_preflight_failure_preserves_plan_for_retry(tmp_path, monkeypatch)
 
     with m._conn() as connection:
         failed = connection.execute(
-            "SELECT plan_id, target, status FROM profile_daily_plans "
-            "WHERE profile_id=7 AND business_date=?",
+            "SELECT slot_id, message_text, status, work_group_id "
+            "FROM profile_weekly_slots WHERE profile_id=7 AND scheduled_date=?",
             (today,),
         ).fetchone()
         control = connection.execute(
@@ -188,20 +196,20 @@ def test_proxy_preflight_failure_preserves_plan_for_retry(tmp_path, monkeypatch)
             "WHERE scope='local'"
         ).fetchone()
     assert failed is not None
-    assert tuple(failed[1:]) == (5, "active")
+    assert failed["message_text"] in {"one", "two", "three", "four", "five"}
+    assert tuple(failed[2:]) == ("queued", 3)
     assert tuple(control) == (0, "stopped", 1)
 
     monkeypatch.setattr(m, "_preflight_group_proxies", lambda: asyncio.sleep(0))
-    from app.campaign_worker import materialize_daily_plans
-
-    assert materialize_daily_plans() == 1
+    response = asyncio.run(routes_campaign.campaign_start(request_id="proxy-retry-2"))
+    assert response["state"] == "running"
     with m._conn() as connection:
         retried = connection.execute(
-            "SELECT plan_id, target FROM profile_daily_plans "
-            "WHERE profile_id=7 AND business_date=?",
+            "SELECT slot_id, message_text FROM profile_weekly_slots "
+            "WHERE profile_id=7 AND scheduled_date=?",
             (today,),
         ).fetchone()
-    assert tuple(retried) == (failed["plan_id"], 5)
+    assert tuple(retried) == (failed["slot_id"], failed["message_text"])
 
 
 def test_stop_start_same_day_keeps_remaining_slots(tmp_path, monkeypatch) -> None:
@@ -605,14 +613,14 @@ def test_server_worker_reads_global_library_but_materializes_tenant_plan(
     assert plan["version_id"] == version_id
 
 
-def test_start_worker_materializes_before_recovery_and_preflight(tmp_path, monkeypatch) -> None:
+def test_start_worker_materializes_weekly_plan_before_recovery_and_preflight(tmp_path, monkeypatch) -> None:
     _m, _profile, _group = _setup_local_db(tmp_path, monkeypatch)
     import app.campaign_worker as campaign_worker
 
     calls: list[str] = []
     monkeypatch.setattr(
         campaign_worker,
-        "materialize_daily_plans",
+        "materialize_weekly_plans",
         lambda: calls.append("materialize") or 1,
     )
     monkeypatch.setattr(
@@ -639,7 +647,7 @@ def test_start_worker_materializes_before_recovery_and_preflight(tmp_path, monke
     assert calls == ["materialize", "recover", "preflight"]
 
 
-def test_daily_slot_identity_is_carried_into_operation_and_send_log(
+def test_retired_daily_slot_cannot_bypass_weekly_send_guard(
     tmp_path, monkeypatch
 ) -> None:
     m, profile, group = _setup_local_db(tmp_path, monkeypatch)
@@ -701,20 +709,14 @@ def test_daily_slot_identity_is_carried_into_operation_and_send_log(
             daily_plan_id=claimed.plan_id,
             slot_id=claimed.slot_id,
         )
-    ) is True
+    ) is False
 
     with m._conn() as connection:
-        operation = connection.execute(
-            "SELECT daily_plan_id, slot_id, status FROM operations"
-        ).fetchone()
-        send_log = connection.execute(
-            "SELECT daily_plan_id, slot_id, status FROM send_log"
-        ).fetchone()
-    assert tuple(operation) == (claimed.plan_id, claimed.slot_id, "accepted")
-    assert tuple(send_log) == (claimed.plan_id, claimed.slot_id, "sent")
+        assert connection.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM send_log").fetchone()[0] == 0
 
 
-def test_worker_claims_pinned_daily_slot_before_legacy_message_pool(
+def test_worker_claims_pinned_weekly_slot_before_legacy_message_pool(
     tmp_path, monkeypatch
 ) -> None:
     m, _profile, _group = _setup_local_db(tmp_path, monkeypatch)
@@ -729,14 +731,15 @@ def test_worker_claims_pinned_daily_slot_before_legacy_message_pool(
         connection.execute("UPDATE queue_state SET running=1 WHERE id=1")
         MessageSetRepository(connection).publish("local", ("pinned slot",))
 
-    from app.campaign_worker import _claim_next_job_sync, materialize_daily_plans
+    from app.campaign_worker import _claim_next_job_sync, materialize_weekly_plans
 
-    assert materialize_daily_plans() == 1
+    assert materialize_weekly_plans() == 1
     job = _claim_next_job_sync()
 
     assert isinstance(job, dict)
     assert job["text"] == "pinned slot"
-    assert job["daily_plan_id"]
+    assert job["daily_plan_id"] is None
+    assert job["weekly_plan"] is True
     assert job["slot_id"]
     assert job["profile"]["id"] == 7
     assert job["group"]["id"] == 3
@@ -819,9 +822,9 @@ def test_a43_message_import_preview_publish_and_retry_keep_frozen_text(
     m, profile, group = _setup_local_db(tmp_path, monkeypatch)
     from app.campaign_send import SendTracker, send_with_retry
     from app.campaign_worker import (
-        _claim_daily_job_sync,
-        _finalize_daily_job,
-        materialize_daily_plans,
+        _claim_weekly_job_sync,
+        _finalize_weekly_job,
+        materialize_weekly_plans,
     )
     from app.repositories.message_sets import MessageSetRepository
     from app.routes_message_sets import MessagePreviewIn, preview_message_set
@@ -860,21 +863,21 @@ def test_a43_message_import_preview_publish_and_retry_keep_frozen_text(
             row["text"] for row in repository.items("local", published["version_id"])
         ] == expected_items
 
-    assert materialize_daily_plans() == 1
-    job = _claim_daily_job_sync()
+    assert materialize_weekly_plans() == 1
+    job = _claim_weekly_job_sync()
     assert isinstance(job, dict)
     frozen_text = str(job["text"])
     assert frozen_text == expected_items[0]
 
     failed = SendTracker()
     failed.mark_failed_unsent("destination check failed before send")
-    _finalize_daily_job(job, False, failed)
+    _finalize_weekly_job(job, False, failed)
 
     # Publishing a new current version must not mutate the already materialized slot.
     with m._conn() as connection:
         MessageSetRepository(connection).publish("local", ("replacement version",))
 
-    retry_job = _claim_daily_job_sync()
+    retry_job = _claim_weekly_job_sync()
     assert isinstance(retry_job, dict)
     assert retry_job["slot_id"] == job["slot_id"]
     assert retry_job["text"] == frozen_text
@@ -920,17 +923,17 @@ def test_a43_message_import_preview_publish_and_retry_keep_frozen_text(
             retry_job["mi_next"],
             advance_queue=False,
             tracker=tracker,
-            daily_plan_id=retry_job["daily_plan_id"],
+            daily_plan_id=None,
             slot_id=retry_job["slot_id"],
         )
     ) is True
-    _finalize_daily_job(retry_job, True, tracker)
+    _finalize_weekly_job(retry_job, True, tracker)
 
     assert gateway.check_calls == 2
     assert gateway.sent_texts == [frozen_text]
     with m._conn() as connection:
         slot = connection.execute(
-            "SELECT status, rendered_text FROM profile_message_slots WHERE slot_id=?",
+            "SELECT status, message_text FROM profile_weekly_slots WHERE slot_id=?",
             (retry_job["slot_id"],),
         ).fetchone()
         operation = connection.execute(
@@ -941,7 +944,7 @@ def test_a43_message_import_preview_publish_and_retry_keep_frozen_text(
     assert tuple(operation) == ("accepted", frozen_text)
 
 
-def test_manual_test_uses_the_claimed_daily_slot_when_library_is_published(
+def test_manual_test_uses_the_claimed_weekly_slot_when_library_is_published(
     tmp_path, monkeypatch
 ) -> None:
     m, _profile, _group = _setup_local_db(tmp_path, monkeypatch)
@@ -957,9 +960,9 @@ def test_manual_test_uses_the_claimed_daily_slot_when_library_is_published(
     with m._conn() as connection:
         MessageSetRepository(connection).publish("local", ("pinned manual text",))
 
-    from app.campaign_worker import materialize_daily_plans
+    from app.campaign_worker import materialize_weekly_plans
 
-    assert materialize_daily_plans() == 1
+    assert materialize_weekly_plans() == 1
     from app import routes_campaign
 
     monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
@@ -984,18 +987,17 @@ def test_manual_test_uses_the_claimed_daily_slot_when_library_is_published(
 
     assert result["ok"] is True
     assert send.await_args.args[2] == "pinned manual text"
-    assert send.await_args.kwargs["daily_plan_id"]
+    assert send.await_args.kwargs["daily_plan_id"] is None
+    assert send.await_args.kwargs["slot_id"].startswith("weekly-")
     assert send.await_args.kwargs["slot_id"]
 
 
-def test_manual_test_cannot_add_sixth_send_after_allocated_plan(
+def test_manual_test_cannot_send_after_weekly_slot_is_used(
     tmp_path, monkeypatch
 ) -> None:
     m, _profile, _group = _setup_local_db(tmp_path, monkeypatch)
     from fastapi import HTTPException
-    from app.repositories.daily_plans import DailyPlanRepository
     from app.repositories.message_sets import MessageSetRepository
-    from app.services.daily_plans import DailyPlanService
     from app.routes_campaign import campaign_test
 
     today = m._local_today().isoformat()
@@ -1008,20 +1010,11 @@ def test_manual_test_cannot_add_sixth_send_after_allocated_plan(
         MessageSetRepository(connection).publish(
             "local", ("one", "two", "three", "four", "five")
         )
-
-    from app.campaign_worker import materialize_daily_plans
-
-    assert materialize_daily_plans() == 1
-    service = DailyPlanService(DailyPlanRepository(m._conn()))
-    claimed = [
-        service.claim_next_slot("local", datetime.now(timezone.utc))
-        for _ in range(4)
-    ]
-    for slot in claimed[:3]:
-        service.mark_slot_accepted(slot.slot_id)
-    service.mark_slot_unknown(claimed[3].slot_id, "timeout after request")
-    remaining = service.claim_next_slot("local", datetime.now(timezone.utc))
-    service.mark_slot_accepted(remaining.slot_id)
+        connection.execute(
+            "INSERT INTO send_log(profile_id, group_id, status, sent_at) "
+            "VALUES (7, 3, 'sent', ?)",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
 
     monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
     monkeypatch.setattr(m.RUNTIME, "worker_busy", lambda: False)
@@ -1031,19 +1024,12 @@ def test_manual_test_cannot_add_sixth_send_after_allocated_plan(
         asyncio.run(campaign_test())
 
     assert caught.value.status_code == 409
-    assert "slot" in str(caught.value.detail).lower()
+    assert "неделе" in str(caught.value.detail).lower()
     preflight.assert_not_awaited()
-    with m._conn() as connection:
-        statuses = [
-            row["status"]
-            for row in connection.execute(
-                "SELECT status FROM profile_message_slots ORDER BY ordinal"
-            ).fetchall()
-        ]
-    assert statuses == ["accepted", "accepted", "accepted", "unknown", "accepted"]
+    preflight.assert_not_awaited()
 
 
-def test_concurrent_manual_tests_reserve_one_remaining_daily_slot(
+def test_concurrent_manual_tests_reserve_one_weekly_slot(
     tmp_path, monkeypatch
 ) -> None:
     m, _profile, _group = _setup_local_db(tmp_path, monkeypatch)
@@ -1060,9 +1046,9 @@ def test_concurrent_manual_tests_reserve_one_remaining_daily_slot(
         )
         MessageSetRepository(connection).publish("local", ("one remaining",))
 
-    from app.campaign_worker import materialize_daily_plans
+    from app.campaign_worker import materialize_weekly_plans
 
-    assert materialize_daily_plans() == 1
+    assert materialize_weekly_plans() == 1
     monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
     monkeypatch.setattr(m.RUNTIME, "worker_busy", lambda: False)
 
@@ -1087,5 +1073,5 @@ def test_concurrent_manual_tests_reserve_one_remaining_daily_slot(
     assert send.await_count == 1
     with m._conn() as connection:
         assert connection.execute(
-            "SELECT status FROM profile_message_slots"
+            "SELECT status FROM profile_weekly_slots"
         ).fetchone()[0] == "accepted"

@@ -43,10 +43,13 @@ def test_server_mode_patch_group_keeps_proxy(tmp_path, monkeypatch):
 
         proxy = "socks5://user:pass@203.0.113.10:1080"
         row = asyncio.run(patch_group(gid, GroupPatchIn(proxy=proxy)))
-        assert row["proxy"] == proxy
+        assert "proxy" not in row
+        assert row["proxy_labels"] == ["203.0.113.10:1080"]
+        assert "user" not in str(row) and "pass" not in str(row)
 
         cleared = asyncio.run(patch_group(gid, GroupPatchIn(proxy="")))
-        assert cleared["proxy"] == ""
+        assert "proxy" not in cleared
+        assert cleared["proxy_labels"] == []
 
 
 def test_changing_group_link_invalidates_cached_destination(tmp_path, monkeypatch):

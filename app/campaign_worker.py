@@ -71,34 +71,85 @@ def campaign_config_snapshot() -> str:
         {
             "delay_min_sec": main.get_setting("delay_min_sec"),
             "delay_max_sec": main.get_setting("delay_max_sec"),
-            "daily_limit_min": main.get_setting("daily_limit_min"),
-            "daily_limit_max": main.get_setting("daily_limit_max"),
             "jitter_percent": main.get_setting("jitter_percent"),
             "message_pick_mode": main.get_setting("message_pick_mode"),
-            "campaign_goal": main.get_setting("campaign_goal"),
             "worker_pool_size": main.get_setting("worker_pool_size"),
-            "human_rhythm_enabled": main.get_setting("human_rhythm_enabled"),
             "send_windows_weekday": main.get_setting("send_windows_weekday"),
             "send_windows_weekend": main.get_setting("send_windows_weekend"),
-            "day_skip_percent": main.get_setting("day_skip_percent"),
-            "role_plan_enabled": main.get_setting("role_plan_enabled"),
-            "role_active_percent": main.get_setting("role_active_percent"),
-            "role_quiet_percent": main.get_setting("role_quiet_percent"),
-            "role_active_min": main.get_setting("role_active_min"),
-            "role_active_max": main.get_setting("role_active_max"),
-            "role_quiet_limit": main.get_setting("role_quiet_limit"),
             "human_pauses_enabled": main.get_setting("human_pauses_enabled"),
             "break_after_n": main.get_setting("break_after_n"),
-            "warmup_start_min": main.get_setting("warmup_start_min"),
-            "warmup_start_max": main.get_setting("warmup_start_max"),
-            "lazy_day_percent": main.get_setting("lazy_day_percent"),
-            "human_presence_enabled": main.get_setting("human_presence_enabled"),
             "human_texts_enabled": main.get_setting("human_texts_enabled"),
             "text_dedupe_enabled": main.get_setting("text_dedupe_enabled"),
             "messages_total": len(main.load_message_pool()),
         },
         ensure_ascii=False,
     )
+
+
+def materialize_weekly_plans() -> int:
+    """Create one immutable message slot for each account scheduled today."""
+    from app.repositories.message_sets import MessageSetRepository
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository, monday_of
+
+    connection, scope = _daily_plan_storage()
+    repository = WeeklyScheduleRepository(connection)
+    repository.ensure_schema()
+    repository.backfill_assignments()
+    repository.close_legacy_queued_slots_once()
+    today = main._local_today()
+    business_date = today.isoformat()
+    week_start = monday_of(today).isoformat()
+    repository.expire_before(scope, business_date)
+
+    library_connection, library_scope = main._message_library_source_storage()
+    message_sets = MessageSetRepository(library_connection)
+    version = message_sets.current(library_scope)
+    if version is not None:
+        texts = tuple(
+            (str(row["text"]), str(version["version_id"]))
+            for row in message_sets.items(library_scope, str(version["version_id"]))
+        )
+    else:
+        texts = tuple((str(message), "") for message in main.load_message_pool())
+    if not texts:
+        return 0
+
+    selected: dict[int, tuple[Any, Any]] = {}
+    for group in main._active_groups():
+        group_id = int(group["id"])
+        for profile in main._active_profiles_for_group(group_id):
+            profile_id = int(profile["id"])
+            if not main._automation_scope_allows_external_action(profile_id, group_id):
+                continue
+            selected.setdefault(profile_id, (profile, group))
+
+    created = 0
+    ordered = sorted(selected.items())
+    for index, (profile_id, (profile, group)) in enumerate(ordered):
+        repository.assign_profile(profile_id, int(group["id"]))
+        schedule = repository.schedule_for(profile_id)
+        if schedule is None or int(schedule["send_weekday"]) != today.weekday():
+            continue
+        if repository.send_block_reason(profile_id, today) != "allowed":
+            continue
+        if repository.slot_for(scope, profile_id, week_start) is not None:
+            continue
+        text, version_id = (
+            random.choice(texts)
+            if main._message_pick_mode() == "random_norepeat"
+            else texts[index % len(texts)]
+        )
+        repository.create_slot(
+            scope=scope,
+            profile_id=profile_id,
+            week_start=week_start,
+            scheduled_date=business_date,
+            group_id=int(group["id"]),
+            message_text=text,
+            version_id=version_id or None,
+        )
+        created += 1
+    return created
 
 
 def materialize_daily_plans() -> int:
@@ -175,7 +226,6 @@ def _daily_plan_storage() -> tuple[sqlite3.Connection, str]:
 
 
 def begin_campaign(*, scheduled_for: str | None = None) -> int:
-    main._ensure_role_cycle_anchor()
     total = len(main.load_message_pool())
     with main._conn() as c:
         cur = c.execute(
@@ -529,6 +579,113 @@ def _daily_eligible_assignments() -> tuple[tuple[int, int], ...]:
     return tuple(assignments)
 
 
+def _weekly_eligible_assignments() -> tuple[tuple[int, int], ...]:
+    """Return selected, scheduled account/group routes eligible for one send."""
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+    repository = WeeklyScheduleRepository(main._conn())
+    today = main._local_today()
+    assignments: list[tuple[int, int]] = []
+    for group in main._active_groups():
+        group_id = int(group["id"])
+        if group_id in RUNTIME.groups_in_flight:
+            continue
+        for profile in main._active_profiles_for_group(group_id):
+            profile_id = int(profile["id"])
+            if not main._automation_scope_allows_external_action(profile_id, group_id):
+                continue
+            if main._is_circuit_open(profile_id):
+                continue
+            if main._is_in_cooldown(profile) or main._is_in_human_break(profile_id):
+                continue
+            repository.assign_profile(profile_id, group_id)
+            schedule = repository.schedule_for(profile_id)
+            if schedule is None or int(schedule["send_weekday"]) != today.weekday():
+                continue
+            if repository.send_block_reason(profile_id, today) != "allowed":
+                continue
+            if main._group_proxy(group_id, profile_id) is None:
+                continue
+            assignments.append((profile_id, group_id))
+    return tuple(assignments)
+
+
+def _claim_weekly_job_sync() -> dict[str, Any] | str:
+    """Claim today's immutable weekly slot; never fall back to legacy queue."""
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+    connection, scope = _daily_plan_storage()
+    repository = WeeklyScheduleRepository(connection)
+    today = main._local_today().isoformat()
+    repository.expire_before(scope, today)
+    slot = repository.claim_next(
+        scope,
+        today,
+        eligible_assignments=_weekly_eligible_assignments(),
+    )
+    if slot is None:
+        pending = connection.execute(
+            "SELECT 1 FROM profile_weekly_slots WHERE scope=? AND scheduled_date=? "
+            "AND status IN ('queued','claimed') LIMIT 1",
+            (scope, today),
+        ).fetchone()
+        return "WEEKLY_WAIT" if pending or RUNTIME.jobs_in_flight else "WEEKLY_DONE"
+    profile_id = int(slot["profile_id"])
+    group_id = int(slot["work_group_id"])
+    with main._conn() as current:
+        profile = current.execute(
+            "SELECT * FROM profiles WHERE id=?", (profile_id,)
+        ).fetchone()
+        group = current.execute(
+            "SELECT * FROM groups WHERE id=?", (group_id,)
+        ).fetchone()
+    if profile is None or group is None:
+        repository.set_slot_status(str(slot["slot_id"]), "failed_unsent", "route_missing")
+        return "WEEKLY_WAIT"
+    return {
+        "profile": profile,
+        "group": group,
+        "text": str(slot["message_text"]),
+        "mi": 0,
+        "pi": 0,
+        "gi_next": 0,
+        "mi_next": 0,
+        "queue_before": None,
+        "daily_plan_id": None,
+        "slot_id": str(slot["slot_id"]),
+        "weekly_plan": True,
+    }
+
+
+def _finalize_weekly_job(
+    job: dict[str, Any], sent: bool, tracker: SendTracker
+) -> None:
+    slot_id = str(job.get("slot_id") or "").strip()
+    if not slot_id:
+        return
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+    repository = WeeklyScheduleRepository(_daily_plan_storage()[0])
+    try:
+        if sent or tracker.provider_message_id:
+            repository.set_slot_status(slot_id, "accepted")
+        elif tracker.may_requeue:
+            operation = None
+            if tracker.operation_ledger is not None and tracker.operation_id:
+                operation = tracker.operation_ledger.get(tracker.operation_id)
+            if operation is None or (
+                operation.status == "failed_unsent"
+                and operation.pre_effect_retry_count < operation.max_pre_effect_retries
+            ):
+                repository.set_slot_status(slot_id, "queued", tracker.error)
+            else:
+                repository.set_slot_status(slot_id, "failed_unsent", tracker.error)
+        else:
+            repository.set_slot_status(slot_id, "unknown", tracker.error)
+    except Exception as exc:
+        main.append_log(f"Не удалось завершить weekly slot {slot_id}: {exc}")
+
+
 def _daily_wait_state(connection: sqlite3.Connection, scope: str) -> str:
     today = main._local_today().isoformat()
     plans = connection.execute(
@@ -677,103 +834,8 @@ def _claim_next_job_sync() -> dict[str, Any] | str | None:
         qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
         if not qs or not qs["running"]:
             return "STOP"
-        main._reset_daily_counts(c)
 
-    daily_job = _claim_daily_job_sync()
-    if daily_job is not None:
-        return daily_job
-
-    messages = main.load_message_pool()
-    groups = main._active_groups()
-    if not messages or not groups:
-        return None
-
-    with main._conn() as c:
-        qs = c.execute("SELECT * FROM queue_state WHERE id=1").fetchone()
-        if not qs or not qs["running"]:
-            return "STOP"
-        pi, mi, gi = qs["profile_idx"], qs["message_idx"], qs["group_idx"]
-        queue_before = {
-            "profile_idx": pi,
-            "message_idx": mi,
-            "group_idx": gi,
-            "message_bag": qs["message_bag"],
-        }
-
-        if main._campaign_goal() == "message_pool":
-            if main._message_pick_mode() == "random_norepeat":
-                bag = main._ensure_message_bag(c, len(messages))
-                if not bag:
-                    return _done_or_wait()
-            elif mi >= len(messages):
-                return _done_or_wait()
-
-        n_groups = len(groups)
-        in_flight = RUNTIME.groups_in_flight
-        profile = None
-        group = None
-        picked_gidx = gi % n_groups
-        for offset in range(n_groups):
-            gidx = (gi + offset) % n_groups
-            cand_group = groups[gidx]
-            gid = int(cand_group["id"])
-            if gid in in_flight:
-                continue
-            profiles = main._active_profiles_for_group(gid)
-            if not profiles:
-                continue
-            attempts = 0
-            while attempts < len(profiles):
-                cand = profiles[pi % len(profiles)]
-                pi = main.next_index(pi, len(profiles))
-                attempts += 1
-                if main._is_circuit_open(cand["id"]):
-                    continue
-                if not main._can_send_in_group(cand, gid):
-                    continue
-                if main._reserved_hits_daily_limit(cand):
-                    continue
-                profile = cand
-                break
-            if profile is not None:
-                group = cand_group
-                picked_gidx = gidx
-                break
-
-        if profile is None or group is None:
-            if not main._has_active_profiles():
-                if not RUNTIME.pool_done_announced:
-                    RUNTIME.pool_done_announced = True
-                    return "NO_PROFILES"
-                return "STOP"
-            return None
-
-        picked = main._pick_next_message(c, messages, mi)
-        if picked is None:
-            return _done_or_wait()
-
-        text, pool_idx, progress_next, bag_mode = picked
-        gi_next = main.next_index(picked_gidx, n_groups)
-        if bag_mode:
-            c.execute(
-                "UPDATE queue_state SET profile_idx=?, group_idx=? WHERE id=1",
-                (pi, gi_next),
-            )
-        else:
-            c.execute(
-                "UPDATE queue_state SET message_idx=?, profile_idx=?, group_idx=? WHERE id=1",
-                (progress_next, pi, gi_next),
-            )
-        return {
-            "profile": profile,
-            "group": group,
-            "text": text,
-            "mi": pool_idx,
-            "pi": pi,
-            "gi_next": gi_next,
-            "mi_next": progress_next,
-            "queue_before": queue_before,
-        }
+    return _claim_weekly_job_sync()
 
 
 async def claim_next_job() -> dict[str, Any] | str | None:
@@ -824,20 +886,15 @@ async def poolworker_loop(worker_id: int) -> None:
             main.append_log(f"Воркер пула #{worker_id} остановлен")
             return
         if job == "DONE":
-            if main._campaign_goal() == "daily_limits":
-                worker_shutdown(
-                    "Готово: дневные лимиты всех аккаунтов исчерпаны"
-                )
-            else:
-                worker_shutdown("Готово: все сообщения отправлены (pool)")
+            worker_shutdown("Готово: недельные отправки по расписанию выполнены")
             return
         if job == "NO_PROFILES":
             worker_shutdown("Нет активных профилей ни в одной группе")
             return
-        if job == "DAILY_DONE":
-            worker_shutdown("Готово: дневные планы выполнены")
+        if job == "WEEKLY_DONE":
+            worker_shutdown("Готово: недельные отправки по расписанию выполнены")
             return
-        if job == "DAILY_WAIT":
+        if job == "WEEKLY_WAIT":
             await asyncio.sleep(2)
             continue
         if job is None:
@@ -849,17 +906,13 @@ async def poolworker_loop(worker_id: int) -> None:
                         main._touch_worker_activity()
                         await asyncio.sleep(min(15.0, end_at - time.monotonic()))
                     continue
-                worker_shutdown(
-                    "Готово: дневные лимиты всех аккаунтов исчерпаны"
-                    if main._campaign_goal() == "daily_limits"
-                    else "Некому отправлять: нет активных профилей или дневной лимит исчерпан"
-                )
+                worker_shutdown("Готово: сегодня нет доступных аккаунтов по расписанию")
                 return
             await asyncio.sleep(2)
             continue
 
         group_id = int(job["group"]["id"])
-        daily_job = bool(job.get("daily_plan"))
+        weekly_job = bool(job.get("weekly_plan"))
         sent = False
         tracker = SendTracker()
         try:
@@ -878,8 +931,8 @@ async def poolworker_loop(worker_id: int) -> None:
                     slot_id=job.get("slot_id"),
                 )
             except asyncio.CancelledError:
-                if daily_job:
-                    _finalize_daily_job(job, False, tracker)
+                if weekly_job:
+                    _finalize_weekly_job(job, False, tracker)
                 else:
                     _restore_claim(job, tracker)
                 raise
@@ -892,8 +945,8 @@ async def poolworker_loop(worker_id: int) -> None:
                 RUNTIME.profile_reserved.pop(pid, None)
             else:
                 RUNTIME.profile_reserved[pid] = left
-        if daily_job:
-            _finalize_daily_job(job, sent, tracker)
+        if weekly_job:
+            _finalize_weekly_job(job, sent, tracker)
         elif not sent:
             _restore_claim(job, tracker)
         if not sent:
@@ -1075,10 +1128,10 @@ async def start_worker(
                 return False
             rt.touch_activity()
             rt.pool_done_announced = False
-            materialized_plans = materialize_daily_plans()
+            materialized_plans = materialize_weekly_plans()
             if materialized_plans:
                 main.append_log(
-                    f"Подготовлены дневные планы аккаунтов: {materialized_plans}"
+                    f"Подготовлены недельные слоты аккаунтов: {materialized_plans}"
                 )
             recovered_operations = recover_inflight_operations()
             if recovered_operations:
@@ -1086,6 +1139,11 @@ async def start_worker(
                     "Восстановлены незавершённые операции отправки: "
                     + ", ".join(recovered_operations)
                 )
+            from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+            WeeklyScheduleRepository(_daily_plan_storage()[0]).recover_claimed_slots(
+                main._local_today().isoformat()
+            )
             if preflight:
                 await main._preflight_group_proxies()
             if not _campaign_control_allows_claim(control_generation):

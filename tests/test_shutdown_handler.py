@@ -13,13 +13,10 @@ def test_app_main_uses_runtime_shutting_down():
     assert "app_main._shutting_down" not in src
 
 
-def test_pool_done_announced_uses_runtime():
-    from app.campaign_runtime import RUNTIME
+def test_weekly_claim_path_replaces_legacy_pool_completion_state():
     from app import campaign_worker as cw
 
-    RUNTIME.pool_done_announced = False
-    RUNTIME.pool_done_announced = True
-    assert RUNTIME.pool_done_announced is True
     src = inspect.getsource(cw.claim_next_job) + inspect.getsource(cw._claim_next_job_sync)
-    assert "_pool_done_announced" not in src
-    assert "RUNTIME.pool_done_announced" in src
+    assert "_claim_weekly_job_sync" in src
+    assert "main._campaign_goal" not in src
+    assert "_reset_daily_counts" not in src

@@ -43,9 +43,9 @@ _UNSAFE_NETWORK_MARKERS = (
 
 
 class DailyReservationUnavailable(RuntimeError):
-    """No unallocated configured daily budget remains for this operation."""
+    """The account has no available weekly send slot."""
 
-    code = "DAILY_RESERVATION_UNAVAILABLE"
+    code = "WEEKLY_RESERVATION_UNAVAILABLE"
 
     def __init__(self) -> None:
         super().__init__(self.code)
@@ -324,28 +324,66 @@ def _start_send_operation(
         return
     repository = OperationRepository(main._conn())
     ledger = OperationLedger(repository)
-    if slot_id:
-        existing = repository.find_retryable_for_slot(
-            slot_id, profile_id=int(profile["id"]), text=text
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+    profile_id = int(profile["id"])
+    group_id = int(group["id"])
+    today = main._local_today()
+    budget_date = today.isoformat()
+    retryable = (
+        repository.find_retryable_for_slot(
+            slot_id, profile_id=profile_id, text=text
         )
+        if slot_id
+        else None
+    )
+
+    def _weekly_guard(connection: sqlite3.Connection) -> None:
+        weekly = WeeklyScheduleRepository(connection)
+        if weekly.send_block_reason(
+            profile_id,
+            today,
+            exclude_operation_id=(retryable.operation_id if retryable else None),
+        ) != "allowed":
+            raise DailyReservationUnavailable()
+        if weekly.assigned_proxy_url(profile_id, group_id) is None:
+            raise DailyReservationUnavailable()
+        if slot_id:
+            slot = weekly.slot(slot_id)
+            if (
+                slot is None
+                or str(slot["scope"]) != _operation_scope()
+                or int(slot["profile_id"]) != profile_id
+                or int(slot["work_group_id"]) != group_id
+                or str(slot["scheduled_date"]) != budget_date
+                or str(slot["message_text"]) != text
+                or str(slot["status"]) not in {"claimed", "queued", "failed_unsent"}
+            ):
+                raise DailyReservationUnavailable()
+
+    with main._conn() as connection:
+        _weekly_guard(connection)
+    if slot_id:
+        existing = retryable
         if existing is not None:
-            if existing.group_id != int(group["id"]):
+            if existing.group_id != group_id:
                 raise RuntimeError("daily slot route does not match retryable operation")
             if existing.status == "failed_unsent":
                 resumed = ledger.retry(
                     existing.operation_id,
                     proof_no_send=True,
-                    profile_id=int(profile["id"]),
+                    profile_id=profile_id,
+                    reservation_guard=_weekly_guard,
                 )
             else:
-                resumed = ledger.claim(existing.operation_id, profile_id=int(profile["id"]))
+                resumed = ledger.claim(existing.operation_id, profile_id=profile_id)
             tracker.operation_id = resumed.operation_id
             tracker.budget_date = resumed.budget_date or main._local_today().isoformat()
             tracker.operation_ledger = ledger
             return
     budget_date = main._local_today().isoformat()
     reservation_guard = None
-    if slot_id is None:
+    if False and slot_id is None:
         with main._conn() as connection:
             profile_columns = {
                 str(row[1])
@@ -406,17 +444,17 @@ def _start_send_operation(
 
     operation = ledger.create_operation(
         scope=_operation_scope(),
-        profile_id=int(profile["id"]),
-        group_id=int(group["id"]),
+        profile_id=profile_id,
+        group_id=group_id,
         text=text,
         budget_date=budget_date,
         daily_plan_id=daily_plan_id,
         slot_id=slot_id,
         route_snapshot={},
         max_pre_effect_retries=max(0, int(main.MAX_RETRY) - 1),
-        reservation_guard=reservation_guard,
+        reservation_guard=_weekly_guard,
     )
-    claimed = ledger.claim(operation.operation_id, profile_id=int(profile["id"]))
+    claimed = ledger.claim(operation.operation_id, profile_id=profile_id)
     tracker.operation_id = claimed.operation_id
     tracker.budget_date = budget_date
     tracker.operation_ledger = ledger

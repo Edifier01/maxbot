@@ -17,6 +17,28 @@ from starlette.testclient import TestClient
 _LOGIN_PHONE = "+79990014401"
 
 
+def _attach_group_proxy(m, profile_id: int) -> None:
+    with m._conn() as connection:
+        connection.execute(
+            "INSERT INTO groups (id, name, proxy, is_active) "
+            "VALUES (10, 'fixture', 'socks5://proxy.example:1080', 1)"
+        )
+        connection.execute(
+            "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+            "VALUES (10, ?, 1)",
+            (profile_id,),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO profile_automation_scope "
+            "(profile_id, automation_group_id, consent_state, revision) "
+            "VALUES (?, 10, 'active', 1)",
+            (profile_id,),
+        )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        WeeklyScheduleRepository(connection).assign_profile(profile_id, 10)
+
+
 @pytest.fixture
 def login_app(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_TEST", "1")
@@ -48,6 +70,7 @@ def test_profile_login_happy_path(login_app):
             (_LOGIN_PHONE, "t", m.ProfileStatus.PENDING),
         )
         pid = c.execute("SELECT id FROM profiles WHERE phone=?", (_LOGIN_PHONE,)).fetchone()["id"]
+    _attach_group_proxy(m, int(pid))
 
     m._login_max = AsyncMock(return_value=424242)
 
@@ -85,6 +108,7 @@ def test_http_login_proxy_failure_preserves_encrypted_identity_without_code_or_f
                 "SELECT id FROM profiles WHERE phone=?", (_LOGIN_PHONE,)
             ).fetchone()["id"]
         )
+    _attach_group_proxy(m, profile_id)
 
     session_dir = m._session_dir(profile_id)
     session_dir.mkdir(parents=True, exist_ok=True)

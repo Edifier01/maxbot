@@ -103,13 +103,18 @@ class OperationLedger:
         *,
         proof_no_send: bool,
         profile_id: int | None = None,
+        reservation_guard: Callable[[sqlite3.Connection], None] | None = None,
     ) -> OperationRecord:
         if profile_id is not None:
             current = self.get(operation_id)
             if current.profile_id != int(profile_id):
                 raise OperationValidationError("operation belongs to a different profile")
         try:
-            return self.repository.retry(operation_id, proof_no_send=proof_no_send)
+            return self.repository.retry(
+                operation_id,
+                proof_no_send=proof_no_send,
+                reservation_guard=reservation_guard,
+            )
         except RuntimeError as exc:
             raise OperationNotRetryable(str(exc)) from exc
 

@@ -336,15 +336,24 @@ const ruDateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short' });
           <td data-label="Учреждение">${esc(u.institution_name)}</td>
           <td data-label="Логин">${esc(u.email)}</td>
           <td data-label="Подписка">${subBadge}</td>
-          <td data-label="Статистика" id="stats-${u.tenant_id}"><button class="btn" data-action="load-stats" data-tenant-id="${u.tenant_id}">Статистика</button></td>
+          <td data-label="Статистика" id="stats-${u.tenant_id}"><span class="hint">—</span></td>
           <td data-label="Действия">
-            <div class="row">
+            <div class="admin-row-actions">
               <button class="btn primary" data-action="impersonate" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Войти в кабинет</button>
-              <button class="btn" data-action="grant-month" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">+30 дней</button>
-              <input type="number" id="sub-days-${u.tenant_id}" min="1" max="3650" value="30" style="width:3.5rem;text-align:center" aria-label="Дней продления">
-              <button class="btn" data-action="grant-days" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Продлить</button>
-              <button class="btn danger" data-action="revoke-sub" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Отозвать</button>
-              <button class="btn danger" data-action="delete-user" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Удалить</button>
+              <details class="admin-actions">
+                <summary>Ещё</summary>
+                <div class="admin-actions-menu">
+                  <button class="btn" data-action="load-stats" data-tenant-id="${u.tenant_id}">Загрузить статистику</button>
+                  <label for="sub-days-${u.tenant_id}">Продлить подписку на</label>
+                  <div class="admin-renew-row">
+                    <input type="number" id="sub-days-${u.tenant_id}" min="1" max="3650" value="30" aria-label="Дней продления">
+                    <span>дней</span>
+                    <button class="btn" data-action="grant-days" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Продлить</button>
+                  </div>
+                  <button class="btn danger" data-action="revoke-sub" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Отозвать подписку</button>
+                  <button class="btn danger" data-action="delete-user" data-tenant-id="${u.tenant_id}" data-institution-name="${escAttr(u.institution_name)}">Удалить учреждение</button>
+                </div>
+              </details>
             </div>
           </td>
         </tr>`;
@@ -405,21 +414,10 @@ const ruDateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short' });
       const s = await api('/settings');
       document.getElementById('delayMin').value = s.delay_min_sec;
       document.getElementById('delayMax').value = s.delay_max_sec;
-      document.getElementById('dayLimitMin').value = s.daily_limit_min || '5';
-      document.getElementById('dayLimitMax').value = s.daily_limit_max || s.max_msgs_per_profile_day || '12';
       document.getElementById('jitter').value = s.jitter_percent;
       document.getElementById('msgPickMode').value = s.message_pick_mode || 'random_norepeat';
-      document.getElementById('campaignGoal').value = s.campaign_goal || 'daily_limits';
-      document.getElementById('warmupOn').checked = String(s.warmup_enabled || '1') === '1';
-      document.getElementById('warmupDays').value = s.warmup_days || '7';
-      document.getElementById('warmupStartMin').value = s.warmup_start_min || '1';
-      document.getElementById('warmupStartMax').value = s.warmup_start_max || '2';
-      document.getElementById('lazyDayPct').value = s.lazy_day_percent || '15';
-      document.getElementById('lazyDayFactor').value = s.lazy_day_factor || '0.4';
-      document.getElementById('rhythmOn').checked = String(s.human_rhythm_enabled || '1') === '1';
       document.getElementById('windowsWeekday').value = s.send_windows_weekday || '9-13,16-21';
       document.getElementById('windowsWeekend').value = s.send_windows_weekend || '11-14,17-20';
-      document.getElementById('roleQuietLimit').value = s.role_quiet_limit || '1';
       document.getElementById('pausesOn').checked = String(s.human_pauses_enabled || '1') === '1';
       document.getElementById('shortPauseChance').value = s.short_pause_chance || '8';
       document.getElementById('shortPauseMin').value = s.short_pause_min_sec || '30';
@@ -445,26 +443,13 @@ const ruDateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short' });
     }
     async function saveGlobalSettings() {
       const btn = document.getElementById('btnSaveSettings');
-      const dayMax = +document.getElementById('dayLimitMax').value;
       const body = {
         delay_min_sec: +document.getElementById('delayMin').value,
         delay_max_sec: +document.getElementById('delayMax').value,
-        max_msgs_per_profile_day: dayMax,
-        daily_limit_min: +document.getElementById('dayLimitMin').value,
-        daily_limit_max: dayMax,
         jitter_percent: +document.getElementById('jitter').value,
         message_pick_mode: document.getElementById('msgPickMode').value,
-        campaign_goal: document.getElementById('campaignGoal').value,
-        warmup_enabled: document.getElementById('warmupOn').checked ? 1 : 0,
-        warmup_days: +document.getElementById('warmupDays').value,
-        warmup_start_min: +document.getElementById('warmupStartMin').value,
-        warmup_start_max: +document.getElementById('warmupStartMax').value,
-        lazy_day_percent: +document.getElementById('lazyDayPct').value,
-        lazy_day_factor: +document.getElementById('lazyDayFactor').value,
-        human_rhythm_enabled: document.getElementById('rhythmOn').checked ? 1 : 0,
         send_windows_weekday: document.getElementById('windowsWeekday').value.trim(),
         send_windows_weekend: document.getElementById('windowsWeekend').value.trim(),
-        role_quiet_limit: +document.getElementById('roleQuietLimit').value,
         human_pauses_enabled: document.getElementById('pausesOn').checked ? 1 : 0,
         short_pause_chance: +document.getElementById('shortPauseChance').value,
         short_pause_min_sec: +document.getElementById('shortPauseMin').value,
