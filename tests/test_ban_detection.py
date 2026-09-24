@@ -122,7 +122,7 @@ def test_send_with_retry_triggers_ban_shutdown(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_TEST", "1")
 
     import main as m
-    from app.campaign_send import send_with_retry
+    from app.campaign_send import SendTracker, send_with_retry
 
     m.reset_test_runtime()
     monkeypatch.setattr(m, "_is_server_mode", lambda: True)
@@ -138,8 +138,9 @@ def test_send_with_retry_triggers_ban_shutdown(tmp_path, monkeypatch):
                 id INTEGER PRIMARY KEY, phone TEXT, status TEXT,
                 last_error TEXT, fail_count INTEGER DEFAULT 0, sent_day TEXT
             );
-            CREATE TABLE groups (
-                id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT, enabled INTEGER
+                CREATE TABLE groups (
+                    id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT, enabled INTEGER,
+                    proxy TEXT
             );
             CREATE TABLE queue_state (
                 id INTEGER PRIMARY KEY, running INTEGER,
@@ -149,13 +150,25 @@ def test_send_with_retry_triggers_ban_shutdown(tmp_path, monkeypatch):
             CREATE TABLE send_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 profile_id INTEGER, group_id INTEGER, message_idx INTEGER,
-                status TEXT, error TEXT, sent_text TEXT
+                        status TEXT, error TEXT, sent_text TEXT, sent_at TEXT,
+                        operation_id TEXT
             );
             CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
             INSERT INTO profiles (id, phone, status) VALUES (7, '+79990007777', 'active');
-            INSERT INTO groups (id, name, chat_id, enabled) VALUES (1, 'g', 'c', 1);
+                INSERT INTO groups (id, name, chat_id, enabled, proxy)
+                    VALUES (1, 'g', 'c', 1, 'socks5://proxy.example:1080');
             INSERT INTO queue_state (id, running) VALUES (1, 0);
             """
+            )
+
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        weekly = WeeklyScheduleRepository(c)
+        weekly.ensure_schema()
+        weekly.assign_profile(7, 1)
+        c.execute(
+            "UPDATE profile_send_schedules SET send_weekday=? WHERE profile_id=7",
+            (m._local_today().weekday(),),
         )
 
     ban_handler = AsyncMock()
@@ -180,9 +193,11 @@ def test_send_with_retry_triggers_ban_shutdown(tmp_path, monkeypatch):
         prow = profile.execute("SELECT * FROM profiles WHERE id=7").fetchone()
         grow = profile.execute("SELECT * FROM groups WHERE id=1").fetchone()
 
+    tracker = SendTracker()
+
     async def _run():
         with tenant_scope(tenant_id=6, role="user"):
-            ok = await send_with_retry(prow, grow, "hi", 0, 0, 0, 0)
+            ok = await send_with_retry(prow, grow, "hi", 0, 0, 0, 0, tracker=tracker)
             assert ok is False
 
     asyncio.run(_run())

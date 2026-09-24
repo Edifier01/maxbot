@@ -385,7 +385,11 @@ async def set_group_proxy(tenant_id: int, group_id: int, body: ProxyIn):
             row = c.execute("SELECT id FROM groups WHERE id=?", (group_id,)).fetchone()
             if not row:
                 return False
-            c.execute("UPDATE groups SET proxy=? WHERE id=?", (body.proxy, group_id))
+            from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+            WeeklyScheduleRepository(c).update_group_proxy_list(
+                int(group_id), str(body.proxy or "")
+            )
             return True
 
     if not await asyncio.to_thread(_update):

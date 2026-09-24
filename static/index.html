@@ -344,7 +344,7 @@
       font: inherit; color: inherit;
     }
     button.group-head:hover { background: rgba(255,255,255,.02); }
-    .group-head-row .group-actions { padding-right: 1rem; flex-shrink: 0; }
+    .group-head-row .group-actions { margin: 0 1rem 0 0; flex-shrink: 0; }
     .group-head .arrow { width: 1rem; color: var(--faint); }
     .group-head .title { flex: 1; font-weight: 600; }
     .group-head .meta { color: var(--muted); font-size: .85rem; }
@@ -360,7 +360,53 @@
       padding: .55rem .6rem; text-align: left;
     }
     .group-table-wrap td { padding: .5rem .6rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
-    .group-actions { display: flex; gap: .5rem; }
+    .group-actions { display: block; }
+    .action-menu { position: relative; }
+    .action-menu > summary {
+      list-style: none; cursor: pointer; display: inline-flex; align-items: center;
+      min-height: 2.35rem; padding: .35rem .75rem; border: 1px solid var(--line);
+      border-radius: 8px; color: var(--muted); background: var(--bg-soft); font-size: .82rem;
+    }
+    .action-menu > summary::-webkit-details-marker { display: none; }
+    .action-menu > summary::after { content: "⌄"; margin-left: .45rem; }
+    .action-menu[open] > summary { color: var(--text); border-color: var(--accent); }
+    .action-menu > div {
+      display: grid; gap: .4rem; min-width: 10rem; padding: .55rem;
+      border: 1px solid var(--line); border-radius: 10px; background: var(--bg-elev);
+      box-shadow: var(--shadow); z-index: 20;
+    }
+    .group-actions > div { position: absolute; right: 0; top: calc(100% + .25rem); }
+    .profile-more > div { justify-items: stretch; }
+    .attention-panel { display: none; margin: 0 0 1rem; padding: 1rem; border: 1px solid var(--line-soft); border-radius: var(--radius); background: rgba(20,24,36,.9); }
+    body.simple-campaign .attention-panel,
+    body.campaign-attention-enabled .attention-panel { display: block; }
+    .attention-panel .section-head { margin-bottom: .45rem; }
+    .attention-panel h3 { margin: 0; font-size: .94rem; }
+    .attention-list { display: grid; gap: .5rem; }
+    .attention-item {
+      display: flex; align-items: center; justify-content: space-between; gap: .85rem;
+      padding: .7rem .8rem; border: 1px solid var(--line-soft); border-radius: 10px;
+      background: rgba(12,14,20,.38);
+    }
+    .attention-copy { min-width: 0; }
+    .attention-title { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+    .attention-title > strong { font-size: .88rem; }
+    .attention-item p { margin: .25rem 0 0; color: var(--muted); font-size: .82rem; }
+    .attention-clear { padding: .8rem; border: 1px solid var(--line-soft); border-radius: 10px; background: rgba(62,207,142,.04); }
+    .attention-clear strong, .attention-clear span { display: block; }
+    .attention-clear strong { color: var(--ok); font-size: .88rem; }
+    .attention-clear span { margin-top: .2rem; color: var(--muted); font-size: .82rem; }
+    .phone-badges:empty { display: none; }
+    .status-active, .status-pending, .status-needs_reauth, .status-disabled, .status-banned {
+      display: inline-flex; align-items: center; padding: .15rem .5rem; border-radius: 999px;
+      border: 1px solid var(--line-soft); font-size: .76rem; font-weight: 600;
+    }
+    .status-active { color: var(--ok); border-color: rgba(62,207,142,.35); }
+    .status-pending, .status-needs_reauth { color: var(--warn); border-color: rgba(245,190,70,.35); }
+    .status-disabled, .status-banned { color: var(--danger); border-color: rgba(239,95,95,.35); }
+    button:focus-visible, summary:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
     button.small {
       padding: .35rem .7rem; font-size: .8rem; border-radius: 7px;
       border: 1px solid var(--line); background: var(--bg-soft); color: var(--text);
@@ -535,8 +581,13 @@
       .group-body .row { flex-direction: column; align-items: stretch; }
       .group-body input, .group-body textarea, .group-body button { max-width: none; width: 100%; }
       .group-body td:last-child button { width: 100%; margin-bottom: .35rem; }
-      .group-actions { flex-direction: column; width: 100%; }
+      .group-actions { width: 100%; }
+      .group-actions > summary { width: 100%; min-height: var(--touch-min); justify-content: center; }
+      .group-actions > div { position: static; }
       .group-actions button { width: 100%; min-height: var(--touch-min); }
+      .action-menu > div { width: 100%; }
+      .attention-item { align-items: stretch; flex-direction: column; }
+      .attention-item > button { width: 100%; min-height: var(--touch-min); }
       .toolbar { flex-direction: column; align-items: stretch; }
       .toolbar button, .toolbar .primary, .toolbar .danger, .toolbar .small {
         width: 100%; justify-content: center; min-height: var(--touch-min);
@@ -629,19 +680,10 @@
       </div>
       <div id="userSummaryBlock" class="campaign-user-only">
         <div class="panel summary-panel">
-          <h3 class="panel-title">Сводка</h3>
+          <h3 class="panel-title">Кабинет</h3>
           <div id="userSummaryContent">
             <p id="dashSummaryError" class="hint" role="alert" style="display:none;margin:0 0 .65rem"></p>
-            <div id="dashStats" class="dash-stats">
-              <div class="dash-stat"><div class="n">0</div><div class="l">активны</div></div>
-              <div class="dash-stat"><div class="n">0</div><div class="l">ожидают</div></div>
-              <div class="dash-stat"><div class="n">0</div><div class="l">нужен вход</div></div>
-              <div class="dash-stat"><div class="n">0</div><div class="l">забанены</div></div>
-              <div class="dash-stat"><div class="n">0</div><div class="l">групп</div></div>
-              <div class="dash-stat"><div class="n">0</div><div class="l">успешно сегодня</div></div>
-              <div class="dash-stat"><div class="n">0</div><div class="l">ошибок сегодня</div></div>
-              <div class="dash-stat"><div class="n">0</div><div class="l">в автопаузе</div></div>
-            </div>
+            <div id="dashStats" class="dash-stats" aria-label="Сводка кампании"></div>
             <div id="dashCardsPanel" class="campaign-admin-only">
               <div class="row">
                 <select id="dashFilter" aria-label="Фильтр статусов" style="max-width:180px">
@@ -656,6 +698,27 @@
               <div id="dashCards" class="dash-cards"></div>
             </div>
           </div>
+        </div>
+      </div>
+      <section id="attentionPanel" class="attention-panel" aria-labelledby="attentionTitle">
+        <div class="section-head">
+          <h3 id="attentionTitle">Требуют внимания</h3>
+          <span id="attentionCount" class="hint" aria-live="polite"></span>
+        </div>
+        <div id="attentionList" class="attention-list" aria-live="polite">
+          <p class="hint">Загружаем состояние аккаунтов…</p>
+        </div>
+        <button type="button" id="attentionMore" class="small" style="display:none">Показать ещё</button>
+      </section>
+      <div id="campaignReadinessPanel" class="panel" aria-labelledby="campaignReadinessTitle">
+        <div class="section-head" style="margin-bottom:.55rem">
+          <h3 id="campaignReadinessTitle">Готовность к запуску</h3>
+          <button type="button" class="small" id="btnCampaignPreview" data-loading-label="Проверка…">Обновить проверку</button>
+        </div>
+        <div id="campaignReadinessState" class="hint" role="status" aria-live="polite">Проверка ещё не выполнялась.</div>
+        <div id="campaignReadinessDetails" style="display:none;margin-top:.55rem">
+          <ul id="campaignReadinessBlockers" class="preview" style="margin:0"></ul>
+          <div id="campaignReadinessSelection" class="hint"></div>
         </div>
       </div>
       <div id="userActivityBlock" class="campaign-user-only">
@@ -681,17 +744,6 @@
         <button type="button" class="small" id="btnCampaignCommandReconcile" style="margin-top:.5rem">
           Проверить состояние команды
         </button>
-      </div>
-      <div id="campaignReadinessPanel" class="panel campaign-admin-only" aria-labelledby="campaignReadinessTitle">
-        <div class="section-head" style="margin-bottom:.55rem">
-          <h3 id="campaignReadinessTitle">Готовность к запуску</h3>
-          <button type="button" class="small" id="btnCampaignPreview" data-loading-label="Проверка…">Проверить готовность</button>
-        </div>
-        <div id="campaignReadinessState" class="hint" role="status" aria-live="polite">Проверка ещё не выполнялась.</div>
-        <div id="campaignReadinessDetails" style="display:none;margin-top:.55rem">
-          <ul id="campaignReadinessBlockers" class="preview" style="margin:0"></ul>
-          <div id="campaignReadinessSelection" class="hint"></div>
-        </div>
       </div>
       <details class="campaign-more campaign-admin-only">
         <summary>Дополнительно</summary>
@@ -802,53 +854,20 @@
       </div>
 
       <details class="settings-panel" open>
-        <summary>Рассылка и лимиты</summary>
+        <summary>Рассылка и паузы</summary>
         <div class="settings-body">
-          <div class="settings-row"><label for="delayMin"><span class="tip" title="Минимальная пауза между успешными отправками">Мин. пауза (сек)</span></label><div class="controls"><input id="delayMin" type="number"></div></div>
-          <div class="settings-row"><label for="delayMax"><span class="tip" title="Максимальная пауза между успешными отправками">Макс. пауза (сек)</span></label><div class="controls"><input id="delayMax" type="number"></div></div>
-          <div class="settings-row"><label for="dayLimitMin"><span class="tip" title="Нижняя граница случайного дневного лимита">Лимит/день мин</span></label><div class="controls"><input id="dayLimitMin" type="number" min="1"></div></div>
-          <div class="settings-row"><label for="dayLimitMax"><span class="tip" title="Верхняя граница дневного лимита">Лимит/день макс</span></label><div class="controls"><input id="dayLimitMax" type="number" min="1"></div></div>
-          <div class="settings-row"><label for="jitter"><span class="tip" title="Случайный разброс паузы ±N%">Разброс (%)</span></label><div class="controls"><input id="jitter" type="number"></div></div>
-          <div class="settings-row"><label for="msgPickMode"><span class="tip" title="Случайно без повтора или по кругу">Режим сообщений</span></label><div class="controls">
-            <select id="msgPickMode" style="max-width:280px">
-              <option value="random_norepeat">Случайно без повтора</option>
-              <option value="round_robin">По кругу</option>
-            </select>
-          </div></div>
-          <div class="settings-row"><label for="campaignGoal"><span class="tip" title="Дневные лимиты или пул сообщений">Цель кампании</span></label><div class="controls">
-            <select id="campaignGoal" style="max-width:280px">
-              <option value="daily_limits">Дневные лимиты аккаунтов</option>
-              <option value="message_pool">Исчерпать пул TXT</option>
-            </select>
-          </div></div>
-          <div class="settings-row"><label><span class="tip" title="Новые аккаунты прогреваются N дней">Прогрев</span></label><div class="controls">
-            <label style="width:auto;max-width:none"><input type="checkbox" id="warmupOn" style="width:auto;max-width:none"> вкл</label>
-            <input id="warmupDays" type="number" min="1" style="max-width:80px" title="Дней прогрева" aria-label="Дней прогрева">
-            <span class="hint" style="margin:0">дней</span>
-          </div></div>
-          <div class="settings-row"><label>Прогрев: старт мин/макс</label><div class="controls">
-            <input id="warmupStartMin" type="number" min="1" style="max-width:70px" aria-label="Прогрев старт мин">
-            <span class="hint" style="margin:0">–</span>
-            <input id="warmupStartMax" type="number" min="1" style="max-width:70px" aria-label="Прогрев старт макс">
-          </div></div>
-          <div class="settings-row"><label>Ленивый день (%)</label><div class="controls">
-            <input id="lazyDayPct" type="number" min="0" max="100" style="max-width:80px" aria-label="Ленивый день процент">
-            <span class="hint" style="margin:0">×</span>
-            <input id="lazyDayFactor" type="number" min="0.05" max="1" step="0.05" style="max-width:80px" aria-label="Ленивый день множитель">
-          </div></div>
+          <div class="settings-row"><label for="delayMin">Мин. пауза (сек)</label><div class="controls"><input id="delayMin" type="number"></div></div>
+          <div class="settings-row"><label for="delayMax">Макс. пауза (сек)</label><div class="controls"><input id="delayMax" type="number"></div></div>
+          <div class="settings-row"><label for="jitter">Разброс (%)</label><div class="controls"><input id="jitter" type="number"></div></div>
+          <div class="settings-row"><label for="msgPickMode">Режим сообщений</label><div class="controls"><select id="msgPickMode"><option value="random_norepeat">Случайно без повтора</option><option value="round_robin">По кругу</option></select></div></div>
         </div>
       </details>
-
       <details class="settings-panel">
-        <summary>Ритм и роли дня</summary>
+        <summary>Окна отправки</summary>
         <div class="settings-body">
-          <div class="settings-row"><label>Ритм</label><div class="controls">
-            <label style="width:auto;max-width:none"><input type="checkbox" id="rhythmOn" style="width:auto;max-width:none"> вкл</label>
-          </div></div>
           <div class="settings-row"><label for="windowsWeekday">Окна будни</label><div class="controls"><input id="windowsWeekday" placeholder="9-13,16-21…" style="max-width:280px"></div></div>
           <div class="settings-row"><label for="windowsWeekend">Окна выходные</label><div class="controls"><input id="windowsWeekend" placeholder="11-14,17-20…" style="max-width:280px"></div></div>
-          <p class="hint" style="margin:.25rem 0 0 1rem">Время системы: UTC+3. Роли дня фиксированы: active → quiet → skip, примерно по трети профилей.</p>
-          <div class="settings-row"><label for="roleQuietLimit">Тихие: лимит</label><div class="controls"><input id="roleQuietLimit" type="number" min="0" style="max-width:80px"></div></div>
+          <p class="hint">Время системы: UTC+3. День отправки закреплён за аккаунтом.</p>
         </div>
       </details>
 

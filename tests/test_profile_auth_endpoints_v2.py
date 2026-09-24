@@ -51,6 +51,21 @@ def _cleanup(m, monkeypatch) -> None:
     importlib.reload(m)
 
 
+def _attach_test_proxy(m, profile_id: int, group_id: int = 10) -> None:
+    with m._conn() as connection:
+        connection.execute(
+            "INSERT INTO groups (id, name, proxy) VALUES (?, 'fixture', ?)",
+            (group_id, "socks5://proxy.example:1080"),
+        )
+        connection.execute(
+            "INSERT INTO group_profiles (group_id, profile_id) VALUES (?, ?)",
+            (group_id, profile_id),
+        )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        WeeklyScheduleRepository(connection).assign_profile(profile_id, group_id)
+
+
 def test_canonical_attempt_code_and_password_endpoints_are_guarded(
     tmp_path, monkeypatch
 ):
@@ -284,6 +299,24 @@ def test_needs_reauth_starts_a_new_attempt_and_reaches_code_stage(
                 "UPDATE profiles SET status=?, last_error=? WHERE id=?",
                 (m.ProfileStatus.NEEDS_REAUTH, "previous login failed", profile_id),
             )
+            connection.execute(
+                "INSERT INTO groups (id, name, proxy, is_active) "
+                "VALUES (10, 'fixture', 'socks5://proxy.example:1080', 1)"
+            )
+            connection.execute(
+                "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+                "VALUES (10, ?, 1)",
+                (profile_id,),
+            )
+            connection.execute(
+                "INSERT INTO profile_automation_scope "
+                "(profile_id, automation_group_id, consent_state, revision) "
+                "VALUES (?, 10, 'active', 1)",
+                (profile_id,),
+            )
+            from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+            WeeklyScheduleRepository(connection).assign_profile(profile_id, 10)
 
         release = asyncio.Event()
 
@@ -291,7 +324,7 @@ def test_needs_reauth_starts_a_new_attempt_and_reaches_code_stage(
             assert profile == profile_id
             assert phone == "+79990015551"
             assert fresh is False
-            assert group_id is None
+            assert group_id == 10
             waiting = m._mark_auth_waiting_code(profile_id)
             assert waiting is not None
             await release.wait()
@@ -303,7 +336,7 @@ def test_needs_reauth_starts_a_new_attempt_and_reaches_code_stage(
         async def run() -> None:
             nonlocal started_attempt_id
             started = await login_profile(
-                profile_id, fresh=False, request_id="needs-reauth-retry"
+                profile_id, fresh=False, group_id=10, request_id="needs-reauth-retry"
             )
             assert started["auth_step"] == "connecting"
             assert started["attempt_id"]
@@ -372,6 +405,7 @@ def test_ordinary_login_faults_reseal_same_saved_session_without_sms_or_fresh_lo
     """Timeout/transport/storage faults must not replace a valid saved identity."""
     m, profile_id = _setup_db(tmp_path, monkeypatch)
     try:
+        _attach_test_proxy(m, profile_id)
         from app.platform_policy import AuthorizationRecord, MaxAction, MaxTransport
 
         session_dir = m._session_dir(profile_id)
@@ -465,7 +499,9 @@ def test_ordinary_login_faults_reseal_same_saved_session_without_sms_or_fresh_lo
             "local_db": sqlite3.OperationalError,
         }[failure_kind]
         with pytest.raises(failure):
-            asyncio.run(m._login_max(profile_id, "+79990015551", fresh=False))
+            asyncio.run(
+                m._login_max(profile_id, "+79990015551", fresh=False, group_id=10)
+            )
 
         assert session_identity() == expected_identity
         assert encrypted.is_file()
@@ -486,6 +522,7 @@ def test_ordinary_login_tolerates_benign_tls_disconnect_and_reseals_session(
 ):
     m, profile_id = _setup_db(tmp_path, monkeypatch)
     try:
+        _attach_test_proxy(m, profile_id)
         from app.platform_policy import AuthorizationRecord, MaxAction, MaxTransport
 
         session_dir = m._session_dir(profile_id)
@@ -535,7 +572,7 @@ def test_ordinary_login_tolerates_benign_tls_disconnect_and_reseals_session(
 
         monkeypatch.setattr(m, "_build_pymax_client", lambda **_kwargs: FixtureClient())
         assert asyncio.run(
-            m._login_max(profile_id, "+79990015551", fresh=False)
+            m._login_max(profile_id, "+79990015551", fresh=False, group_id=10)
         ) == 2002
 
         encrypted = session_dir / "session.db.enc"

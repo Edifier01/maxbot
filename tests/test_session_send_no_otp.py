@@ -53,6 +53,22 @@ def _setup_db(tmp_path, monkeypatch):
     m._refresh_data_paths()
     m.reset_test_runtime()
     m.init_db()
+    with m._conn() as connection:
+        connection.execute(
+            "INSERT INTO profiles (id, phone, status) "
+            "VALUES (1, '+79991112233', 'active') ON CONFLICT(id) DO NOTHING"
+        )
+        connection.execute(
+            "INSERT INTO groups (id, name, proxy) "
+            "VALUES (1, 'fixture', 'socks5://proxy.example:1080') "
+            "ON CONFLICT(id) DO UPDATE SET proxy=excluded.proxy"
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO group_profiles (group_id, profile_id) VALUES (1, 1)"
+        )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        WeeklyScheduleRepository(connection).assign_profile(1, 1)
     return m
 
 
@@ -87,7 +103,7 @@ def test_send_without_session_does_not_construct_client(tmp_path, monkeypatch):
 
     async def _run():
         with pytest.raises(RuntimeError, match="не запрашивает SMS"):
-            await m._with_client(1, "+79991112233", lambda _c: None)
+            await m._with_client(1, "+79991112233", lambda _c: None, group_id=1)
 
     asyncio.run(_run())
     assert created == []
@@ -108,7 +124,7 @@ def test_stop_failure_cannot_skip_session_reseal(tmp_path, monkeypatch):
         async def _fn(_c):
             return "ok"
 
-        await m._with_client(1, "+79991112233", _fn)
+        await m._with_client(1, "+79991112233", _fn, group_id=1)
 
     with pytest.raises(OSError, match="stop failed"):
         asyncio.run(_run())
@@ -152,7 +168,7 @@ def test_send_does_not_set_connecting_auth_step(tmp_path, monkeypatch):
         async def _fn(_c):
             return "ok"
 
-        return await m._with_client(pid, "+79991112233", _fn)
+        return await m._with_client(pid, "+79991112233", _fn, group_id=1)
 
     assert asyncio.run(_run()) == "ok"
     assert "connecting" not in steps
@@ -173,7 +189,7 @@ def test_send_clears_stale_connecting_step(tmp_path, monkeypatch):
         async def _fn(_c):
             return "ok"
 
-        await m._with_client(pid, "+79991112233", _fn)
+        await m._with_client(pid, "+79991112233", _fn, group_id=1)
 
     asyncio.run(_run())
     assert m._auth_sessions[m._auth_session_key(pid)]["step"] == "idle"
@@ -204,9 +220,13 @@ def test_runtime_client_manager_serializes_real_with_client_calls(tmp_path, monk
             calls += 1
             return "second"
 
-        first = asyncio.create_task(m._with_client(1, "+79991112233", _first))
+        first = asyncio.create_task(
+            m._with_client(1, "+79991112233", _first, group_id=1)
+        )
         await entered.wait()
-        second = asyncio.create_task(m._with_client(1, "+79991112233", _second))
+        second = asyncio.create_task(
+            m._with_client(1, "+79991112233", _second, group_id=1)
+        )
         await asyncio.sleep(0)
         assert calls == 1
         release.set()

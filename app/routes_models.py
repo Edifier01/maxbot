@@ -199,27 +199,11 @@ class SettingsIn(BaseModel):
             raise ValueError("Мин. пауза не может быть больше макс. паузы")
         if self.jitter_percent is not None and not (0 <= self.jitter_percent <= 100):
             raise ValueError("Разброс (%) должен быть от 0 до 100")
-        if self.max_msgs_per_profile_day is not None and self.max_msgs_per_profile_day < 1:
-            raise ValueError("Лимит сообщений в день должен быть ≥ 1")
-        dlo, dhi = self.daily_limit_min, self.daily_limit_max
-        if dlo is not None and dlo < 1:
-            raise ValueError("Лимит/день мин должен быть ≥ 1")
-        if dhi is not None and dhi < 1:
-            raise ValueError("Лимит/день макс должен быть ≥ 1")
-        if dlo is not None and dhi is not None and dlo > dhi:
-            raise ValueError("Лимит/день мин не может быть больше макс")
         if self.message_pick_mode is not None and self.message_pick_mode not in (
             "random_norepeat",
             "round_robin",
         ):
             raise ValueError("Режим сообщений: случайно без повтора или по кругу")
-        if self.campaign_goal is not None and self.campaign_goal not in (
-            "daily_limits",
-            "message_pool",
-        ):
-            raise ValueError("Цель кампании: дневные лимиты или пул сообщений")
-        if self.warmup_days is not None and self.warmup_days < 1:
-            raise ValueError("Дней прогрева должно быть ≥ 1")
         if self.cooldown_reauth_hours is not None and self.cooldown_reauth_hours < 0:
             raise ValueError("Пауза после повторного входа (ч) должна быть ≥ 0")
         if self.cooldown_fail_hours is not None and self.cooldown_fail_hours < 0:
@@ -228,32 +212,9 @@ class SettingsIn(BaseModel):
             raise ValueError("Макс. попыток пароля должно быть ≥ 1")
         if self.backup_interval_hours is not None and self.backup_interval_hours < 0:
             raise ValueError("Интервал резервной копии (ч) должен быть ≥ 0")
-        if self.day_skip_percent is not None and not (0 <= self.day_skip_percent <= 100):
-            raise ValueError("Пропуск дня (%) должен быть от 0 до 100")
-        if self.role_active_percent is not None and not (
-            0 <= self.role_active_percent <= 100
-        ):
-            raise ValueError("Active (%) должен быть от 0 до 100")
-        if self.role_quiet_percent is not None and not (
-            0 <= self.role_quiet_percent <= 100
-        ):
-            raise ValueError("Quiet (%) должен быть от 0 до 100")
-        if self.role_active_min is not None and self.role_active_min < 0:
-            raise ValueError("Активных мин должно быть ≥ 0")
-        if self.role_active_max is not None and self.role_active_max < 0:
-            raise ValueError("Активных макс должно быть ≥ 0")
-        if (
-            self.role_active_min is not None
-            and self.role_active_max is not None
-            and self.role_active_min > self.role_active_max
-        ):
-            raise ValueError("Активных мин не может быть больше макс")
-        if self.role_quiet_limit is not None and self.role_quiet_limit < 0:
-            raise ValueError("Лимит тихих должен быть ≥ 0")
         for pct_name, pct_val in (
             ("short_pause_chance", self.short_pause_chance),
             ("long_pause_chance", self.long_pause_chance),
-            ("lazy_day_percent", self.lazy_day_percent),
             ("jitter_morning_percent", self.jitter_morning_percent),
             ("jitter_evening_percent", self.jitter_evening_percent),
             ("presence_history_chance", self.presence_history_chance),
@@ -273,13 +234,11 @@ class SettingsIn(BaseModel):
             "short_pause": "Короткая пауза",
             "long_pause": "Длинная пауза",
             "break": "Перерыв",
-            "warmup_start": "Прогрев старт",
         }
         for a, b, name in (
             (self.short_pause_min_sec, self.short_pause_max_sec, "short_pause"),
             (self.long_pause_min_sec, self.long_pause_max_sec, "long_pause"),
             (self.break_min_sec, self.break_max_sec, "break"),
-            (self.warmup_start_min, self.warmup_start_max, "warmup_start"),
         ):
             label = _range_labels.get(name, name)
             if a is not None and a < 0:
@@ -290,8 +249,6 @@ class SettingsIn(BaseModel):
                 raise ValueError(f"{label}: мин не может быть больше макс")
         if self.break_after_n is not None and self.break_after_n < 0:
             raise ValueError("Перерыв после N должен быть ≥ 0")
-        if self.lazy_day_factor is not None and not (0.05 <= self.lazy_day_factor <= 1.0):
-            raise ValueError("Коэффициент ленивого дня должен быть от 0.05 до 1.0")
         for field, raw, field_ru in (
             ("send_windows_weekday", self.send_windows_weekday, "Окна будни"),
             ("send_windows_weekend", self.send_windows_weekend, "Окна выходные"),

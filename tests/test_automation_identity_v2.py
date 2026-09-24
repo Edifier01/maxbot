@@ -129,6 +129,19 @@ def test_login_conflict_stays_needs_reauth_without_activating_profile(
                 "INSERT INTO profiles (id, phone, status) "
                 "VALUES (7, '+79990007777', 'pending')"
             )
+            connection.execute(
+                "INSERT INTO groups (id, name, proxy, is_active) "
+                "VALUES (101, 'fixture', 'socks5://proxy.example:1080', 1)"
+            )
+            connection.execute(
+                "INSERT INTO group_profiles (group_id, profile_id, is_enabled) "
+                "VALUES (101, 7, 1)"
+            )
+            connection.execute(
+                "INSERT INTO profile_automation_scope "
+                "(profile_id, automation_group_id, consent_state, revision) "
+                "VALUES (7, 101, 'active', 1)"
+            )
 
         monkeypatch.setattr(m, "_require_vault_unlocked", lambda: None)
         login = AsyncMock(return_value=101)

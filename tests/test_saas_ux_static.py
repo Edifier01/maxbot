@@ -70,8 +70,9 @@ def test_index_subscription_start_gate_and_no_svodka_tab():
     assert 'data-tab="svodka"' not in INDEX
     assert 'data-tab="campaign"' in INDEX
     assert "Отправка:" in INDEX
-    assert "p.status === 'banned'" in INDEX_ALL
-    assert "Забанен" in INDEX_ALL
+    assert "!['active', 'disabled', 'banned'].includes(p.status)" in INDEX_ALL
+    assert "banned: 'забанен'" in INDEX_ALL
+    assert "Рассылка остановлена для аккаунтов этого кабинета." in INDEX_ALL
 
 
 def test_fixed_runtime_controls_are_not_editable():
@@ -162,11 +163,13 @@ def test_index_user_progress_hidden_simple_view_only():
 
 
 def test_admin_stats_subscription_extend_and_empty_users():
-    assert ">Статистика</button>" in ADMIN_ALL
+    assert ">Загрузить статистику</button>" in ADMIN_ALL
     assert "Учреждений пока нет" in ADMIN_ALL
     assert "subscription/revoke" in ADMIN_ALL
     assert "от оставшихся дней" in ADMIN_ALL
     assert 'data-action="grant-days"' in ADMIN_ALL
+    assert 'data-action="grant-month"' not in ADMIN_ALL
+    assert "Продлить подписку на" in ADMIN_ALL
     assert 'data-action="revoke-sub"' in ADMIN_ALL
     assert 'data-action="impersonate"' in ADMIN_ALL
     assert "Открыть кабинет" in ADMIN_ALL
@@ -193,7 +196,7 @@ def test_admin_global_pacing_form_covers_allowlist():
     )
 
     assert "windowsWeekday" in ADMIN
-    assert "human_rhythm" in ADMIN_ALL
+    assert "human_rhythm" not in ADMIN_ALL
     assert "Искусственное присутствие отключено политикой безопасности" in ADMIN
     assert "circuitMins" in ADMIN
     assert "send_windows_weekday" in ADMIN_JS
@@ -202,18 +205,25 @@ def test_admin_global_pacing_form_covers_allowlist():
 
     body = _admin_save_global_body()
     fixed_keys = {
-        "day_skip_percent",
-        "role_plan_enabled",
-        "role_active_percent",
-        "role_quiet_percent",
-        "role_active_min",
-        "role_active_max",
         "timezone_offset_hours",
     }
     for key in GLOBAL_PACING_SETTING_KEYS - fixed_keys:
         assert key in body, key
     for key in fixed_keys:
         assert key not in body, key
+    for retired in (
+        "day_skip_percent",
+        "role_plan_enabled",
+        "role_active_percent",
+        "role_quiet_percent",
+        "role_active_min",
+        "role_active_max",
+        "campaign_goal",
+        "warmup_enabled",
+        "lazy_day_percent",
+    ):
+        assert retired not in ADMIN_ALL
+        assert retired not in ADMIN_JS
     for key in GLOBAL_PACING_NEVER_COPY:
         assert key not in body, key
     for key in GLOBAL_PACING_LEGACY_INACTIVE:

@@ -365,12 +365,17 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
     )
     from app.repositories.operations import OperationRepository
     from app.repositories.daily_plans import DailyPlanRepository
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
     from app.repositories.message_sets import MessageSetRepository
     from app.repositories.profile_auth import AuthAttemptRepository
     from app.repositories.automation_scope import AutomationScopeRepository
 
     OperationRepository.ensure_schema(c)
     DailyPlanRepository.ensure_schema(c)
+    weekly_repository = WeeklyScheduleRepository(c)
+    weekly_repository.ensure_schema()
+    weekly_repository.backfill_assignments()
+    weekly_repository.close_legacy_queued_slots_once()
     MessageSetRepository.ensure_schema(c)
     AuthAttemptRepository.ensure_schema(c)
     scope_repository = AutomationScopeRepository(c)

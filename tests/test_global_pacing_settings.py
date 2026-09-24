@@ -14,6 +14,7 @@ from app.settings_scope import (
     GLOBAL_PACING_LEGACY_INACTIVE,
     GLOBAL_PACING_NEVER_COPY,
     GLOBAL_PACING_SETTING_KEYS,
+    RETIRED_SCHEDULE_SETTING_KEYS,
     filter_pacing_updates,
 )
 from app.tenant import clear_context, set_context, tenant_scope
@@ -80,6 +81,7 @@ def test_allowlist_classifies_every_default_key():
         == GLOBAL_PACING_SETTING_KEYS
         | GLOBAL_PACING_NEVER_COPY
         | GLOBAL_PACING_LEGACY_INACTIVE
+        | RETIRED_SCHEDULE_SETTING_KEYS
     )
     for secret in (
         "api_pin",
@@ -208,7 +210,7 @@ def test_global_policy_revision_reports_partial_tenant_failure(tmp_path, monkeyp
         ]
 
 
-def test_partial_policy_retry_and_stop_start_preserve_v1_plans_and_revocation(
+def test_retired_daily_settings_do_not_propagate_with_active_policy_updates(
     tmp_path, monkeypatch, caplog
 ):
     m = _setup_server_main(tmp_path, monkeypatch)
@@ -225,7 +227,7 @@ def test_partial_policy_retry_and_stop_start_preserve_v1_plans_and_revocation(
     set_context(user_id=1, role="admin", use_global_data=True)
     try:
         v1_result = asyncio.run(
-            update_settings(SettingsIn(daily_limit_min=2, daily_limit_max=2))
+            update_settings(SettingsIn(delay_min_sec=10, delay_max_sec=20))
         )
     finally:
         clear_context()
@@ -307,14 +309,16 @@ def test_partial_policy_retry_and_stop_start_preserve_v1_plans_and_revocation(
             "WHERE scope_key='tenant:11'"
         ).fetchone()
         assert tuple(tenant_11_state) == (v2_revision, v2_revision)
-        assert m.get_setting("daily_limit_max") == "9"
+        assert m.get_setting("daily_limit_max") == "10"
+        assert m.get_setting("delay_min_sec") == "60"
     with tenant_scope(tenant_id=12, role="admin"):
         tenant_12_state = m._conn().execute(
             "SELECT desired_revision, applied_revision FROM policy_scope_state "
             "WHERE scope_key='tenant:12'"
         ).fetchone()
         assert tuple(tenant_12_state) == (v1_revision, v1_revision)
-        assert m.get_setting("daily_limit_max") == "2"
+        assert m.get_setting("daily_limit_max") == "10"
+        assert m.get_setting("delay_min_sec") == "10"
 
     from app.settings_scope import propagate_global_pacing_settings
 
@@ -342,6 +346,8 @@ def test_partial_policy_retry_and_stop_start_preserve_v1_plans_and_revocation(
 
     for tenant_id in (11, 12):
         with tenant_scope(tenant_id=tenant_id, role="admin"):
+            assert m.get_setting("daily_limit_max") == "10"
+            assert m.get_setting("delay_min_sec") == "60"
             connection = m._conn()
             repository = DailyPlanRepository(connection)
             cancelled = repository.cancel_queued_for_profile(
@@ -406,7 +412,7 @@ def test_partial_policy_retry_and_stop_start_preserve_v1_plans_and_revocation(
                 (f"tenant:{tenant_id}",),
             ).fetchone()
             assert tuple(state) == (v2_revision, v2_revision)
-            assert m.get_setting("daily_limit_max") == "9"
+            assert m.get_setting("daily_limit_max") == "10"
             assert m.get_setting("delay_min_sec") == "60"
 
 
@@ -505,7 +511,8 @@ def test_new_tenant_init_seeds_from_global(tmp_path, monkeypatch):
 
     with tenant_scope(tenant_id=31, role="user"):
         assert m.get_setting("delay_min_sec") == "42"
-        assert m.get_setting("daily_limit_max") == "7"
+        # Retired scheduling settings remain at their local audit defaults.
+        assert m.get_setting("daily_limit_max") == "10"
         assert m.get_setting("api_pin") == ""
         assert m.get_setting("worker_pool_size") == "1"
         assert m.get_setting("auto_run") == "0"

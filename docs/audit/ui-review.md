@@ -311,3 +311,91 @@ was corrected afterward in the current worktree by placing notifications in
 flow and adding viewport regression coverage. T27-C04 remains
 `PARTIAL`: this is a bounded synthetic visual comparison, not full state
 acceptance, and T27-C02's complete state review remains open.
+
+## 2026-09-24 dashboard and account UI implementation review
+
+The current worktree adds a user-facing readiness panel and a paginated
+`/api/dashboard/attention` feed for tenant profiles needing attention;
+simplifies repeated account status/action
+controls; places infrequent account, group, and tenant actions in native
+`details` disclosures; and combines subscription extension into one day-count
+input. Banned accounts receive no login action, and the dashboard explains
+that sending stopped for the tenant. The readiness panel translates known
+blockers and sends the `readiness_revision` with Start. Unknown blockers use a
+safe generic description.
+
+Local checks completed for this implementation slice:
+
+- `tests/test_dashboard_attention.py` plus `tests/test_ui_review_contract.py`:
+  `3 passed` (isolated SQLite/API fixtures).
+- Bundled Node `--check` passed for `static/js/index.js`,
+  `static/js/admin.js`, and `tests/browser/dashboard.spec.js`.
+- A local Playwright-core smoke fixture ran in installed system Chrome at
+  `390x844`, `768x1000`, and `1440x1000`, with every `/api/**` response
+  intercepted by synthetic fixtures. All three widths showed localized
+  blockers, kept Start disabled, showed the ban stop message, and hid login on
+  the banned item; the reauthentication item exposed login. At 390px the login
+  action called only the local automation-scope `PUT` and login `POST` fixture
+  routes, and the page had no horizontal overflow. All three runs made zero
+  external requests. The tested screenshots are
+  `ui-redesign-fixture-390.png`, `ui-redesign-fixture-768.png`, and
+  `ui-redesign-fixture-1440.png` in this directory.
+- At this review checkpoint the checked-in `npm run browser:e2e` suite had not
+  run because npm and `@playwright/test` were absent. The follow-up section
+  below records the completed setup and full run.
+
+This is still partial acceptance evidence. The smoke check does not cover all
+visible actions, the full error/state matrix, keyboard journeys, dialog
+behavior, rendered-state contrast, a true 200% zoom session, or a real-device
+virtual keyboard. T27-C01, T27-C02, T27-C03, and T27-C04 remain open/partial at
+their previous scope; do not mark them complete based on this bounded fixture.
+The full Python suite passed after updating the two static UX assertions for
+the banned-account and unified-renewal behavior: `724 passed, 20 skipped`.
+
+## 2026-09-24 npm and full browser walkthrough
+
+The local test environment was set up from the existing project pins without
+changing `package.json` or `package-lock.json`:
+
+- Installed `@playwright/test@1.63.0` with pnpm using the existing
+  `package.json` version. npm was not on the host `PATH`, so the project script
+  was run through a temporary npm CLI (`npm@11.6.2`) supplied by `pnpm dlx`.
+- Installed Playwright's matching Chromium, headless shell, and FFmpeg support
+  in the user Playwright cache. The final run used the checked-in Playwright
+  config and Chromium installation; no temporary browser config was needed.
+- Started the app in test mode on loopback with a dedicated temporary data root
+  and a recovery hold. Browser fixtures intercepted API traffic and supplied
+  synthetic responses; no MAX login, send, or provider action ran.
+
+The final full command completed successfully:
+
+```text
+pnpm dlx npm@11.6.2 run browser:e2e -- --workers=1
+96 tests scheduled across 390x844, 768x1024, 1440x1000
+66 passed, 30 expected viewport-specific skips, 0 failed (5.0m)
+```
+
+The suite covers the 66 safe error codes for user, admin, and impersonation
+renderers, every normalized error action, readiness preview and revision-bound
+start, ambiguous command handling, group destination review, safe login
+diagnostics, OTP keyboard-height/focus handling, and the dashboard recovery
+states. Browser diagnostics recorded no external requests. A four-worker trial
+overloaded Chrome during the long catalogue loop; the final serial run completed
+cleanly.
+
+The screenshot review caught that readiness reasons appeared below the start
+controls on narrow screens. The panel now appears after “Требуют внимания” and
+before the journal and campaign controls. A browser regression asserts this
+visual order at all three configured viewports. The refreshed synthetic
+screenshots are `ui-redesign-fixture-390.png`, `ui-redesign-fixture-768.png`,
+and `ui-redesign-fixture-1440.png` in this directory; all show a stopped
+campaign, two accounts needing attention, and localized blockers. The
+390px fixture also confirmed the reauthentication action makes only the local
+automation-scope `PUT` and login `POST`, while the banned account has no login
+button. All fixture runs reported zero external requests.
+
+Remaining acceptance boundaries: a native mobile device/virtual keyboard was
+not available, 200% zoom is still represented by a narrow CSS viewport, and
+the run does not replace state-by-state screenshot review beyond the captured
+fixture states. T27-C01 through T27-C04 therefore remain partial/open at their
+documented scope.

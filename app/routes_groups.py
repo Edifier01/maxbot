@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from fastapi import APIRouter, HTTPException
 
+import antiban_core
 from app.routes_models import (
     BulkProfilesIn,
     DestinationVerifyIn,
@@ -18,6 +21,28 @@ from app.tenant import is_cabinet_user, redact_cabinet_row
 router = APIRouter(tags=["groups"])
 
 _CABINET_DENIED = "Недоступно в личном кабинете"
+
+
+def _safe_group_view(row: dict) -> dict:
+    """Never expose proxy credentials through group APIs."""
+    result = redact_cabinet_row(dict(row))
+    raw_proxy = str(result.pop("proxy", "") or "")
+    labels = []
+    for proxy in antiban_core.parse_proxy_list(raw_proxy):
+        try:
+            parsed = urlsplit(proxy)
+            host = parsed.hostname
+            if not host:
+                continue
+            label = host
+            if parsed.port:
+                label += f":{parsed.port}"
+            if label not in labels:
+                labels.append(label)
+        except ValueError:
+            continue
+    result["proxy_labels"] = labels
+    return result
 
 
 def _phone_or_400(raw: str) -> str:
@@ -114,7 +139,7 @@ async def list_groups():
             """,
             (m.ProfileStatus.ACTIVE,),
         ).fetchall()
-    return [redact_cabinet_row(dict(r)) for r in rows]
+    return [_safe_group_view(dict(r)) for r in rows]
 
 
 @router.get("/api/groups/{group_id}/profiles")
@@ -162,7 +187,7 @@ async def list_group_profiles(
                 """,
                 (group_id, min(max(limit, 1), 100), max(offset, 0)),
             ).fetchall()
-    items = [m._profile_auth_view(p) for p in rows]
+    items = [m._profile_auth_view(p, group_id=int(group_id)) for p in rows]
     return {"items": items, "total": total, "offset": offset, "limit": limit}
 
 
@@ -228,7 +253,9 @@ async def patch_group(group_id: int, body: GroupPatchIn):
             )
         if "proxy" in data:
             proxy = str(data["proxy"] or "").strip()
-            c.execute("UPDATE groups SET proxy=? WHERE id=?", (proxy, group_id))
+            from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+            WeeklyScheduleRepository(c).update_group_proxy_list(int(group_id), proxy)
             m.append_log(
                 f"Прокси группы #{group_id}: {'задан' if proxy else 'очищен'}"
             )
@@ -238,7 +265,7 @@ async def patch_group(group_id: int, body: GroupPatchIn):
                 (int(data["is_active"]), group_id),
             )
         row = c.execute("SELECT * FROM groups WHERE id=?", (group_id,)).fetchone()
-    return redact_cabinet_row(dict(row))
+    return _safe_group_view(dict(row))
 
 
 @router.post("/api/groups/{group_id}/destination/verify")
@@ -270,7 +297,7 @@ async def verify_group_destination(group_id: int, body: DestinationVerifyIn):
         confirmed = c.execute(
             "SELECT * FROM groups WHERE id=?", (int(group_id),)
         ).fetchone()
-    return redact_cabinet_row(dict(confirmed))
+    return _safe_group_view(dict(confirmed))
 
 
 @router.post("/api/groups/{group_id}/profiles")
@@ -280,6 +307,8 @@ async def add_group_profile(group_id: int, body: ProfileIn):
     phone = _phone_or_400(body.phone)
     if is_cabinet_user() and (body.proxy or "").strip():
         raise HTTPException(403, _CABINET_DENIED)
+    if (body.proxy or "").strip():
+        raise HTTPException(400, "PROXY_ASSIGNMENT_AUTOMATIC")
     with m._conn() as c:
         g = c.execute("SELECT id FROM groups WHERE id=?", (group_id,)).fetchone()
         if not g:
@@ -296,20 +325,14 @@ async def add_group_profile(group_id: int, body: ProfileIn):
                 raise HTTPException(400, "Этот номер уже в группе")
         else:
             cur = c.execute(
-                "INSERT INTO profiles (phone, label, status, proxy) VALUES (?, ?, ?, ?)",
+                "INSERT INTO profiles (phone, label, status) VALUES (?, ?, ?)",
                 (
                     phone,
                     body.label.strip(),
                     m.ProfileStatus.PENDING,
-                    (body.proxy or "").strip(),
                 ),
             )
             pid = cur.lastrowid
-        if body.proxy is not None and str(body.proxy).strip() != "":
-            c.execute(
-                "UPDATE profiles SET proxy=? WHERE id=?",
-                (body.proxy.strip(), pid),
-            )
 
         n = c.execute(
             "SELECT COALESCE(MAX(order_index), -1) n FROM group_profiles WHERE group_id=?",
@@ -319,6 +342,9 @@ async def add_group_profile(group_id: int, body: ProfileIn):
             "INSERT INTO group_profiles (group_id, profile_id, order_index) VALUES (?, ?, ?)",
             (group_id, pid, n + 1),
         )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        WeeklyScheduleRepository(c).assign_profile(int(pid), int(group_id))
 
     m._ensure_auth_session(pid)
     m.append_log(f"Профиль {phone} добавлен в группу #{group_id}")
@@ -332,6 +358,8 @@ async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
     m._require_worker_idle()
     if is_cabinet_user():
         raise HTTPException(403, _CABINET_DENIED)
+    if any((item.proxy or "").strip() for item in body.profiles):
+        raise HTTPException(400, "PROXY_ASSIGNMENT_AUTOMATIC")
     if not body.profiles:
         raise HTTPException(400, "Список профилей пуст")
     if len(body.profiles) > 2000:
@@ -366,26 +394,23 @@ async def bulk_add_group_profiles(group_id: int, body: BulkProfilesIn):
                         continue
                 else:
                     cur = c.execute(
-                        "INSERT INTO profiles (phone, label, status, proxy) VALUES (?, ?, ?, ?)",
+                        "INSERT INTO profiles (phone, label, status) VALUES (?, ?, ?)",
                         (
                             phone,
                             (item.label or "").strip(),
                             m.ProfileStatus.PENDING,
-                            (item.proxy or "").strip(),
                         ),
                     )
                     pid = cur.lastrowid
-                if (item.proxy or "").strip():
-                    c.execute(
-                        "UPDATE profiles SET proxy=? WHERE id=?",
-                        (item.proxy.strip(), pid),
-                    )
                 order_n += 1
                 c.execute(
                     "INSERT INTO group_profiles (group_id, profile_id, order_index) "
                     "VALUES (?, ?, ?)",
                     (group_id, pid, order_n),
                 )
+                from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+                WeeklyScheduleRepository(c).assign_profile(int(pid), int(group_id))
                 added.append({"id": pid, "phone": phone})
             except Exception as e:
                 info = classify_exception(

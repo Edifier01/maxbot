@@ -53,11 +53,16 @@ def test_send_with_retry_success_writes_sent(tmp_path, monkeypatch):
             CREATE TABLE profiles (
                 id INTEGER PRIMARY KEY, phone TEXT, status TEXT,
                 last_error TEXT, fail_count INTEGER DEFAULT 0, sent_day TEXT,
-                messages_sent_today INTEGER DEFAULT 0
+                messages_sent_today INTEGER DEFAULT 0, proxy TEXT DEFAULT ''
             );
             CREATE TABLE groups (
                 id INTEGER PRIMARY KEY, name TEXT, chat_id TEXT,
-                max_chat_id TEXT, invite_link TEXT, enabled INTEGER
+                max_chat_id TEXT, invite_link TEXT, enabled INTEGER,
+                proxy TEXT DEFAULT ''
+            );
+            CREATE TABLE group_profiles (
+                group_id INTEGER, profile_id INTEGER, is_enabled INTEGER DEFAULT 1,
+                PRIMARY KEY(group_id, profile_id)
             );
             CREATE TABLE queue_state (
                 id INTEGER PRIMARY KEY, running INTEGER,
@@ -67,14 +72,25 @@ def test_send_with_retry_success_writes_sent(tmp_path, monkeypatch):
             CREATE TABLE send_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 profile_id INTEGER, group_id INTEGER, message_idx INTEGER,
-                status TEXT, error TEXT, sent_text TEXT
+                status TEXT, error TEXT, sent_text TEXT,
+                sent_at TEXT DEFAULT CURRENT_TIMESTAMP, operation_id TEXT
             );
             CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
             INSERT INTO profiles (id, phone, status) VALUES (7, '+79990007777', 'active');
-            INSERT INTO groups (id, name, chat_id, max_chat_id, invite_link, enabled)
-            VALUES (1, 'g', 'c', '77', '', 1);
+            INSERT INTO groups (id, name, chat_id, max_chat_id, invite_link, enabled, proxy)
+            VALUES (1, 'g', 'c', '77', '', 1, 'socks5://proxy.example:1080');
+            INSERT INTO group_profiles (group_id, profile_id) VALUES (1, 7);
             INSERT INTO queue_state (id, running) VALUES (1, 0);
             """
+        )
+        from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+        weekly = WeeklyScheduleRepository(c)
+        weekly.ensure_schema()
+        weekly.assign_profile(7, 1)
+        c.execute(
+            "UPDATE profile_send_schedules SET send_weekday=? WHERE profile_id=7",
+            (m._local_today().weekday(),),
         )
 
     class FakeGateway:

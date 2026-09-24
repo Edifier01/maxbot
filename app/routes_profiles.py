@@ -98,7 +98,7 @@ async def list_profiles(offset: int = 0, limit: int = 50, q: str = ""):
             ).fetchall()
             total = c.execute(f"SELECT COUNT(*) n {base}").fetchone()["n"]
     items = [
-        redact_cabinet_row(m._sanitize_profile_error_view(dict(row)))
+        m._profile_auth_view(row)
         for row in rows
     ]
     return {"items": items, "total": total}
@@ -245,6 +245,8 @@ async def patch_profile(profile_id: int, body: ProfilePatchIn):
         raise HTTPException(400, "Нечего обновлять")
     if is_cabinet_user() and "proxy" in data:
         raise HTTPException(403, _CABINET_DENIED)
+    if "proxy" in data:
+        raise HTTPException(400, "PROXY_ASSIGNMENT_AUTOMATIC")
     with m._conn() as c:
         p = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
         if not p:
@@ -253,15 +255,6 @@ async def patch_profile(profile_id: int, body: ProfilePatchIn):
             c.execute(
                 "UPDATE profiles SET label=? WHERE id=?",
                 (str(data["label"] or "").strip(), profile_id),
-            )
-        if "proxy" in data:
-            proxy = str(data["proxy"] or "").strip()
-            c.execute(
-                "UPDATE profiles SET proxy=? WHERE id=?",
-                (proxy, profile_id),
-            )
-            m.append_log(
-                f"Прокси #{profile_id}: {'задан' if proxy else 'очищен'}"
             )
         p2 = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
     return m._profile_auth_view(p2)
@@ -327,8 +320,32 @@ async def login_profile(
     m._require_vault_unlocked()
     with m._conn() as c:
         p = c.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
+        selected_group_id = None
+        if c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='profile_automation_scope'"
+        ).fetchone():
+            selected = c.execute(
+                "SELECT automation_group_id FROM profile_automation_scope "
+                "WHERE profile_id=?",
+                (int(profile_id),),
+            ).fetchone()
+            if selected and selected["automation_group_id"] is not None:
+                selected_group_id = int(selected["automation_group_id"])
+        memberships = c.execute(
+            "SELECT group_id FROM group_profiles WHERE profile_id=? "
+            "AND is_enabled=1 ORDER BY group_id",
+            (int(profile_id),),
+        ).fetchall()
     if not p:
         raise HTTPException(404, "Профиль не найден")
+    if group_id is None:
+        if selected_group_id is not None:
+            group_id = selected_group_id
+        elif len(memberships) == 1:
+            group_id = int(memberships[0]["group_id"])
+        else:
+            raise HTTPException(409, "WORK_GROUP_SELECTION_REQUIRED")
     if group_id is not None:
         with m._conn() as c:
             linked = c.execute(
@@ -339,6 +356,8 @@ async def login_profile(
             raise HTTPException(400, "Профиль не состоит в этой группе")
         if not m._automation_scope_allows_external_action(profile_id, group_id):
             raise HTTPException(409, "WORK_GROUP_SELECTION_REQUIRED")
+        if m._group_proxy(group_id, profile_id) is None:
+            raise HTTPException(409, "PROXY_ASSIGNMENT_REQUIRED")
 
     task = m._login_tasks.get(m._auth_session_key(profile_id))
     current_attempt = m._current_auth_attempt(profile_id)

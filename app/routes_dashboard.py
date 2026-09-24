@@ -150,17 +150,7 @@ async def dashboard():
                 d["messages_sent_today"] = 0
             d["circuit_open"] = m._is_circuit_open(p["id"])
             items.append(d)
-        if m._campaign_goal() == "daily_limits":
-            prog = m._daily_capacity_progress()
-        else:
-            msgs = len(m.load_message_pool())
-            mi = int(qs["message_idx"] if qs else 0)
-            prog = {
-                "goal": "message_pool",
-                "sent": min(mi, msgs),
-                "total": msgs,
-                "remaining": max(0, msgs - mi),
-            }
+        prog = m._daily_capacity_progress()
         return {
             "counts": {r["status"]: r["n"] for r in counts},
             "groups_count": groups_n,
@@ -180,6 +170,133 @@ async def dashboard():
         )
         logging.getLogger(__name__).error(
             "dashboard failed code=%s source=%s stage=%s",
+            info.code,
+            info.source,
+            info.stage,
+        )
+        raise HTTPException(500, detail=asdict(info)) from None
+
+
+@router.get("/api/dashboard/attention")
+async def dashboard_attention(offset: int = 0, limit: int = 10):
+    """Return a paginated, read-only feed of profiles needing attention."""
+    import time
+
+    offset = max(0, int(offset))
+    limit = min(50, max(1, int(limit)))
+    try:
+        with m._conn() as connection:
+            rows = connection.execute(
+                """
+                SELECT p.*,
+                       GROUP_CONCAT(g.name, ', ') AS group_names,
+                       COUNT(DISTINCT gp.group_id) AS linked_group_count,
+                       pas.automation_group_id,
+                       pas.consent_state AS automation_scope_state,
+                       CASE
+                         WHEN pas.profile_id IS NOT NULL THEN
+                           CASE
+                             WHEN pas.consent_state='active'
+                              AND pas.automation_group_id IS NOT NULL
+                              AND EXISTS (
+                                SELECT 1 FROM group_profiles selected_gp
+                                WHERE selected_gp.profile_id=p.id
+                                  AND selected_gp.group_id=pas.automation_group_id
+                                  AND selected_gp.is_enabled=1
+                              )
+                             THEN pas.automation_group_id
+                             ELSE NULL
+                           END
+                         WHEN COUNT(DISTINCT gp.group_id)=1 THEN MIN(g.id)
+                         ELSE NULL
+                       END AS primary_group_id
+                FROM profiles p
+                LEFT JOIN group_profiles gp ON gp.profile_id=p.id AND gp.is_enabled=1
+                LEFT JOIN groups g ON g.id=gp.group_id
+                LEFT JOIN profile_automation_scope pas ON pas.profile_id=p.id
+                GROUP BY p.id
+                ORDER BY p.id
+                """
+            ).fetchall()
+
+        runtimes = [runtime for _, runtime in m.REGISTRY.worker_items()]
+        if not runtimes:
+            runtimes = [m.RUNTIME]
+        attention = []
+        for row in rows:
+            profile_id = int(row["id"])
+            auth = m._auth_sessions.get(m._auth_session_key(profile_id), {})
+            auth_step = str(auth.get("step", "idle"))
+            cooldown_until = row["cooldown_until"]
+            in_cooldown = m._is_in_cooldown(row)
+            circuit_open = False
+            for runtime in runtimes:
+                errors = int(runtime.consecutive_errors.get(profile_id, 0) or 0)
+                if errors < m.MAX_CONSECUTIVE_ERRORS:
+                    continue
+                opened_at = float(runtime.circuit_opened_at.get(profile_id, 0.0) or 0.0)
+                minutes = max(
+                    1.0,
+                    m._setting_float("circuit_break_minutes", float(m.CIRCUIT_BREAK_MINUTES)),
+                )
+                if time.time() - opened_at <= minutes * 60:
+                    circuit_open = True
+                    break
+
+            status = str(row["status"] or "")
+            if status == "banned":
+                priority = 0
+            elif auth_step in {"waiting_sms", "waiting_cloud_password"}:
+                priority = 1
+            elif status == "needs_reauth":
+                priority = 2
+            elif status == "pending":
+                priority = 3
+            elif status == "disabled":
+                priority = 4
+            elif in_cooldown or circuit_open or auth_step == "error" or row["last_error"]:
+                priority = 5
+            else:
+                continue
+
+            from main import _sanitize_profile_error_view
+
+            safe = _sanitize_profile_error_view(dict(row))
+            current_attempt = m._current_auth_attempt(profile_id)
+            item = redact_cabinet_row(
+                {
+                    "id": profile_id,
+                    "phone": safe.get("phone", ""),
+                    "label": safe.get("label", ""),
+                    "status": status,
+                    "last_error": safe.get("last_error", ""),
+                    "last_error_code": safe.get("last_error_code", ""),
+                    "last_error_action": safe.get("last_error_action", ""),
+                    "auth_step": auth_step,
+                    "attempt_id": current_attempt.attempt_id if current_attempt else None,
+                    "in_cooldown": in_cooldown,
+                    "cooldown_until": cooldown_until if in_cooldown else None,
+                    "circuit_open": circuit_open,
+                    "group_names": safe.get("group_names", ""),
+                    "primary_group_id": safe.get("primary_group_id"),
+                    "linked_group_count": int(safe.get("linked_group_count") or 0),
+                }
+            )
+            attention.append((priority, profile_id, item))
+
+        attention.sort(key=lambda entry: (entry[0], entry[1]))
+        items = [entry[2] for entry in attention[offset : offset + limit]]
+        return {"items": items, "total": len(attention), "offset": offset, "limit": limit}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        info = classify_exception(
+            exc, source="storage", stage="dashboard_attention", outcome="rejected"
+        )
+        import logging
+
+        logging.getLogger(__name__).error(
+            "dashboard attention failed code=%s source=%s stage=%s",
             info.code,
             info.source,
             info.stage,

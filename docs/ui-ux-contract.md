@@ -91,3 +91,34 @@ the relevant local review surface, reads a local journal/settings/list endpoint,
 or opens authentication; it never retries an unknown mutation, submits OTP or
 password material, or invokes MAX/provider traffic automatically. `STOP_*`
 actions focus the explicit Stop control and require a separate user click.
+
+## Account and campaign presentation
+
+- Show one primary profile status: active, awaiting first login (`pending`),
+  reauthentication required (`needs_reauth`), disabled, or banned. Show an
+  in-progress code/password prompt or a temporary cooldown separately from that
+  status; do not repeat the primary status as a second badge.
+- Offer the primary login action only for a pending or reauthentication-needed
+  profile that is not already in an auth step and has a selected group. A banned
+  profile must never offer login. Put cancellation, diagnostics, repeat-login,
+  and removal under an accessible “Ещё” disclosure. Preserve confirmation for
+  destructive account, group, subscription, and impersonation actions.
+- The user campaign home presents launch readiness and its safe, localized
+  blockers before Start. Use `/api/campaign/preview` and carry its
+  `readiness_revision` with Start. If the preview is stale, disable Start, fetch
+  a fresh preview, and show that the earlier result expired. Never display raw
+  readiness codes to a user.
+- The user home shows “Требуют внимания” from read-only
+  `GET /api/dashboard/attention?offset=0&limit=10`. The feed contains safe
+  profile fields for tenant profiles that need attention, including profiles
+  without an enabled group. `limit` is clamped to 50. Priority is banned,
+  waiting for auth input, reauthentication,
+  first login, disabled, then temporary pause. It must not return proxy URLs,
+  proxy credentials, MAX credentials, SMS/password values, or session data.
+- A ban message must make clear that campaign sending stopped for the tenant.
+  Its only available follow-up is safe current-attempt diagnostics when such a
+  diagnostic exists; never suggest another login for a banned account.
+- The admin user table keeps subscription expiry visible and combines the
+  30-day and custom extension into one days input. Secondary and destructive
+  actions remain keyboard accessible in “Ещё”; revoke and delete still require
+  confirmation. The impersonation cabinet preserves all role restrictions.

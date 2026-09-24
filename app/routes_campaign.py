@@ -578,16 +578,9 @@ def _library_available(messages: list[str]) -> bool:
 
 
 _READINESS_POLICY_KEYS = (
-    "campaign_goal",
-    "daily_limit_min",
-    "daily_limit_max",
-    "max_msgs_per_profile_day",
     "message_pick_mode",
-    "role_plan_enabled",
-    "role_quiet_limit",
     "delay_min_sec",
     "delay_max_sec",
-    "human_rhythm_enabled",
     "human_pauses_enabled",
     "short_pause_chance",
     "short_pause_min_sec",
@@ -989,13 +982,13 @@ async def campaign_start(
             "generation": pending.generation,
             "campaign_id": m.RUNTIME.current_campaign_id,
         }
-    from app.campaign_worker import materialize_daily_plans
+    from app.campaign_worker import materialize_weekly_plans
 
     try:
         # Pin the account-day plan before route preflight. A temporary proxy
         # failure must block external work without losing today's allocation.
         async with REGISTRY.app.message_pool_lock:
-            materialize_daily_plans()
+            materialize_weekly_plans()
         await m._preflight_group_proxies()
     except Exception:
         coordinator.fail_start(command_id)
@@ -1140,8 +1133,8 @@ async def campaign_test(
     if not intent.accepted:
         raise HTTPException(409, {"state": intent.state, "blockers": intent.payload})
 
-    daily_job = None
-    daily_finalized = False
+    weekly_job = None
+    weekly_finalized = False
     profile = None
     group = None
     text = ""
@@ -1149,43 +1142,29 @@ async def campaign_test(
 
     tracker = SendTracker()
     try:
-        # Publication and test selection share one short process-local lock.
-        # The lock is released before proxy/provider work begins; the selected
-        # daily slot or legacy text remains pinned for this command.
+        # Keep the selected weekly slot and its message pinned for this command.
         async with REGISTRY.app.message_pool_lock:
-            messages = m.load_message_pool()
-            if not _library_available(messages):
+            if not _library_available(m.load_message_pool()):
                 raise HTTPException(400, "Нет сообщений")
             groups = m._active_groups()
             if not groups:
                 raise HTTPException(400, "Нет групп")
-            if _library_available(messages):
-                from app.campaign_worker import _claim_daily_job_sync
+            from app.campaign_worker import (
+                _claim_weekly_job_sync,
+                materialize_weekly_plans,
+            )
 
-                daily_candidate = _claim_daily_job_sync()
-                if isinstance(daily_candidate, dict):
-                    daily_job = daily_candidate
-                elif daily_candidate in {"DAILY_WAIT", "DAILY_DONE"}:
-                    raise HTTPException(409, "Нет доступного дневного slot")
-            if daily_job is not None:
-                profile = daily_job["profile"]
-                group = daily_job["group"]
-            else:
-                for candidate_group in groups:
-                    profiles = m._active_profiles_for_group(candidate_group["id"])
-                    for candidate_profile in profiles:
-                        if m._is_circuit_open(candidate_profile["id"]):
-                            continue
-                        if m._can_send_in_group(
-                            candidate_profile, candidate_group["id"]
-                        ):
-                            profile, group = candidate_profile, candidate_group
-                            break
-                    if profile:
-                        break
+            materialize_weekly_plans()
+            weekly_candidate = _claim_weekly_job_sync()
+            if isinstance(weekly_candidate, dict):
+                weekly_job = weekly_candidate
+            elif weekly_candidate in {"WEEKLY_WAIT", "WEEKLY_DONE"}:
+                raise HTTPException(409, "Нет доступного слота на этой неделе")
+            profile = weekly_job["profile"] if weekly_job else None
+            group = weekly_job["group"] if weekly_job else None
             if not profile or not group:
-                raise HTTPException(400, "Нет активного профиля для теста")
-            text = daily_job["text"] if daily_job is not None else messages[0]
+                raise HTTPException(409, "Нет доступного недельного слота для теста")
+            text = weekly_job["text"]
 
         m._require_profile_runtime_available(int(profile["id"]))
         await m._preflight_group_proxies()
@@ -1198,18 +1177,18 @@ async def campaign_test(
             0,
             0,
             advance_queue=False,
-            daily_plan_id=(daily_job or {}).get("daily_plan_id"),
-            slot_id=(daily_job or {}).get("slot_id"),
+            daily_plan_id=None,
+            slot_id=weekly_job["slot_id"],
             tracker=tracker,
         )
-        if daily_job is not None:
-            from app.campaign_worker import _finalize_daily_job
+        if weekly_job is not None:
+            from app.campaign_worker import _finalize_weekly_job
 
-            _finalize_daily_job(daily_job, ok, tracker)
-            daily_finalized = True
+            _finalize_weekly_job(weekly_job, ok, tracker)
+            weekly_finalized = True
         if not ok:
             if tracker.error == DailyReservationUnavailable.code:
-                raise HTTPException(409, "Нет доступного дневного бюджета")
+                raise HTTPException(409, "Недельный слот уже использован или недоступен")
             raise HTTPException(502, "Тест не удался — смотрите лог / нужен повторный вход")
         completed = coordinator.complete_test(command_id)
         if not completed.accepted:
@@ -1224,10 +1203,10 @@ async def campaign_test(
             "control_state": completed.state,
         }
     except BaseException:
-        if daily_job is not None and not daily_finalized:
-            from app.campaign_worker import _finalize_daily_job
+        if weekly_job is not None and not weekly_finalized:
+            from app.campaign_worker import _finalize_weekly_job
 
-            _finalize_daily_job(daily_job, False, tracker)
+            _finalize_weekly_job(weekly_job, False, tracker)
         coordinator.fail_test(command_id)
         raise
 

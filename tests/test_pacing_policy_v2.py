@@ -148,7 +148,7 @@ def test_global_fanout_filters_secrets_and_reports_partial_failures() -> None:
     )
     assert report.applied == [1]
     assert report.failed == [2]
-    assert calls == [(1, {"daily_limit_min": "5"})]
+    assert calls == [(1, {})]
 
 
 def test_invalid_role_is_rejected() -> None:
