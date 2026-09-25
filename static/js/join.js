@@ -14,6 +14,8 @@
     ONBOARDING_RATE_LIMITED: "Слишком много попыток. Попробуйте позже.",
     MAX_ACCOUNT_REGISTRATION_REQUIRED: "Для этого номера ещё нет аккаунта MAX. Зарегистрируйте его в официальном приложении MAX и начните подключение по ссылке заново.",
     MAX_AUTH_FAILED: "Не удалось подтвердить вход MAX. Начните вход заново или запросите новый код.",
+    MAX_AUTH_UNAVAILABLE: "Подключение к MAX сейчас недоступно. Обратитесь к владельцу группы.",
+    PROXY_ASSIGNMENT_REQUIRED: "Для группы не настроен маршрут подключения к MAX. Обратитесь к владельцу группы.",
     MAX_CLOUD_PASSWORD_REJECTED: "Облачный пароль не подошёл. Запросите новый код и повторите вход.",
     PROFILE_NAME_CONFIRMATION_REQUIRED: "Сначала подтвердите ФИО существующего профиля.",
   };
@@ -57,20 +59,27 @@
       interrupted: "Вход прервался. Нажмите «Запросить новый код», чтобы начать заново.",
       created: "Заполните данные для подключения.",
     };
-    $("stepText").textContent = state.last_error_code === "MAX_ACCOUNT_REGISTRATION_REQUIRED"
-      ? "Для этого номера ещё нет аккаунта MAX. Зарегистрируйте его в официальном приложении MAX и начните подключение заново."
+    const failed = ["failed", "interrupted"].includes(state.state);
+    $("stepText").textContent = failed && labels[state.last_error_code]
+      ? labels[state.last_error_code]
       : (state.hint || text[state.state] || "Подключение к группе MAX");
-    if (["failed", "interrupted"].includes(state.state)) {
+    if (failed) message("");
+    const canRetry = failed;
+    if (!canRetry) $("retryAuth")?.remove();
+    if (canRetry) {
       const button = document.getElementById("retryAuth");
       if (!button) {
         const retry = document.createElement("button");
-        retry.id = "retryAuth"; retry.type = "button"; retry.textContent = "Запросить новый код";
+        retry.id = "retryAuth"; retry.type = "button";
         retry.addEventListener("click", async () => {
+          retry.disabled = true;
           try { await api("/api/public/onboarding/resend-code", { method: "POST" }); await poll(); }
-          catch (error) { message(error.message); }
+          catch (error) { message(error.message); retry.disabled = false; }
         });
         $("next").append(retry);
       }
+      $("retryAuth").textContent = ["MAX_AUTH_UNAVAILABLE", "PROXY_ASSIGNMENT_REQUIRED"].includes(state.last_error_code)
+        ? "Повторить подключение" : "Запросить новый код";
     }
   }
   async function poll() {

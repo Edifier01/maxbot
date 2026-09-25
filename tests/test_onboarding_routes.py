@@ -192,6 +192,85 @@ def test_new_max_account_is_never_registered_automatically(monkeypatch):
     assert "verify_auth" in calls
 
 
+def test_onboarding_auth_uses_group_proxy(monkeypatch, tmp_path):
+    import asyncio
+    from app import routes_onboarding as onboarding
+
+    conn = _db(tmp_path)
+    conn.execute("UPDATE groups SET proxy='socks5://proxy.example:1080' WHERE id=1")
+    invite_id = OnboardingRepository(conn).create_invite(
+        1, "proxy-test-hash", "cipher", "2026-09-25T00:00:00+00:00",
+        "2026-10-01T00:00:00+00:00", None,
+    )
+    conn.execute(
+        "INSERT INTO onboarding_sessions (id, session_token_hash, invite_id, phone, state, created_at, updated_at, expires_at) "
+        "VALUES ('proxy-test', 'secret-hash', ?, '+79991234567', 'requesting_code', '2026-09-25', '2026-09-25', '2026-10-01')",
+        (invite_id,),
+    )
+    conn.commit()
+    monkeypatch.setattr(onboarding, "tenant_conn", _conn_context(conn))
+    monkeypatch.setattr(onboarding, "_onboarding_dir", lambda *_args: tmp_path)
+    monkeypatch.setattr(onboarding.m, "_ensure_vault_unlocked", lambda: None)
+    captured = []
+
+    def build_client(**kwargs):
+        captured.append(kwargs)
+        raise RuntimeError("stop before network")
+
+    monkeypatch.setattr(onboarding.m, "_build_pymax_client", build_client)
+    onboarding._AUTH_RUNTIME["proxy-test"] = {"tenant_id": 44, "codes": asyncio.Queue(), "passwords": asyncio.Queue()}
+    try:
+        asyncio.run(onboarding._run_onboarding_auth(44, "proxy-test", "+79991234567"))
+    finally:
+        onboarding._AUTH_RUNTIME.pop("proxy-test", None)
+    assert captured[0]["proxy"] == "socks5://proxy.example:1080"
+
+
+def test_onboarding_keeps_proxy_after_creating_profile(monkeypatch, tmp_path):
+    from app import routes_onboarding as onboarding
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+    conn = _db(tmp_path)
+    conn.execute(
+        "UPDATE groups SET proxy='socks5://first.example:1080;socks5://second.example:1080' WHERE id=1"
+    )
+    invite_id = OnboardingRepository(conn).create_invite(
+        1, "stable-proxy-hash", "cipher", "2026-09-25T00:00:00+00:00",
+        "2026-10-01T00:00:00+00:00", None,
+    )
+    conn.execute(
+        "INSERT INTO onboarding_sessions (id, session_token_hash, invite_id, phone, state, created_at, updated_at, expires_at) "
+        "VALUES ('stable-proxy', 'secret-hash', ?, '+79991234567', 'waiting_membership', '2026-09-25', '2026-09-25', '2026-10-01')",
+        (invite_id,),
+    )
+    schedule = WeeklyScheduleRepository(conn)
+    schedule.ensure_schema()
+    conn.execute("INSERT INTO profiles (id, phone, label) VALUES (99, '+79990000099', 'other')")
+    conn.commit()
+    schedule.assign_profile(99, 1)
+    monkeypatch.setattr(onboarding, "tenant_conn", _conn_context(conn))
+
+    first_route = onboarding._onboarding_proxy(44, "stable-proxy", "+79991234567")
+    conn.execute("INSERT INTO profiles (id, phone, label) VALUES (100, '+79991234567', 'new')")
+    conn.commit()
+    saved_route = onboarding._onboarding_proxy(44, "stable-proxy", "+79991234567")
+
+    assert first_route == "socks5://first.example:1080"
+    assert saved_route == first_route
+    assert schedule.assigned_proxy_url(100, 1) == first_route
+
+
+def test_onboarding_reports_actionable_auth_failure_codes():
+    from app import routes_onboarding as onboarding
+    from app.platform_policy import PlatformAuthorizationHold
+    from app.recovery_hold import RecoveryHoldActive
+
+    assert onboarding._onboarding_failure_code(RuntimeError("PROXY_ASSIGNMENT_REQUIRED")) == "PROXY_ASSIGNMENT_REQUIRED"
+    assert onboarding._onboarding_failure_code(PlatformAuthorizationHold("record_missing")) == "MAX_AUTH_UNAVAILABLE"
+    assert onboarding._onboarding_failure_code(RecoveryHoldActive("recovery_hold_active")) == "MAX_AUTH_UNAVAILABLE"
+    assert onboarding._onboarding_failure_code(RuntimeError("unknown private detail")) == "MAX_AUTH_FAILED"
+
+
 def test_membership_proof_fails_closed_without_status_and_join_time():
     from app.routes_onboarding import _member_proof
 

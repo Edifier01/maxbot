@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import asyncio
+import logging
 import os
 import re
 import secrets
@@ -37,6 +38,7 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{40,100}$")
 _AUTH_RUNTIME: dict[str, dict] = {}
 _AUTH_TASKS: dict[str, asyncio.Task] = {}
 _ONBOARDING_LOCKS: dict[str, asyncio.Lock] = {}
+_LOG = logging.getLogger(__name__)
 
 
 def _onboarding_lock(session_id: str) -> asyncio.Lock:
@@ -529,6 +531,42 @@ def _onboarding_dir(tenant_id: int, session_id: str) -> Path:
     return path
 
 
+def _onboarding_proxy(tenant_id: int, session_id: str, phone: str) -> str:
+    """Use the group's configured route throughout temporary authorization."""
+    from antiban_core import parse_proxy_list
+    from app.repositories.weekly_schedule import WeeklyScheduleRepository
+
+    with tenant_conn(tenant_id) as conn:
+        row = OnboardingRepository(conn).get_session(session_id)
+        if row is None:
+            raise RuntimeError("ONBOARDING_SESSION_INVALID")
+        group_id = int(row["group_id"])
+        group = conn.execute("SELECT proxy FROM groups WHERE id=?", (group_id,)).fetchone()
+        proxies = parse_proxy_list(str(group["proxy"] or "") if group else "")
+        if not proxies:
+            raise RuntimeError("PROXY_ASSIGNMENT_REQUIRED")
+        profile = conn.execute("SELECT id FROM profiles WHERE phone=?", (phone,)).fetchone()
+        if profile is not None:
+            schedule = WeeklyScheduleRepository(conn)
+            profile_id = int(profile["id"])
+            if schedule.assignment_for(profile_id, group_id) is None:
+                schedule.assign_profile(profile_id, group_id)
+                # A new profile authenticated through the first group route.
+                # Keep that route when its permanent assignment is created.
+                fingerprint = hashlib.sha256(proxies[0].strip().encode("utf-8")).hexdigest()
+                conn.execute(
+                    "UPDATE profile_group_proxy_assignments SET proxy_fingerprint=? "
+                    "WHERE profile_id=? AND group_id=?",
+                    (fingerprint, profile_id, group_id),
+                )
+                conn.commit()
+            proxy = schedule.assigned_proxy_url(profile_id, group_id)
+            if proxy:
+                return proxy
+            raise RuntimeError("PROXY_ASSIGNMENT_REQUIRED")
+        return proxies[0]
+
+
 def _persist_state(tenant_id: int, session_id: str, state: str, **fields) -> None:
     with tenant_conn(tenant_id) as conn:
         repo = OnboardingRepository(conn)
@@ -590,6 +628,22 @@ def _runtime_state(session_id: str, state: str, *, hint: str = "") -> None:
         _persist_state(runtime["tenant_id"], session_id, state)
 
 
+def _onboarding_failure_code(exc: Exception) -> str:
+    from app.platform_policy import PlatformAuthorizationHold
+    from app.recovery_hold import RecoveryHoldActive
+
+    if isinstance(exc, (PlatformAuthorizationHold, RecoveryHoldActive)):
+        return "MAX_AUTH_UNAVAILABLE"
+    explicit = str(exc)
+    if explicit in {
+        "PROXY_ASSIGNMENT_REQUIRED",
+        "MAX_ACCOUNT_REGISTRATION_REQUIRED",
+        "MAX_CLOUD_PASSWORD_REJECTED",
+    }:
+        return explicit
+    return "MAX_AUTH_FAILED"
+
+
 async def _run_onboarding_auth(tenant_id: int, session_id: str, phone: str) -> None:
     from app.tenant import tenant_scope
 
@@ -605,7 +659,7 @@ async def _run_onboarding_auth(tenant_id: int, session_id: str, phone: str) -> N
                 work_dir=str(directory),
                 session_name="session.db",
                 auth_flow=_OnboardingSmsAuthFlow(session_id, runtime),
-                proxy=None,
+                proxy=_onboarding_proxy(tenant_id, session_id, phone),
                 identity=None,
             )
             gateway = m._max_gateway(client)
@@ -634,7 +688,11 @@ async def _run_onboarding_auth(tenant_id: int, session_id: str, phone: str) -> N
         _persist_state(tenant_id, session_id, "interrupted", last_error_code="AUTH_INTERRUPTED")
         raise
     except Exception as exc:
-        code = str(exc) if str(exc) in {"MAX_ACCOUNT_REGISTRATION_REQUIRED", "MAX_CLOUD_PASSWORD_REJECTED"} else "MAX_AUTH_FAILED"
+        code = _onboarding_failure_code(exc)
+        _LOG.warning(
+            "onboarding auth failed code=%s stage=%s exception_type=%s",
+            code, runtime.get("state", "unknown"), type(exc).__name__,
+        )
         runtime.update(state="failed", error_code=code)
         _persist_state(tenant_id, session_id, "failed", last_error_code=code)
     finally:
@@ -814,7 +872,7 @@ async def _check_membership_and_finalize(tenant_id: int, session_id: str, row) -
                 raise RuntimeError("ONBOARDING_SESSION_INVALID")
         client = m._build_pymax_client(
             phone=str(row["phone"]), work_dir=str(directory), session_name="session.db",
-            auth_flow=SessionOnly(), proxy=None, identity=identity,
+            auth_flow=SessionOnly(), proxy=_onboarding_proxy(tenant_id, session_id, str(row["phone"])), identity=identity,
         )
         try:
             gateway = m._max_gateway(client)
@@ -878,7 +936,11 @@ async def _check_membership_and_finalize(tenant_id: int, session_id: str, row) -
                             raise RuntimeError("ONBOARDING_ACCOUNT_CHANGED")
                         return True
 
-                    await m._with_client_unlocked(profile_id, phone, validate_profile_session)
+                    await m._with_client_unlocked(
+                        profile_id, phone, validate_profile_session,
+                        group_id=int(row["group_id"]),
+                        proxy=_onboarding_proxy(tenant_id, session_id, phone),
+                    )
                     with tenant_conn(tenant_id) as conn:
                         conn.execute("BEGIN IMMEDIATE")
                         current = conn.execute("SELECT status FROM profiles WHERE id=?", (profile_id,)).fetchone()
