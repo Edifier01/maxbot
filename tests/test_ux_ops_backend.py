@@ -70,9 +70,33 @@ def test_global_sqlite_migrates_with_postgres_primary_backend(tmp_path, monkeypa
             }
     assert {"settings", "queue_state"} <= tables
 
+    ensure_tenant_data(m.ROOT, 11)
     with tenant_scope(tenant_id=11, role="user"):
+        with m._conn() as connection:
+            connection.execute("CREATE TABLE tenant_scope_probe (value TEXT)")
+            connection.execute("INSERT INTO tenant_scope_probe VALUES ('tenant-11')")
+    with tenant_scope(use_global_data=True, role="admin"):
+        with m._conn() as connection:
+            assert connection.execute(
+                "SELECT name FROM sqlite_master WHERE name='tenant_scope_probe'"
+            ).fetchone() is None
+    with tenant_scope(tenant_id=None, use_global_data=False):
         with pytest.raises(RuntimeError, match="runtime SQLite"):
             m._conn()
+
+
+def test_onboarding_startup_cleanup_can_read_tenant_sqlite_with_postgres_enabled(
+    tmp_path, monkeypatch
+):
+    m = _setup_server(tmp_path, monkeypatch)
+    ensure_tenant_data(m.ROOT, 11)
+    with tenant_scope(tenant_id=11, role="admin"):
+        m.init_db()
+    monkeypatch.setattr(m, "DB_BACKEND", "postgres")
+
+    from app.routes_onboarding import recover_and_cleanup_onboarding
+
+    assert recover_and_cleanup_onboarding() == 0
 
 
 def test_patch_is_active_and_campaign_requires_active_groups(tmp_path, monkeypatch):

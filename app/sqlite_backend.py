@@ -93,12 +93,14 @@ def _db_path() -> Path:
 def _conn() -> sqlite3.Connection:
     global _db_conn
     m = _main()
+    tenant_scoped = False
     if m._is_server_mode():
-        from app.tenant import use_global_data
+        from app.tenant import get_tenant_id, use_global_data
 
         if use_global_data():
             return _global_conn()
-    if m.DB_BACKEND == "postgres":
+        tenant_scoped = get_tenant_id() is not None
+    if m.DB_BACKEND == "postgres" and not tenant_scoped:
         raise RuntimeError(
             "DATABASE_URL указывает на PostgreSQL, но runtime SQLite. "
             "Уберите DATABASE_URL или не задайте MAX_USE_DATABASE_URL=1."
