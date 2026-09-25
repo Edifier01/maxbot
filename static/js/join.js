@@ -14,6 +14,7 @@
     ONBOARDING_RATE_LIMITED: "Слишком много попыток. Попробуйте позже.",
     MAX_ACCOUNT_REGISTRATION_REQUIRED: "Для этого номера ещё нет аккаунта MAX. Зарегистрируйте его в официальном приложении MAX и начните подключение по ссылке заново.",
     MAX_AUTH_FAILED: "Не удалось подтвердить вход MAX. Начните вход заново или запросите новый код.",
+    MAX_CODE_TIMEOUT: "Код не пришёл за 5 минут. Проверьте номер и запросите новый код.",
     MAX_AUTH_UNAVAILABLE: "Подключение к MAX сейчас недоступно. Обратитесь к владельцу группы.",
     PROXY_ASSIGNMENT_REQUIRED: "Для группы не настроен маршрут подключения к MAX. Обратитесь к владельцу группы.",
     MAX_CLOUD_PASSWORD_REJECTED: "Облачный пароль не подошёл. Запросите новый код и повторите вход.",
@@ -51,6 +52,7 @@
     $("maxLink").href = state.invite_link || "#";
     const text = {
       requesting_code: "Запрашиваем код MAX…",
+      waiting_code: "Код запрошен у MAX. Проверьте сообщения в приложении MAX и SMS. Если код не придёт, через 5 минут можно будет запросить новый.",
       verifying_code: "Проверяем код…",
       verifying_password: "Проверяем пароль…",
       waiting_membership: "После входа откройте приглашение MAX и вступите в группу.",
@@ -64,7 +66,7 @@
     $("stepText").textContent = failed && labels[state.last_error_code]
       ? labels[state.last_error_code]
       : (state.hint || text[state.state] || "Подключение к группе MAX");
-    if (failed) message("");
+    if (failed || state.state === "waiting_code") message("");
     const canRetry = failed;
     if (!canRetry) $("retryAuth")?.remove();
     if (canRetry) {
@@ -86,7 +88,7 @@
   async function poll() {
     try {
       const state = await load();
-      if (["requesting_code", "verifying_code", "verifying_password", "finalizing"].includes(state.state)) {
+      if (["requesting_code", "waiting_code", "verifying_code", "verifying_password", "finalizing"].includes(state.state)) {
         window.setTimeout(poll, 1800);
       }
     } catch (error) { message(error.message); }
@@ -132,3 +134,4 @@
   });
   load().then((state) => { if (state.phone) poll(); }).catch((error) => message(error.message));
 })();
+

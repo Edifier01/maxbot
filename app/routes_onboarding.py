@@ -599,7 +599,10 @@ class _OnboardingSmsAuthFlow:
         gateway._require(MaxAction.REQUEST_OTP)
         start = await app.api.auth.request_code(phone)
         _runtime_state(self.session_id, "waiting_code")
-        code = await asyncio.wait_for(self.runtime["codes"].get(), timeout=300)
+        try:
+            code = await asyncio.wait_for(self.runtime["codes"].get(), timeout=300)
+        except TimeoutError as exc:
+            raise RuntimeError("MAX_CODE_TIMEOUT") from exc
         _runtime_state(self.session_id, "verifying_code")
         gateway._require(MaxAction.VERIFY_AUTH)
         result = await app.api.auth.send_code(start.token, code)
@@ -646,6 +649,7 @@ def _onboarding_failure_code(exc: Exception) -> str:
         "PROXY_ASSIGNMENT_REQUIRED",
         "MAX_ACCOUNT_REGISTRATION_REQUIRED",
         "MAX_CLOUD_PASSWORD_REJECTED",
+        "MAX_CODE_TIMEOUT",
     }:
         return explicit
     return "MAX_AUTH_FAILED"
@@ -737,8 +741,8 @@ def _member_proof(chat, expected_chat_id: str) -> bool:
     return chat_id == str(expected_chat_id) and status in {"member", "active", "joined", "in"} and joined_at > 0
 
 
-def recover_and_cleanup_onboarding() -> int:
-    """Recover a half-promoted session and delete only expired onboarding data."""
+def recover_and_cleanup_onboarding(*, recover_auth_attempts: bool = True) -> int:
+    """Recover abandoned work when requested and delete expired onboarding data."""
     from app.tenant import tenant_scope
 
     data_root = m._resolve_data_root()
@@ -762,7 +766,7 @@ def recover_and_cleanup_onboarding() -> int:
                 for row in rows:
                     sid = str(row["id"])
                     directory = tenant_path / "sessions" / "onboarding" / sid
-                    if str(row["state"]) in {"requesting_code", "waiting_code", "verifying_code", "waiting_password", "verifying_password", "authorized"}:
+                    if recover_auth_attempts and str(row["state"]) in {"requesting_code", "waiting_code", "verifying_code", "waiting_password", "verifying_password", "authorized"}:
                         conn.execute("UPDATE onboarding_sessions SET state='interrupted', last_error_code='AUTH_INTERRUPTED', updated_at=? WHERE id=?", (_iso(_now()), sid))
                         recovered += 1
                     if str(row["promotion_state"]) in {"promoting", "promoted"} and str(row["state"]) != "completed" and row["profile_id"]:
@@ -810,7 +814,9 @@ async def onboarding_cleanup_loop() -> None:
     while True:
         await asyncio.sleep(600)
         try:
-            await asyncio.to_thread(recover_and_cleanup_onboarding)
+            # In-flight authorization tasks are process-local and remain valid.
+            # Only startup may treat their persisted states as abandoned.
+            await asyncio.to_thread(recover_and_cleanup_onboarding, recover_auth_attempts=False)
             await _prune_onboarding_runtime()
         except Exception:
             # Cleanup is best-effort; each request still checks expiry in SQLite.
@@ -977,3 +983,4 @@ async def _check_membership_and_finalize(tenant_id: int, session_id: str, row) -
                             conn.execute("DELETE FROM profiles WHERE id=? AND NOT EXISTS (SELECT 1 FROM group_profiles WHERE profile_id=?)", (profile_id, profile_id))
                     _persist_state(tenant_id, session_id, "waiting_membership", promotion_state="restored", profile_id=None)
                     raise
+
