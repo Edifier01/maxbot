@@ -354,11 +354,16 @@ def test_owner_can_issue_rotate_and_revoke_encrypted_invite(monkeypatch, tmp_pat
 def test_group_panel_exposes_self_service_onboarding_link():
     panel_js = (Path(__file__).parents[1] / "static" / "js" / "index.js").read_text(encoding="utf-8")
     join_page = (Path(__file__).parents[1] / "static" / "join.html").read_text(encoding="utf-8")
+    join_js = (Path(__file__).parents[1] / "static" / "js" / "join.js").read_text(encoding="utf-8")
 
     assert "Приглашение пользователей" in panel_js
     assert "Ссылка для подключения аккаунтов" in panel_js
     assert "onboarding-invite-copy" in panel_js
     assert "Открыть приглашение MAX" in join_page
+    assert "Разрешаю commentbot отправлять сообщения от имени моего MAX-аккаунта" in join_page
+    assert "назначенный мне день недели" in join_js
+    assert "отозвать согласие, отключив аккаунт" in join_js
+    assert "state.group_name" in join_js
 
 
 def test_changing_max_invite_link_revokes_self_service_onboarding_invite(monkeypatch, tmp_path):

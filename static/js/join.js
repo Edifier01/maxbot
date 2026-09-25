@@ -31,6 +31,7 @@
     const state = await api("/api/public/onboarding/status");
     csrf = state.csrf_token;
     $("group").textContent = `Группа: ${state.group_name}`;
+    $("consentText").textContent = `Разрешаю commentbot отправлять сообщения от имени моего MAX-аккаунта в группу «${state.group_name}» в назначенный мне день недели. Я могу отозвать согласие, отключив аккаунт.`;
     if (state.phone) {
       $("startForm").hidden = true;
       $("next").hidden = false;
