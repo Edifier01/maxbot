@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from app import db_pg, vault
@@ -310,7 +310,14 @@ async def consume_invite(token: str, request: Request):
 @router.get("/join")
 async def join_page():
     _require_server()
-    response = FileResponse(m.STATIC / "join.html")
+    page = (m.STATIC / "join.html").read_text(encoding="utf-8")
+    script_path = m.STATIC / "js" / "join.js"
+    script_version = hashlib.sha256(script_path.read_bytes()).hexdigest()[:12]
+    page = page.replace(
+        'src="/static/js/join.js"',
+        f'src="/static/js/join.js?v={script_version}"',
+    )
+    response = HTMLResponse(page)
     return _private(response)
 
 
