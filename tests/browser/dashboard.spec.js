@@ -404,6 +404,33 @@ test.describe('dashboard surface', () => {
     await expect(page.getByText('Назначение подтверждено · revision 2')).toBeVisible();
   });
 
+  test('shows onboarding link controls after opening the group menu', async ({ page }) => {
+    await page.unroute('**/api/**');
+    await page.route('**/api/**', async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      let payload = fixturePayload(pathname);
+      if (pathname === '/api/health') payload = { ok: true, server_mode: true };
+      if (pathname === '/api/auth/restore-session') payload = { ok: true };
+      if (pathname === '/api/auth/me') payload = { role: 'user', subscription: { active: true } };
+      if (pathname === '/api/groups') payload = [{
+        id: 1, name: 'Onboarding group', invite_link: 'https://max.ru/join/example',
+        max_chat_id: '12345', destination_revision: 0, destination_verified: 1,
+        profiles_count: 0, active_count: 0, is_active: 1,
+      }];
+      if (pathname === '/api/groups/1/profiles') payload = { items: [], total: 0, limit: 20, offset: 0 };
+      if (pathname === '/api/groups/1/onboarding-invite') payload = { active: false };
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) });
+    });
+
+    await page.goto('/');
+    await page.getByRole('tab', { name: 'Группы' }).click();
+    await page.getByRole('button', { name: /Onboarding group/ }).click();
+    await page.getByText('Ещё', { exact: true }).click();
+    await page.getByRole('button', { name: 'Ссылка подключения' }).click();
+
+    await expect(page.getByRole('button', { name: 'Создать ссылку · 7 дней' })).toBeVisible();
+  });
+
   test('keeps readiness preview read-only and binds its revision to explicit start', async ({ page }) => {
     await page.unroute('**/api/**');
     const state = { previews: 0, previewMethods: [], starts: 0, startBody: null, unsafeCalls: [] };

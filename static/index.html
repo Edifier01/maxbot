@@ -107,7 +107,7 @@
         transition-duration: 0.01ms !important;
       }
       .badge.live::before { animation: none; }
-      section.active { animation: none; }
+      main > section.active { animation: none; }
       .toast { animation: none; }
       .dash-card:hover { transform: none; border-color: var(--line); }
       #dashProgressBar { transition: none; }
@@ -193,8 +193,8 @@
       background: var(--accent-soft); border-color: rgba(61,139,253,.35); color: #dbeafe;
     }
     main { padding: 1.35rem 1.5rem 3rem; max-width: 1120px; margin: 0 auto; }
-    section { display: none; animation: fadeIn .2s ease; }
-    section.active { display: block; }
+    main > section { display: none; animation: fadeIn .2s ease; }
+    main > section.active { display: block; }
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(4px); }
       to { opacity: 1; transform: none; }
