@@ -41,16 +41,17 @@ copied into the app image, and deploy prepares `/app/control` ownership for
 UID 10001. Staging must still exercise the expected/mismatched revision path
 and evidence write; do not remove the hold manually.
 
-Both `scripts/deploy.sh` and the GitHub deploy workflow now create
+Both `scripts/deploy.sh` and the GitHub deploy workflow create
 `deploy-<40-char-SHA>` in `max_server_control` before backup or stopping
-services. Hold creation is atomic and refuses to overwrite an existing hold;
-the deployment leaves it active. After the release record and canary target
-are approved, release only the exact revision and retain a non-secret change
-reference in evidence:
+services. Creation is atomic. If a valid hold already exists, deploy preserves
+it and prints its existing revision; an invalid hold stops deploy. Review the
+new deployed SHA even when the hold belongs to an earlier run. After the
+release record and canary target are approved, release the revision printed
+by deploy and retain a non-secret change reference in evidence:
 
 ```bash
 docker compose exec -T app python /app/scripts/release-recovery-hold.py \
-  --expected-revision "deploy-<40-char-SHA>" \
+  --expected-revision "<active hold revision printed by deploy>" \
   --authorization-reference "<change-id>"
 REQUIRE_MAX_ACTIONS=1 bash scripts/verify_deploy.sh
 ```
@@ -99,10 +100,12 @@ bash scripts/deploy.sh          # build + up + health
 bash scripts/verify_deploy.sh   # полная проверка
 ```
 
-The deploy command enables a recovery hold before taking the backup; the
-revision is `deploy-$(git rev-parse HEAD)`. The GitHub workflow uses the exact
-selected `CANDIDATE_SHA`. In both paths, review and explicitly release that
-hold only after production readiness and canary scope are documented.
+The deploy command enables a recovery hold before taking the backup; a newly
+created hold has revision `deploy-$(git rev-parse HEAD)`. The GitHub workflow
+uses the exact selected `CANDIDATE_SHA`. If an earlier hold remains active,
+deploy preserves its revision. In both paths, review the deployed SHA and
+explicitly release the active hold only after production readiness and canary
+scope are documented.
 
 Образ запускает приложение как UID/GID `10001`. `deploy.sh` после сборки
 однократно выравнивает ownership существующих `max_server_data` и

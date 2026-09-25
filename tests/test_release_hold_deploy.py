@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CREATE_HOLD = ROOT / "scripts" / "create-recovery-hold.py"
@@ -32,21 +34,32 @@ def _run_create_hold(path: Path, revision: str) -> subprocess.CompletedProcess[s
     )
 
 
-def test_create_hold_is_atomic_and_never_overwrites_existing_hold(tmp_path: Path):
-    path = tmp_path / "recovery-hold.json"
+class TestCreateHoldIdempotency(unittest.TestCase):
+    def test_existing_valid_hold_is_preserved_and_deploy_can_continue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recovery-hold.json"
+            created = _run_create_hold(path, "deploy-" + "a" * 40)
+            self.assertEqual(created.returncode, 0, created.stderr)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["revision"], "deploy-" + "a" * 40)
+            self.assertEqual(payload["reason"], "deploy")
+            original = path.read_bytes()
 
-    created = _run_create_hold(path, "deploy-" + "a" * 40)
+            second = _run_create_hold(path, "deploy-" + "b" * 40)
 
-    assert created.returncode == 0, created.stderr
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["revision"] == "deploy-" + "a" * 40
-    assert payload["reason"] == "deploy"
-    original = path.read_bytes()
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertIn("deploy-" + "a" * 40, second.stdout)
+            self.assertEqual(path.read_bytes(), original)
 
-    second = _run_create_hold(path, "deploy-" + "b" * 40)
+    def test_existing_invalid_hold_still_stops_deploy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recovery-hold.json"
+            path.write_text("{invalid", encoding="utf-8")
 
-    assert second.returncode != 0
-    assert path.read_bytes() == original
+            result = _run_create_hold(path, "deploy-" + "b" * 40)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(path.read_text(encoding="utf-8"), "{invalid")
 
 
 def test_create_hold_rejects_invalid_revision_without_creating_file(tmp_path: Path):

@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.config import recovery_hold_file  # noqa: E402
+from app.recovery_hold import load_recovery_hold  # noqa: E402
 
 
 def _safe_text(value: str, name: str) -> str:
@@ -25,7 +26,7 @@ def _safe_text(value: str, name: str) -> str:
     return value
 
 
-def create_hold(path: Path, *, revision: str, reason: str) -> None:
+def create_hold(path: Path, *, revision: str, reason: str) -> tuple[str, bool]:
     revision = _safe_text(revision, "revision")
     reason = _safe_text(reason, "reason")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,8 +48,15 @@ def create_hold(path: Path, *, revision: str, reason: str) -> None:
         if hasattr(os, "chown") and os.geteuid() == 0:
             os.chown(temporary, 10001, 10001)
         os.chmod(temporary, 0o640)
-        # Hard-link creation is atomic and fails when a hold already exists.
-        os.link(temporary, path)
+        # Hard-link creation is atomic; preserve a valid hold from an earlier run.
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            existing = load_recovery_hold(path)
+            if existing is None:
+                raise RuntimeError("recovery hold disappeared during creation")
+            return existing.revision, False
+        return revision, True
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -64,10 +72,15 @@ def main(argv: list[str] | None = None) -> int:
     if path is None:
         parser.error("MAX_SERVER_MODE=1 or MAX_RECOVERY_HOLD_FILE is required")
     try:
-        create_hold(path, revision=args.revision, reason=args.reason)
-    except (OSError, ValueError) as exc:
+        active_revision, created = create_hold(
+            path, revision=args.revision, reason=args.reason
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"recovery hold creation failed: {exc}\n")
-    print(f"Recovery hold active; revision={args.revision}")
+    if created:
+        print(f"Recovery hold active; revision={active_revision}")
+    else:
+        print(f"Existing recovery hold preserved; revision={active_revision}")
     return 0
 
 
